@@ -1,0 +1,10 @@
+[Unit]
+Description=Polyarb auto-update from GitHub
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/polyarb
+EnvironmentFile=/etc/polyarb.env
+ExecStart=/bin/bash /opt/polyarb/deploy/update.sh

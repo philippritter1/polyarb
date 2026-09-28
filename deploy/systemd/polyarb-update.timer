@@ -1,0 +1,8 @@
+[Unit]
+Description=Polyarb auto-update
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+[Install]
+WantedBy=timers.target

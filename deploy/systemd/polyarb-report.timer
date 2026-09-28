@@ -1,0 +1,7 @@
+[Unit]
+Description=Polyarb status report (00, 04, 12, 16, 20 Uhr; 08 Uhr kommt der Tagesbericht)
+[Timer]
+OnCalendar=*-*-* 00,04,12,16,20:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target

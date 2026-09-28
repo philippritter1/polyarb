@@ -1,0 +1,74 @@
+# ------------------------------------------------------------
+# Polymarket Arbitrage Bot – Konfiguration (Paper-Trading-MVP)
+# ------------------------------------------------------------
+
+mode: paper            # paper | mock   (live ist bewusst noch nicht implementiert)
+data_source: websocket # websocket (Echtzeit, empfohlen) | polling (REST alle scan_interval_s)
+
+portfolio:
+  starting_capital_usd: 2500
+
+universe:
+  refresh_minutes: 30          # wie oft die Marktliste neu geladen wird
+  min_liquidity_usd: 1000      # Märkte mit weniger Liquidität ignorieren
+  max_markets: 800             # Obergrenze (API-Last)
+  include_binary: true         # YES+NO-Arbs (buy & sell)
+  include_negrisk_baskets: true  # Multi-Outcome: Summe aller YES-Asks < 1
+  max_days_to_resolution: 60   # Körbe mit längerer Kapitalbindung ignorieren
+
+scanner:
+  scan_interval_s: 8
+  min_edge_bps: 50             # Netto-Edge nach Fees, in Basispunkten auf eingesetztes Kapital
+  min_profit_usd: 0.50         # Mindestgewinn pro Trade
+  min_annualized_return: 0.25  # nur für Körbe mit Kapitalbindung (25 % p.a.)
+
+fees:
+  # fee_usd = shares * rate * (p*(1-p))^exponent  (Polymarket-Taker-Fee, 2026)
+  # Wenn der Markt ein feeSchedule liefert, hat das Vorrang.
+  default_rate: 0.05
+  exponent: 1.0
+  category_rates:
+    crypto: 0.07
+    sports: 0.05
+    finance: 0.04
+    politics: 0.04
+    mentions: 0.04
+    tech: 0.04
+    economics: 0.05
+    culture: 0.05
+    weather: 0.05
+    geopolitics: 0.0
+  merge_gas_usd: 0.01          # Merge/Split/Convert auf Polygon (relayer meist gasless)
+
+execution:                     # Realismus der Paper-Simulation
+  latency_ms: 350              # Zeit zwischen Erkennung und Order – danach wird das Buch NEU geladen
+  depth_haircut: 0.5           # Anteil der sichtbaren Tiefe, den wir realistisch bekommen (Konkurrenz)
+  leg_mode: sequential         # sequential: knappstes Leg zuerst, Rest auf dessen Fill skalieren | parallel
+  leg_gap_ms: 150              # Zeit zwischen erstem und weiteren Legs (sequential)
+  unwind_on_leg_failure: true  # ungehedgte Reste sofort in den Bid verkaufen
+
+risk:
+  max_trade_pct: 0.10          # max. 10 % des Equity pro Trade (=250 $ bei 2,5k)
+  max_market_pct: 0.20         # max. Exposure je Markt/Event
+  max_locked_pct: 0.60         # max. Kapital in Körben, die bis Resolution gebunden sind
+  max_unhedged_usd: 75         # offene, ungehedgte Reste gesamt
+  daily_loss_limit_pct: 0.02   # Kill-Switch: -2 % am Tag -> Handel stoppt
+  max_consecutive_leg_failures: 5
+  leg_failure_cooldown_min: 30 # Pause nach zu vielen Leg-Failures
+  kelly_fraction: 0.5          # Half-Kelly für Körbe mit Resolution-Risiko
+  basket_failure_prob: 0.01    # angenommene Wahrscheinlichkeit, dass ein Korb nicht sauber auszahlt
+  cash_buffer_pct: 0.10        # immer 10 % Cash liquide halten
+
+stream:
+  assets_per_connection: 400   # Token pro WebSocket-Verbindung
+  stats_interval_s: 10         # wie oft Kennzahlen/Equity ins Log geschrieben werden
+
+storage:
+  db_path: data/polyarb.sqlite
+
+api:
+  gamma_url: https://gamma-api.polymarket.com
+  clob_url: https://clob.polymarket.com
+  books_batch_size: 100
+  timeout_s: 10
+  min_request_interval_s: 0.25   # einfache Rate-Limit-Bremse

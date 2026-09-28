@@ -1,0 +1,10 @@
+data/
+*.sqlite
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+dashboard.html
+dashboard_mock.html
+deploy/SECRETS.txt
+deploy/cloud-config.yaml

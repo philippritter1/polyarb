@@ -1,0 +1,10 @@
+[Unit]
+Description=Polyarb watchdog
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=polyarb
+WorkingDirectory=/opt/polyarb
+EnvironmentFile=/etc/polyarb.env
+ExecStart=/opt/polyarb/.venv/bin/python deploy/notify.py watch

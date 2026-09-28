@@ -63,19 +63,20 @@ def main():
             for d in sc.directions(b):
                 s = sc.raw_sum(b, books, d)
                 if s is not None:
-                    rows.append((abs(1 - s) if (d == "buy_all") == (s < 1) else -abs(1 - s), s, d, b))
-        rows.sort(key=lambda r: r[1] if r[2] == "buy_all" else -r[1])
-        print(f"\n{len(books)} books loaded. Closest buy_all sets (sum of best asks):")
+                    # distance to the set payout: < 0 means an edge before fees
+                    rows.append((s - b.payout if d == "buy_all" else 1 - s, s, d, b))
+        rows.sort(key=lambda r: r[0])
+        print(f"\n{len(books)} books loaded. Closest buy_all sets (sum of best asks / payout):")
         for _, s, d, b in [r for r in rows if r[2] == "buy_all"][:15]:
-            print(f"  {s:.4f}  {b.kind:8s} {b.title[:80]}")
+            print(f"  {s:.4f}/{b.payout:.0f}  {b.kind:10s} {b.title[:80]}")
         print("\nClosest sell_all sets (sum of best bids):")
         for _, s, d, b in [r for r in rows if r[2] == "sell_all"][:10]:
-            print(f"  {s:.4f}  {b.kind:8s} {b.title[:80]}")
+            print(f"  {s:.4f}  {b.kind:10s} {b.title[:80]}")
         opps = sc.scan(eng.baskets, books)
         print(f"\n{len(opps)} opportunities after fees & thresholds:")
         for o in opps[:20]:
             ann = f"{o.annualized:.0%}" if o.annualized is not None else "instant"
-            print(f"  {o.strategy:16s} qty {o.qty:8.1f} cap ${o.capital_usd:8.2f} net ${o.net_profit_usd:7.2f} "
+            print(f"  {o.strategy:19s} qty {o.qty:8.1f} cap ${o.capital_usd:8.2f} net ${o.net_profit_usd:7.2f} "
                   f"({o.edge_bps:5.0f} bps, {ann})  {o.basket.title[:60]}")
         return
 

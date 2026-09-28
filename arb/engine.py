@@ -7,7 +7,7 @@ import time
 from typing import Dict, List, Optional
 
 from .models import Basket, OrderBook
-from .paper import PaperBroker
+from .paper import ConsumedLiquidity, PaperBroker
 from .risk import RiskManager
 from .scanner import Scanner, build_opportunity
 from .storage import Store
@@ -49,6 +49,8 @@ class Engine:
         self.store = store or Store(cfg["storage"]["db_path"])
         self.latency_s = float(cfg["execution"]["latency_ms"]) / 1000
         self.leg_gap_s = float(cfg["execution"].get("leg_gap_ms", 150)) / 1000
+        self.consumed = ConsumedLiquidity(float(cfg["execution"].get("consumed_ttl_s", 60)))
+        self.confirm_rest = bool(cfg["execution"].get("confirm_with_rest", True))
         self.baskets: List[Basket] = []
         self._universe_ts = 0.0
         self.max_trades_per_scan = 5
@@ -86,6 +88,8 @@ class Engine:
         self.broker.sequential = ex.get("leg_mode", "sequential") == "sequential"
         self.latency_s = float(ex["latency_ms"]) / 1000
         self.leg_gap_s = float(ex.get("leg_gap_ms", 150)) / 1000
+        self.consumed.ttl = float(ex.get("consumed_ttl_s", 60))
+        self.confirm_rest = bool(ex.get("confirm_with_rest", True))
         self._universe_ts = 0.0  # refresh universe with new filters
         log.info("config reloaded from %s", self.config_path)
 
@@ -97,12 +101,14 @@ class Engine:
             baskets += self.client.binary_baskets(float(u["min_liquidity_usd"]), int(u["max_markets"]))
         if u.get("include_negrisk_baskets", False):
             baskets += self.client.negrisk_baskets(float(u["min_liquidity_usd"]))
+        if not u.get("include_negrisk_no", True):
+            baskets = [b for b in baskets if b.kind != "negrisk_no"]
         self.baskets = baskets
         self._universe_ts = self.clock.now()
         n_tok = sum(len(b.token_ids) for b in baskets)
-        log.info("universe: %d baskets (%d binary, %d negRisk), %d tokens",
+        log.info("universe: %d baskets (%d binary, %d negRisk YES, %d negRisk NO), %d tokens",
                  len(baskets), sum(b.kind == "binary" for b in baskets),
-                 sum(b.kind == "negrisk" for b in baskets), n_tok)
+                 sum(b.kind == "negrisk" for b in baskets), sum(b.kind == "negrisk_no" for b in baskets), n_tok)
 
     # ------------------------------------------------------------ one cycle
     def step(self) -> None:
@@ -112,8 +118,8 @@ class Engine:
 
         t0 = time.time()
         tokens = [t for b in self.baskets for t in b.token_ids] + list(self.broker.pf.residuals)
-        books = self.client.books(tokens)
         now = self.clock.now()
+        books = self.consumed.apply(self.client.books(tokens), now)
         raw_before = self.scanner.stats["raw_signals"]
         opps = self.scanner.scan(self.baskets, books, now)
 
@@ -122,7 +128,8 @@ class Engine:
         best_sell = max((s for b in self.baskets if b.kind == "binary"
                          for s in [self.scanner.raw_sum(b, books, "sell_all")] if s is not None), default=None)
 
-        self._process_opps(opps, books, now, lambda tids: self.client.books(tids))
+        self._process_opps(opps, books, now,
+                           lambda tids: self.consumed.apply(self.client.books(tids), self.clock.now()))
         self._housekeeping(books, now, self.scanner.stats["raw_signals"] - raw_before, len(opps),
                            best_buy, best_sell, (time.time() - t0) * 1000)
 
@@ -166,6 +173,7 @@ class Engine:
                 return bk
 
             res = self.broker.execute(sized, fetch, self.clock.now())
+            self.consumed.add(res.consumed, self.clock.now())
             fresh = self.scanner.raw_sum(sized.basket, calls["last"], sized.direction)
             det = self.scanner.raw_sum(sized.basket, books, sized.direction)
             res.note += f" sum_detect={det:.4f}" if det is not None else ""
@@ -305,19 +313,20 @@ class StreamEngine(Engine):
         cand = [b for b in touched.values() if self._ready(b)]
         if cand:
             tokens = {t for b in cand for t in b.token_ids}
-            books = self.books_store.books(tokens)
+            books = self.consumed.apply(self.books_store.books(tokens), now)
             before = self.scanner.stats["raw_signals"]
             opps = self.scanner.scan(cand, books, now)
             self._raw += self.scanner.stats["raw_signals"] - before
             self._n_opps += len(opps)
             self._evals += len(cand)
             if opps:
-                self._process_opps(opps, books, now, lambda tids: self.books_store.books(tids))
+                self._process_opps(opps, books, now, self._exec_books)
 
         if now - self._last_stats >= self._stats_every:
             self._last_stats = now
             ready = [b for b in self.baskets if self._ready(b)]
-            books = self.books_store.books({t for b in ready for t in b.token_ids} | set(self.broker.pf.residuals))
+            books = self.consumed.apply(
+                self.books_store.books({t for b in ready for t in b.token_ids} | set(self.broker.pf.residuals)), now)
             best_buy = min((s for b in ready if b.kind == "binary"
                             for s in [self.scanner.raw_sum(b, books, "buy_all")] if s is not None), default=None)
             best_sell = max((s for b in ready if b.kind == "binary"
@@ -330,6 +339,21 @@ class StreamEngine(Engine):
             # n_books column = baskets evaluated since last row (event-driven "scan" count)
             self._housekeeping(books, now, self._raw, self._n_opps, best_buy, best_sell, float(self._evals))
             self._raw = self._n_opps = self._evals = 0
+
+    def _exec_books(self, tids) -> Dict[str, OrderBook]:
+        """Books to fill against after the latency. The WebSocket copy can lag or miss an update,
+        so by default we confirm against a fresh REST snapshot: an edge that only exists in our
+        local copy then shows up as a miss instead of a phantom profit."""
+        books = None
+        if self.confirm_rest and hasattr(self.client, "books"):
+            try:
+                books = self.client.books(tids)
+            except Exception as e:  # noqa
+                log.warning("REST confirm failed (%s) – counting as missed", e)
+                books = {}
+        if books is None:
+            books = self.books_store.books(tids)
+        return self.consumed.apply(books, self.clock.now())
 
     def maybe_reload_config(self) -> None:
         super().maybe_reload_config()

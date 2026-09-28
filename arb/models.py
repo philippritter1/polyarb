@@ -49,10 +49,12 @@ class FeeSpec:
 
 @dataclass
 class Basket:
-    """A set of tokens of which exactly ONE pays out $1 at resolution.
+    """A set of tokens that together always pay out `payout` USDC.
 
-    - binary market: [YES, NO]            -> can be MERGED instantly (no lock-up)
-    - negRisk event: [YES_1, ..., YES_n]  -> held until resolution (lock-up)
+    - binary market: [YES, NO]              -> pays 1, can be MERGED instantly (no lock-up)
+    - negRisk event: [YES_1, ..., YES_n]    -> pays 1, held until resolution (lock-up)
+    - negRisk NO set: [NO_1, ..., NO_n]     -> pays n-1, CONVERTED instantly via the
+      NegRiskAdapter (n NO -> n-1 USDC), kind "negrisk_no"
     """
     basket_id: str            # conditionId (binary) or event id (negRisk)
     kind: str                 # "binary" | "negrisk"
@@ -62,6 +64,7 @@ class Basket:
     fees: List[FeeSpec]
     end_ts: Optional[float] = None   # unix ts of expected resolution
     category: str = ""
+    payout: float = 1.0              # USDC one complete set is worth
 
 
 @dataclass
@@ -116,3 +119,5 @@ class ExecutionResult:
     expected_payout: float = 0.0
     residual_exposure_usd: float = 0.0
     note: str = ""
+    # liquidity our simulated orders took: (token_id, "bids"|"asks", price, size)
+    consumed: List[tuple] = field(default_factory=list)

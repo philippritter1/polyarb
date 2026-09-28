@@ -92,6 +92,53 @@ def _ioc(levels: List[Level], limit: Optional[float], qty: float, side: str, hai
     return filled, parts
 
 
+class ConsumedLiquidity:
+    """Liquidity our paper fills took out of the market.
+
+    Simulated orders never reach Polymarket, so the live books keep showing the orders we
+    'filled'. Without this ledger the next update would find – and fill – the same resting
+    orders again. Consumed size is subtracted from a price level until the level disappears
+    from the real book (the orders are gone anyway) or `ttl_s` passes (makers re-quote).
+    """
+
+    def __init__(self, ttl_s: float = 60.0):
+        self.ttl = ttl_s
+        self._m: Dict[str, Dict[Tuple[str, float], Tuple[float, float]]] = {}
+
+    def add(self, items, now: float) -> None:
+        for tid, side, price, size in items:
+            d = self._m.setdefault(tid, {})
+            key = (side, round(price, 6))
+            q = d.get(key, (0.0, 0.0))[0]
+            d[key] = (q + size, now + self.ttl)
+
+    def apply(self, books: Dict[str, OrderBook], now: float) -> Dict[str, OrderBook]:
+        if not self._m:
+            return books
+        out = dict(books)
+        for tid in list(self._m):
+            d = self._m[tid]
+            for k in [k for k, (_, exp) in d.items() if exp <= now]:
+                del d[k]
+            ob = books.get(tid)
+            if ob is not None:
+                new = copy.copy(ob)
+                for side in ("bids", "asks"):
+                    live = {round(lv.price, 6) for lv in getattr(ob, side)}
+                    for k in [k for k in d if k[0] == side and k[1] not in live]:
+                        del d[k]
+                    levels = []
+                    for lv in getattr(ob, side):
+                        left = lv.size - d.get((side, round(lv.price, 6)), (0.0, 0.0))[0]
+                        if left > 1e-9:
+                            levels.append(Level(lv.price, left))
+                    setattr(new, side, levels)
+                out[tid] = new
+            if not d:
+                del self._m[tid]
+        return out
+
+
 def _cost_first(parts: List[Tuple[float, float]], m: float) -> float:
     """Notional of the first m shares of a fill (fills walk best-first)."""
     tot, left = 0.0, m
@@ -111,11 +158,18 @@ class PaperBroker:
         self.sequential = cfg_exec.get("leg_mode", "sequential") == "sequential"
         self.gas = gas_usd
         self.pf = PaperPortfolio(cash=starting_cash)
+        self._consumed: List[tuple] = []
 
     # -------------------------------------------------------------- helpers
     def _fee(self, opp: Opportunity, i: int, parts) -> float:
         spec = opp.basket.fees[i]
         return sum(s * spec.per_share(p) for p, s in parts)
+
+    def _mark_consumed(self, token_id: str, side: str, parts, haircut: float) -> None:
+        # With a haircut we only get `haircut` of each level because faster bots take the rest,
+        # so the level we touched is gone as a whole: record take / haircut.
+        for p, sz in parts:
+            self._consumed.append((token_id, side, p, sz / haircut if haircut > 0 else sz))
 
     def _sell_unwind(self, opp, i, books, token_id, qty) -> Tuple[float, float, Fill]:
         """Market-sell qty into the (already consumed) bid book. Returns (sold, proceeds_net, fill)."""
@@ -123,6 +177,7 @@ class PaperBroker:
         if not ob or qty <= 0:
             return 0.0, 0.0, Fill(token_id, "SELL", 0.0, 0.0, 0.0)
         sold, parts = _ioc(ob.bids, None, qty, "SELL", 1.0)
+        self._mark_consumed(token_id, "bids", parts, 1.0)
         fee = self._fee(opp, i, parts)
         notional = sum(p * s for p, s in parts)
         return sold, notional - fee, Fill(token_id, "SELL", sold, notional / sold if sold else 0.0, fee)
@@ -196,6 +251,7 @@ class PaperBroker:
     def _run(self, opp, books1, books2, order, now) -> ExecutionResult:
         buy = opp.direction == "buy_all"
         cash0 = self.pf.cash
+        self._consumed: List[tuple] = []
         n = len(opp.legs)
         Q = opp.qty
         if not buy:
@@ -209,6 +265,7 @@ class PaperBroker:
             bk = books1 if k == 0 else books2
             ob = bk[leg.token_id]
             q, parts = _ioc(ob.asks if buy else ob.bids, leg.limit_price, target, leg.side, self.haircut)
+            self._mark_consumed(leg.token_id, "asks" if buy else "bids", parts, self.haircut)
             fee = self._fee(opp, i, parts)
             notional = sum(p * s for p, s in parts)
             self.pf.cash += (-(notional + fee)) if buy else (notional - fee)
@@ -249,8 +306,9 @@ class PaperBroker:
                     self._add_residual(leg.token_id, left, c, opp.basket.basket_id, opp.basket.fees[i])
                     residual_usd += c
             if matched > 0:
-                if opp.basket.kind == "binary":
-                    self.pf.cash += matched * 1.0 - self.gas       # merge YES+NO -> USDC now
+                if opp.basket.kind in ("binary", "negrisk_no"):
+                    # binary: merge YES+NO -> $1; negRisk NO set: convert n NO -> $n-1, both instantly
+                    self.pf.cash += matched * opp.basket.payout - self.gas
                 else:
                     locked = matched_cost + self.gas
                     self.pf.cash -= self.gas
@@ -287,7 +345,8 @@ class PaperBroker:
         return ExecutionResult(opp, status, matched, fills_final, unwind_fills,
                                realized_pnl=realized, locked_capital=locked, expected_payout=payout,
                                residual_exposure_usd=residual_usd,
-                               note=f"legs={[round(d, 2) for d in done]} order={order}")
+                               note=f"legs={[round(d, 2) for d in done]} order={order}",
+                               consumed=self._consumed)
 
     # -------------------------------------------------------------- persistence
     def save(self, path: str) -> None:

@@ -14,6 +14,7 @@ universe:
   max_markets: 800             # Obergrenze (API-Last)
   include_binary: true         # YES+NO-Arbs (buy & sell)
   include_negrisk_baskets: true  # Multi-Outcome: Summe aller YES-Asks < 1
+  include_negrisk_no: true     # Multi-Outcome: Summe aller NO-Asks < n-1 (sofort konvertierbar)
   max_days_to_resolution: 60   # Körbe mit längerer Kapitalbindung ignorieren
 
 scanner:
@@ -46,6 +47,8 @@ execution:                     # Realismus der Paper-Simulation
   leg_mode: sequential         # sequential: knappstes Leg zuerst, Rest auf dessen Fill skalieren | parallel
   leg_gap_ms: 150              # Zeit zwischen erstem und weiteren Legs (sequential)
   unwind_on_leg_failure: true  # ungehedgte Reste sofort in den Bid verkaufen
+  confirm_with_rest: true      # WebSocket-Modus: vor dem Fill frisches REST-Buch laden statt der lokalen Kopie
+  consumed_ttl_s: 60           # von Paper-Fills "verbrauchte" Liquidität bleibt so lange aus dem Buch entfernt
 
 risk:
   max_trade_pct: 0.10          # max. 10 % des Equity pro Trade (=250 $ bei 2,5k)

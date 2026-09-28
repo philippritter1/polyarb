@@ -1,8 +1,10 @@
 """Arbitrage detection by walking order-book depth.
 
-Idea: a *complete set* (all outcomes of a market/event) always pays exactly $1.
-  buy_all : sum(ask_i + fee_i) < 1  -> buy one of each, then merge (binary) or hold to resolution (negRisk)
-  sell_all: sum(bid_i - fee_i) > 1  -> split $1 into a set (binary), sell every leg
+Idea: a *complete set* always pays a fixed amount (`basket.payout`):
+  all outcomes of a market/event pay exactly $1, all NO tokens of an n-outcome negRisk event pay $n-1.
+  buy_all : sum(ask_i + fee_i) < payout -> buy one of each, then merge (binary), convert (negRisk NO)
+                                           or hold to resolution (negRisk YES)
+  sell_all: sum(bid_i - fee_i) > 1      -> split $1 into a set (binary), sell every leg
 
 We walk the books level by level and only keep units whose *marginal* edge
 clears the threshold, so the size reflects executable depth, not just top-of-book.
@@ -100,7 +102,7 @@ def build_opportunity(
     now = time.time() if now is None else now
     edge = min_edge_bps / 10_000
     if direction == "buy_all":
-        threshold = 1.0 / (1.0 + edge)          # cost per set such that (1-c)/c >= edge
+        threshold = basket.payout / (1.0 + edge)  # cost per set such that (payout-c)/c >= edge
     else:
         threshold = 1.0 + edge                  # revenue per $1 set
     w = walk_depth(basket, books, direction, threshold, max_qty)
@@ -139,7 +141,7 @@ def build_opportunity(
     ]
     if direction == "buy_all":
         capital = gross + fees_usd + gas_usd
-        net = qty * 1.0 - capital
+        net = qty * basket.payout - capital
     else:
         capital = qty * 1.0 + gas_usd            # USDC needed to split
         net = gross - fees_usd - qty * 1.0 - gas_usd
@@ -168,7 +170,7 @@ class Scanner:
         self.min_ann = float(scan_cfg.get("min_annualized_return", 0.0))
         self.gas = float(fee_cfg.get("merge_gas_usd", 0.0))
         self.max_days = float(universe_cfg.get("max_days_to_resolution", 3650))
-        self.stats = {"baskets_scanned": 0, "raw_signals": 0}
+        self.stats = {"baskets_scanned": 0, "raw_signals": 0, "crossed": 0}
 
     def directions(self, basket: Basket) -> List[str]:
         # sell_all requires splitting a full set; for negRisk that is not a single
@@ -188,6 +190,17 @@ class Scanner:
             vals.append(p)
         return sum(vals)
 
+    def books_sane(self, basket: Basket, books: Dict[str, OrderBook]) -> bool:
+        """Reject crossed books (best bid >= best ask): they would have matched already, so
+        the local copy is stale. This also covers a binary showing buy_all AND sell_all edge at
+        once – ask(Y)+ask(N) < 1 < bid(Y)+bid(N) needs a bid above an ask on some leg."""
+        for t in basket.token_ids:
+            ob = books.get(t)
+            if ob and ob.best_bid is not None and ob.best_ask is not None and ob.best_bid >= ob.best_ask:
+                self.stats["crossed"] += 1
+                return False
+        return True
+
     def scan(self, baskets: List[Basket], books: Dict[str, OrderBook], now: Optional[float] = None) -> List[Opportunity]:
         now = time.time() if now is None else now
         opps: List[Opportunity] = []
@@ -195,11 +208,13 @@ class Scanner:
             self.stats["baskets_scanned"] += 1
             if b.kind == "negrisk" and b.end_ts and (b.end_ts - now) / SECONDS_PER_DAY > self.max_days:
                 continue
+            if not self.books_sane(b, books):
+                continue
             for d in self.directions(b):
                 s = self.raw_sum(b, books, d)
                 if s is None:
                     continue
-                if (d == "buy_all" and s >= 1.0) or (d == "sell_all" and s <= 1.0):
+                if (d == "buy_all" and s >= b.payout) or (d == "sell_all" and s <= 1.0):
                     continue  # cheap pre-filter
                 self.stats["raw_signals"] += 1
                 opp = build_opportunity(b, books, d, self.min_edge_bps, self.gas, now=now)

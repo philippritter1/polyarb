@@ -45,10 +45,10 @@ def _fake_server(port, ready, stop):
         sub = json.loads(await ws.recv())
         assets = sub["assets_ids"]
         await ws.send(json.dumps([
-            {"event_type": "book", "asset_id": a, "bids": [{"price": "0.47", "size": "500"}],
+            {"event_type": "book", "asset_id": a, "bids": [{"price": "0.40", "size": "500"}],
              "asks": [{"price": "0.53", "size": "500"}]} for a in assets]))
         await asyncio.sleep(1.0)
-        # open an arb: both asks drop to 0.45 with 200 shares -> sum 0.90
+        # open an arb: both asks drop to 0.45 with 200 shares -> sum 0.90 (bids 0.40 stay below)
         await ws.send(json.dumps({"event_type": "price_change", "price_changes": [
             {"asset_id": a, "price": "0.45", "size": "200", "side": "SELL"} for a in assets]}))
         while not stop.is_set():

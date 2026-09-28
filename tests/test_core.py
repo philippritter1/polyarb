@@ -165,3 +165,109 @@ def test_limit_slack_keeps_min_edge():
     # room = 1/1.005 - 0.95 = 0.045 -> 80% / 2 legs -> 0.018 -> floored to 1 tick
     assert [l.limit_price for l in o.legs] == [0.41, 0.56]
     assert sum(l.limit_price for l in o.legs) <= 1 / 1.005
+
+
+# ---------------------------------------------------------------- negRisk NO sets
+def no_basket(fee=NOFEE):
+    return Basket("event:1:no", "negrisk_no", "E", ["nA", "nB", "nC"], ["a", "b", "c"], [fee] * 3,
+                  end_ts=86400 * 10, payout=2.0)
+
+
+def test_negrisk_no_opportunity_math():
+    # 3 outcomes -> exactly 2 NO pay out; asks sum 1.95 < 2
+    books = {"nA": ob("nA", [], [(0.60, 100)]), "nB": ob("nB", [], [(0.65, 100)]),
+             "nC": ob("nC", [], [(0.70, 100)])}
+    o = build_opportunity(no_basket(), books, "buy_all", 50, now=0)
+    assert o.qty == 100 and o.lockup_days == 0 and o.annualized is None
+    assert math.isclose(o.capital_usd, 195) and math.isclose(o.net_profit_usd, 5)
+    # no edge when the NO asks add up to the payout
+    books["nC"] = ob("nC", [], [(0.75, 100)])
+    assert build_opportunity(no_basket(), books, "buy_all", 50, now=0) is None
+
+
+def test_negrisk_no_converts_instantly():
+    books = {"nA": ob("nA", [], [(0.60, 100)]), "nB": ob("nB", [], [(0.65, 100)]),
+             "nC": ob("nC", [], [(0.70, 100)])}
+    o = build_opportunity(no_basket(), books, "buy_all", 50, now=0)
+    br = PaperBroker(dict(depth_haircut=1.0), 0.0, 2500)
+    r = br.execute(o, lambda t: books, 0)
+    assert r.status == "filled" and r.locked_capital == 0 and not br.pf.locked
+    assert math.isclose(r.realized_pnl, 5) and math.isclose(br.pf.cash, 2505)
+
+
+# ---------------------------------------------------------------- phantom-edge guards
+def test_crossed_books_are_skipped():
+    sc = Scanner(dict(min_edge_bps=50, min_profit_usd=0, min_annualized_return=0), dict(merge_gas_usd=0), {})
+    ok = {"Y": ob("Y", [(0.38, 50)], [(0.40, 50)]), "N": ob("N", [(0.50, 50)], [(0.55, 80)])}
+    assert len(sc.scan([binary()], ok)) == 1
+    # YES bid 0.42 above its ask 0.40: stale copy -> no trade
+    crossed = {"Y": ob("Y", [(0.42, 50)], [(0.40, 50)]), "N": ob("N", [(0.50, 50)], [(0.55, 80)])}
+    assert sc.scan([binary()], crossed) == [] and sc.stats["crossed"] == 1
+
+
+def test_consumed_liquidity_not_filled_twice():
+    from arb.paper import ConsumedLiquidity
+    books = {"Y": ob("Y", [(0.38, 500)], [(0.40, 50)]), "N": ob("N", [(0.53, 500)], [(0.55, 80)])}
+    br = PaperBroker(dict(depth_haircut=0.5), 0.0, 2500)
+    led = ConsumedLiquidity(ttl_s=60)
+    o = build_opportunity(binary(), books, "buy_all", 50)
+    r = br.execute(o, lambda t: led.apply(books, 0), 0)
+    assert math.isclose(r.matched_qty, 25)
+    led.add(r.consumed, 0)
+    # the live feed still shows the same book, but the YES level we hit is gone for us
+    after = led.apply(books, 1)
+    assert after["Y"].asks == [] and books["Y"].asks[0].size == 50
+    assert math.isclose(after["N"].asks[0].size, 80 - 50)
+    assert build_opportunity(binary(), after, "buy_all", 50) is None
+    # once the TTL passes (makers re-quote) the level counts again
+    assert led.apply(books, 61)["Y"].asks[0].size == 50
+
+
+class _StaticClient:
+    """Returns the same order book on every call – like a live feed that never sees our paper orders."""
+
+    def __init__(self, baskets, books):
+        self.b, self.bk = baskets, books
+
+    def binary_baskets(self, *a, **k):
+        return self.b
+
+    def negrisk_baskets(self, *a, **k):
+        return []
+
+    def books(self, tids):
+        import copy
+        return {t: copy.deepcopy(self.bk[t]) for t in tids if t in self.bk}
+
+    def basket_resolution(self, *a):
+        return None
+
+    def token_resolution(self, *a):
+        return None
+
+
+def _cfg(tmp_path):
+    from arb.config import load_config
+    cfg = load_config(Path(__file__).resolve().parents[1] / "config.yaml")
+    cfg["storage"]["db_path"] = str(tmp_path / "t.sqlite")
+    return cfg
+
+
+def test_engine_does_not_refill_same_orders(tmp_path):
+    from arb.engine import Engine, SimClock
+    books = {"Y": ob("Y", [(0.38, 500)], [(0.40, 200)]), "N": ob("N", [(0.53, 500)], [(0.55, 200)])}
+    eng = Engine(_cfg(tmp_path), _StaticClient([binary()], books), SimClock(1_000_000))
+    for _ in range(3):
+        eng.step()
+    rows = eng.store.db.execute("SELECT status FROM executions").fetchall()
+    assert len(rows) == 1 and rows[0][0] in ("filled", "partial")
+
+
+def test_stream_engine_confirms_with_rest(tmp_path):
+    from arb.engine import StreamEngine
+    rest = {"Y": ob("Y", [(0.38, 500)], [(0.45, 200)]), "N": ob("N", [(0.53, 500)], [(0.58, 200)])}
+    eng = StreamEngine(_cfg(tmp_path), _StaticClient([binary()], rest))
+    got = eng._exec_books(["Y", "N"])
+    assert got["Y"].asks[0].price == 0.45  # REST snapshot, not the (empty) local store
+    eng.confirm_rest = False
+    assert eng._exec_books(["Y", "N"]) == {}

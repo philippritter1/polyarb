@@ -175,7 +175,8 @@ class PolymarketClient:
         out: List[Basket] = []
         offset = 0
         ordered = True
-        while len(out) < max_events and offset <= MAX_OFFSET:
+        n_events = 0
+        while n_events < max_events and offset <= MAX_OFFSET:
             params = {"active": "true", "closed": "false", "limit": PAGE, "offset": offset,
                       "liquidity_min": min_liquidity}
             if ordered:
@@ -191,42 +192,44 @@ class PolymarketClient:
             if not page:
                 break
             for ev in page:
-                b = self._basket_from_event(ev)
-                if b:
-                    out.append(b)
+                bs = self._baskets_from_event(ev)
+                if bs and n_events < max_events:
+                    out.extend(bs)
+                    n_events += 1
             offset += len(page)
             if len(page) < PAGE:
                 break
-        return out[:max_events]
+        return out
 
-    def _basket_from_event(self, ev: dict) -> Optional[Basket]:
-        # Only complete, non-augmented negRisk events: exactly one YES pays out.
+    def _baskets_from_event(self, ev: dict) -> List[Basket]:
+        """YES basket (exactly one YES pays $1) and NO basket (all NO pay $n-1) of a negRisk event.
+
+        Only complete, non-augmented events: every outcome must be listed and tradable.
+        """
         if not ev.get("negRisk") or ev.get("negRiskAugmented"):
-            return None
+            return []
         markets = ev.get("markets") or []
         if len(markets) < 3:
-            return None
-        tokens, labels, fees = [], [], []
+            return []
+        yes, no, labels, fees = [], [], [], []
         cat = ev.get("category") or ""
         for m in markets:
             if m.get("closed") or not m.get("active", True) or not m.get("enableOrderBook"):
-                return None  # incomplete basket -> not riskless
+                return []  # incomplete basket -> not riskless
             t = _parse_json_list(m.get("clobTokenIds"))
             if len(t) != 2:
-                return None
-            tokens.append(str(t[0]))  # YES token
+                return []
+            yes.append(str(t[0]))
+            no.append(str(t[1]))
             labels.append(m.get("groupItemTitle") or m.get("question", "")[:40])
             fees.append(self.fees.resolve(m, cat))
-        return Basket(
-            basket_id=f"event:{ev.get('id')}",
-            kind="negrisk",
-            title=ev.get("title", ""),
-            token_ids=tokens,
-            labels=labels,
-            fees=fees,
-            end_ts=_parse_ts(ev.get("endDate")),
-            category=cat,
-        )
+        common = dict(title=ev.get("title", ""), labels=labels, fees=fees,
+                      end_ts=_parse_ts(ev.get("endDate")), category=cat)
+        return [
+            Basket(basket_id=f"event:{ev.get('id')}", kind="negrisk", token_ids=yes, **common),
+            Basket(basket_id=f"event:{ev.get('id')}:no", kind="negrisk_no", token_ids=no,
+                   payout=float(len(no) - 1), **common),
+        ]
 
     # -------------------------------------------------------------- books
     def books(self, token_ids: Iterable[str]) -> Dict[str, OrderBook]:

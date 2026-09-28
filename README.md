@@ -13,20 +13,21 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 19 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed); braucht requirements-dev.txt
+python -m pytest -q                # 25 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
 
 ## Strategie
 
-Ein vollständiges Set aller Outcomes zahlt immer genau **1 $**.
+Ein vollständiges Set aller Outcomes zahlt immer genau **1 $**. Bei einem Multi-Outcome-Event mit n Kandidaten zahlen alle NO-Tokens zusammen immer genau **n−1 $**, denn nur einer der Kandidaten gewinnt.
 
 | Strategie | Signal | Umsetzung | Kapitalbindung |
 |---|---|---|---|
 | `binary_buy_all` | Ask(YES) + Ask(NO) + Fees < 1 | Beide kaufen, sofort **mergen**, USDC zurück | keine |
 | `binary_sell_all` | Bid(YES) + Bid(NO) − Fees > 1 | 1 $ **splitten**, beide Seiten verkaufen | keine |
 | `negrisk_buy_all` | Σ Ask(YES aller Kandidaten) + Fees < 1 | Alle YES kaufen, bis zur Auflösung halten | bis zur Resolution |
+| `negrisk_no_buy_all` | Σ Ask(NO aller Kandidaten) + Fees < n−1 | Alle NO kaufen, über den NegRiskAdapter sofort in n−1 USDC **konvertieren** | keine |
 
 Der Scanner geht das Orderbuch **Level für Level** durch. Er nimmt eine Einheit nur dann mit, wenn ihre *marginale* Netto-Edge `min_edge_bps` erreicht. Die Größe entspricht damit der tatsächlich handelbaren Tiefe und nicht nur dem Top-of-Book.
 
@@ -34,11 +35,12 @@ Der Scanner geht das Orderbuch **Level für Level** durch. Er nimmt eine Einheit
 
 ## Ausführungssimulation (Paper)
 
-1. Die Chance wird im Snapshot erkannt.
-2. Der Bot wartet `latency_ms` (Standard 350 ms) und **lädt das Buch neu**.
+1. Die Chance wird im Snapshot erkannt. Gekreuzte Bücher (Bid ≥ Ask) werden ignoriert, weil sie nur eine veraltete lokale Kopie sein können.
+2. Der Bot wartet `latency_ms` (Standard 350 ms) und **lädt das Buch neu**. Im WebSocket-Modus kommt dieses Buch per REST direkt von Polymarket (`confirm_with_rest`). Eine Chance, die nur in der lokalen Kopie existiert, zählt damit als „verpasst“.
 3. **Sequential Mode:** Das knappste Leg geht zuerst raus (IOC zum Limit). Die restlichen Legs werden auf dessen Fill skaliert. Verfehlt das erste Leg, kostet das nichts.
 4. Vom sichtbaren Volumen wird nur `depth_haircut` (50 %) gefüllt. Das bildet ab, dass andere Bots schneller sind.
 5. Ungehedgte Reste werden sofort in den Bid verkauft. Was dort nicht absetzbar ist, bleibt als „Residual“ offen. Der Bot versucht es in jedem Zyklus erneut.
+6. **Verbrauchte Liquidität:** Paper-Orders erreichen Polymarket nie, das Live-Buch zeigt die „gekauften“ Orders also weiter an. Der Bot zieht deshalb die gefüllten Mengen vom Buch ab, bis das Preislevel real verschwindet oder `consumed_ttl_s` (60 s) vorbei ist. So wird dieselbe Liquidität nicht mehrfach gezählt.
 
 ## Risk-Engine (`arb/risk.py`)
 

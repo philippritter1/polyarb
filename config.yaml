@@ -71,6 +71,9 @@ stream:
 storage:
   db_path: data/polyarb.sqlite
 
+notify:
+  scenario: underdog           # Push-Nachrichten (Trades, Auszahlungen, Berichte) für dieses Szenario; leer = Arbitrage
+
 api:
   gamma_url: https://gamma-api.polymarket.com
   clob_url: https://clob.polymarket.com

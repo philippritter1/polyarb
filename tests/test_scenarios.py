@@ -376,3 +376,30 @@ def test_underdog_buys_real_ask_and_skips_wide_spreads(tmp_path):
     p = eng.pf.positions["C1"]
     assert math.isclose(p.cost, 10, abs_tol=0.05) and p.cost / p.qty <= 0.061
     assert eng.guarded == 1
+
+
+def test_notifications_follow_the_underdog_scenario(tmp_path):
+    import os
+    import subprocess
+    kw = dict(gameStartTime="2026-09-21T16:00:00Z", end="2026-09-21T18:00:00Z")
+    m = _market("s1", "Lakers vs. Celtics", ["0.94", "0.06"], ["L1", "C1"], **kw)
+    cl = FakeClient(markets=[m], books={"C1": ob("C1", [(0.05, 500)], [(0.06, 500)]),
+                                        "L1": ob("L1", [(0.93, 500)], [(0.94, 500)])}, resolutions={"C1": 1.0})
+    clock = SimClock(NOW)
+    eng = ScenarioEngine("underdog", _cfg(tmp_path, "underdog", max_position_usd=10), cl, clock)
+    eng.step()
+    clock.t = NOW + 86_400
+    eng.step()
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"last_exec_ts": 0, "last_settle_ts": 0, "boot": 0}))
+    env = dict(os.environ, NTFY_TOPIC="", POLYARB_DB=str(tmp_path / "data" / "scenario-underdog.sqlite")
+               if (tmp_path / "data").exists() else str(tmp_path / "scenario-underdog.sqlite"),
+               NOTIFY_STATE=str(state), START_CAPITAL="500")
+    root = Path(__file__).resolve().parents[1]
+    out = subprocess.run([sys.executable, "deploy/notify.py", "watch"], cwd=root, env=env,
+                         capture_output=True, text=True).stdout
+    assert "Polyarb Underdog-Sport: Trade" in out and "Stk. für $10" in out
+    assert "Polyarb Underdog-Sport: Auszahlung" in out and "1 gewonnen, 0 verloren" in out
+    rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "100000"], cwd=root, env=env,
+                         capture_output=True, text=True).stdout
+    assert "Aufgelöst: 1 (1 gewonnen, 0 verloren)" in rep and "YES+NO" not in rep

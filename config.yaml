@@ -96,6 +96,24 @@ scenarios:
     max_days_to_resolution: 90
     min_edge_bps: 50
     min_annualized_return: 0.25  # Kapital ist bis zur Auflösung gebunden
+  underdog:
+    enabled: true
+    title: Underdog-Sport
+    strategy: underdog           # aus der Markt-Studie abgeleitet (Sport-Außenseiter 3-10 % wenige h vor Ende)
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.03              # Außenseiter-Seite kostet mindestens ...
+    max_price: 0.10              # ... und höchstens so viel (echter Ask)
+    min_hours_to_end: 0.5
+    max_hours_to_end: 8
+    max_spread: 0.03             # breiter als 3 Cent zwischen Bid und Ask -> auslassen (Vorteil kippt bei ~5 Cent)
+    max_slippage: 0.01
+    assumed_edge: 0.05           # nur für die Spalte "Erwartet" (Studie: ~+5 Punkte)
+    min_liquidity: 500
+    max_position_usd: 10         # viele kleine, gleich große Wetten: die meisten verlieren
+    max_event_usd: 30            # pro Spiel
+    max_new_per_step: 6
+    max_open_positions: 150
   endgame:
     enabled: true
     title: Endspiel-Ernte

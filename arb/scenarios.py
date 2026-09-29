@@ -52,6 +52,7 @@ class Signal:
     max_edge: Optional[float] = None
     min_ask: float = 0.0
     safest_first: bool = False  # rank by price (most certain first) instead of by edge
+    max_spread: Optional[float] = None  # skip books whose bid-ask spread is wider (edge dies in the spread)
 
 
 @dataclass
@@ -281,7 +282,51 @@ class WeatherStrategy(Strategy):
         return out
 
 
-STRATEGIES = {"endgame": EndgameStrategy, "longshot": LongshotStrategy, "weather": WeatherStrategy}
+class UnderdogStrategy(Strategy):
+    """Sport underdogs priced min_price..max_price a few hours before the scheduled end.
+
+    Derived from the market study (25.-29.09., 3,000 resolved markets): sport sides priced 3-10 %
+    six hours / one hour before close won ~12 % of the time, clearly more than their price said,
+    and the effect held in both halves of the sample. The historical prices are traded prices,
+    not asks, so this paper run buys at the real ask and skips wide spreads – the edge was gone
+    at ~5 cents above the historical price. Many small flat stakes: most bets lose.
+    """
+
+    def candidates(self, now: float) -> List[Signal]:
+        from .study import categorize
+        c = self.cfg
+        lo, hi = float(c.get("min_price", 0.03)), float(c.get("max_price", 0.10))
+        h_min, h_max = float(c.get("min_hours_to_end", 0.5)) * 3600, float(c.get("max_hours_to_end", 8)) * 3600
+        markets = self.client.paged("/markets", {
+            "active": "true", "closed": "false", "liquidity_num_min": c.get("min_liquidity", 500),
+            "end_date_min": _iso(now + h_min), "end_date_max": _iso(now + h_max)},
+            max_items=int(c.get("max_markets", 2000)))
+        out = []
+        for m in markets:
+            end = _parse_ts(m.get("endDate"))
+            if not end or not now + h_min <= end <= now + h_max or not m.get("enableOrderBook"):
+                continue
+            if not m.get("acceptingOrders", True) or categorize(m) != "Sport":
+                continue
+            toks, prices = _parse_json_list(m.get("clobTokenIds")), _parse_json_list(m.get("outcomePrices"))
+            outs = _parse_json_list(m.get("outcomes")) or ["Yes", "No"]
+            if len(toks) != 2 or len(prices) != 2:
+                continue
+            evs = m.get("events") or [{}]
+            group = f"event:{evs[0].get('id')}" if evs[0].get("id") else str(m.get("conditionId") or m.get("id"))
+            for i in (0, 1):
+                p = float(prices[i])
+                if lo - 0.01 <= p <= hi:
+                    out.append(Signal(str(toks[i]), group, m.get("question", ""), str(outs[i]),
+                                      fair=min(0.95, p + float(c.get("assumed_edge", 0.05))), max_price=hi,
+                                      fee=self.fees.resolve(m, "sports"), end_ts=end, delay_s=_delay(m),
+                                      reason=f"underdog {p:.3f}", min_ask=lo,
+                                      max_spread=float(c.get("max_spread", 0.03))))
+        return out
+
+
+STRATEGIES = {"endgame": EndgameStrategy, "longshot": LongshotStrategy, "weather": WeatherStrategy,
+              "underdog": UnderdogStrategy}
 
 
 def prepare_scenario_dir(data_dir: str, name: str, capital: float, reset: str = "") -> None:
@@ -387,6 +432,9 @@ class ScenarioEngine:
         for s in ranked:
             ob = books[s.token_id]
             if ob.best_ask > s.max_price + 1e-9:
+                continue
+            if s.max_spread is not None and (ob.best_bid is None or ob.best_ask - ob.best_bid > s.max_spread + 1e-9):
+                self.guarded += 1  # no bid or a wide spread: the edge would be paid away on entry
                 continue
             if ob.best_ask < s.min_ask - 1e-9 or (s.max_edge is not None and s.fair - ob.best_ask > s.max_edge):
                 self.guarded += 1  # "too good to be true": the market knows something the strategy doesn't

@@ -107,7 +107,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
-                  "ladder_buy_all": "Logische Arbitrage", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
+                  "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -247,10 +247,12 @@ def build_all(cfg: dict, out: str) -> list:
     built = [build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav_for(p["key"]))
              for p in pages]
 
+    from arb.backtest import stress_test
     from arb.study import calibration
     study_db = str(data_dir / "study.sqlite")
+    stress = stress_test(study_db, n_boot=500)
     (root / "study").mkdir(parents=True, exist_ok=True)
-    _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study")), "utf-8")
+    _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study"), stress), "utf-8")
     built.append(str(root / "study" / "index.html"))
 
     exp = root / "export"
@@ -258,6 +260,7 @@ def build_all(cfg: dict, out: str) -> list:
     markets, calib = study_csvs(study_db)
     _write(exp / "studie-maerkte.csv", markets, "utf-8-sig")
     _write(exp / "studie-kalibrierung.csv", calib, "utf-8-sig")
+    _write(exp / "studie-stresstest.csv", stress_csv(stress), "utf-8-sig")
     files = []  # (group, label, path relative to export/, file on disk, name inside the zip)
     for p in pages:
         folder = p["out"].parent
@@ -268,7 +271,9 @@ def build_all(cfg: dict, out: str) -> list:
     files += [("Studie", "Aufgelöste Märkte mit Preisen vor Schluss und Ergebnis", "studie-maerkte.csv",
                exp / "studie-maerkte.csv", "studie/maerkte.csv"),
               ("Studie", "Kalibrierung nach Zeitpunkt und Preisbereich", "studie-kalibrierung.csv",
-               exp / "studie-kalibrierung.csv", "studie/kalibrierung.csv")]
+               exp / "studie-kalibrierung.csv", "studie/kalibrierung.csv"),
+              ("Studie", "Stresstest der Strategie-Regeln (Kosten, Glück, Zeit, Drawdown)", "studie-stresstest.csv",
+               exp / "studie-stresstest.csv", "studie/stresstest.csv")]
     tmp = exp / "polyarb-export.zip.tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for *_, disk, arc in files:
@@ -327,7 +332,51 @@ def _calib_svg(rows: list) -> str:
     return "".join(parts)
 
 
-def study_page(cal: dict, nav: list) -> str:
+def stress_csv(stress: list) -> str:
+    rows = [[r["name"], r["n"], r.get("games", ""), r.get("price"), r.get("hit"),
+             *[r["roi"][k] for k in sorted(r["roi"])], r.get("boot_p5"), r.get("boot_p95"), r.get("p_loss"),
+             r.get("roi_first"), r.get("roi_second"), r.get("dd_median"), r.get("dd_p95"), r.get("worst_streak", "")]
+            for r in stress if r.get("roi")]
+    return _csv(["Regel", "Wetten", "Spiele", "Ø Preis", "Trefferquote", "ROI +0ct", "ROI +1ct", "ROI +2ct", "ROI +3ct",
+                 "ROI +4ct", "ROI +5ct", "Bootstrap 5 %", "Bootstrap 95 %", "P(Verlust)", "ROI 1. Hälfte",
+                 "ROI 2. Hälfte", "Drawdown Median $", "Drawdown schlechteste 5 % $", "längste Verlustserie"], rows)
+
+
+def _stress_card(stress: list) -> str:
+    done = [r for r in stress if r.get("roi")]
+    if not done:
+        return ""
+    s = done[0]
+    def pct(v, sign=True):
+        v = round(v * 100) or 0  # no "-0 %"
+        return ("+" if sign and v > 0 else "") + _de(v, 0) + " %"
+    def cls(v):
+        return "pos" if v > 0 else "neg" if v < 0 else ""
+    trs = []
+    for r in stress:
+        if not r.get("roi"):
+            trs.append(f'<tr><td>{html.escape(r["name"])}</td><td class="num">{r["n"]}</td><td colspan="8">zu wenige Fälle</td></tr>')
+            continue
+        rois = "".join(f'<td class="num {cls(r["roi"][k])}">{pct(r["roi"][k])}</td>' for k in ("0.00", "0.02", "0.04"))
+        robust = r["boot_p5"] > 0 and r["roi_first"] > 0 and r["roi_second"] > 0
+        trs.append(f'<tr><td>{html.escape(r["name"])}{" ✓" if robust else ""}</td><td class="num">{r["n"]} / {r["games"]}</td>'
+                   f'<td class="num">{_de(r["price"] * 100)} % → {_de(r["hit"] * 100)} %</td>{rois}'
+                   f'<td class="num">{pct(r["boot_p5"])} … {pct(r["boot_p95"])}</td><td class="num">{_de(r["p_loss"] * 100, 0)} %</td>'
+                   f'<td class="num">{pct(r["roi_first"])} / {pct(r["roi_second"])}</td>'
+                   f'<td class="num">{_de(r["dd_p95"], 0)} $ · {r["worst_streak"]}</td></tr>')
+    return (f'<div class="card"><h2>Stresstest der Strategie-Regeln</h2><p class="note">Jede Regel kauft alle Seiten im '
+            f'Preisbereich zum jeweiligen Zeitpunkt und hält bis zur Auflösung, inkl. Fee. <b>Kosten:</b> ROI, wenn der echte '
+            f'Kaufpreis 0 / 2 / 4 Cent über dem historischen Kurs liegt. <b>Glück:</b> 5–95-%-Bereich des ROI, wenn ganze Spiele '
+            f'zufällig neu gezogen werden (bei +{_de(s["stress_slip"] * 100, 0)} ct), und wie oft er dabei negativ ist. '
+            f'<b>Zeit:</b> ROI in der ersten und zweiten Hälfte des Zeitraums. <b>Schmerz:</b> schlechteste 5 % Drawdown bei '
+            f'{_de(s["stake"], 0)} $ pro Wette und längste Verlustserie. ✓ = besteht Glück und Zeit.</p>'
+            '<div class="tblwrap"><table><tr><th>Regel</th><th class="num">Wetten / Spiele</th><th class="num">Preis → gewonnen</th>'
+            '<th class="num">ROI +0 ct</th><th class="num">+2 ct</th><th class="num">+4 ct</th><th class="num">Glück 5–95 %</th>'
+            '<th class="num">P(Verlust)</th><th class="num">1. / 2. Hälfte</th><th class="num">Drawdown · Serie</th></tr>'
+            + "".join(trs) + '</table></div></div>')
+
+
+def study_page(cal: dict, nav: list, stress: list | None = None) -> str:
     from arb.study import CHECKPOINT_NAMES
     if not cal.get("n"):
         body = ('<p class="sub">Noch keine Daten. Der Sammler läuft alle 30 Minuten auf dem Server und holt '
@@ -343,6 +392,7 @@ def study_page(cal: dict, nav: list) -> str:
             '<div class="grid2"><div class="card"><h2>Kalibrierung</h2><p class="note">Punkte auf der gestrichelten '
             'Linie = Preis sagt den Ausgang richtig voraus. <span style="color:var(--s1)">●</span> 1 Tag vorher, '
             '<span style="color:var(--s2)">●</span> 1 h vorher.</p>' + _calib_svg(cal["rows"]) + '</div>']
+    body.insert(2, _stress_card(stress or []))
     cats = cal.get("cats") or []
     rows = "".join(f'<tr><td>{html.escape(c["cat"])}</td><td>{c["group"]}</td><td class="num">{c["n"]}</td>'
                    f'<td class="num">{_de(c["price"] * 100)} %</td><td class="num">{_de(c["rate"] * 100)} %</td>'
@@ -536,7 +586,7 @@ $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</
  hit.addEventListener("mouseleave",()=>{hideTip();cross.setAttribute("visibility","hidden");dot.setAttribute("visibility","hidden")});
 })();
 
-const NAMES={ladder_buy_all:"Logische Arbitrage",binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO",
+const NAMES={ladder_buy_all:"Logische Arbitrage",underdog_buy:"Underdog-Sport",binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO",
  endgame_buy:"Endspiel-Ernte",longshot_buy:"Longshot: NO kaufen",weather_buy:"Wetter-Modell"};
 // ---------- grouped bars: expected vs realized
 (function(){

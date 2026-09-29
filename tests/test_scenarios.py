@@ -359,3 +359,20 @@ def test_endgame_spreads_entries_and_caps_per_event(tmp_path):
         eng.step()
     event_77 = [t for t in eng.pf.positions if t.startswith("N")]
     assert len(event_77) == 1  # one match = one 100 $ stake, not three
+
+
+def test_underdog_buys_real_ask_and_skips_wide_spreads(tmp_path):
+    kw = dict(gameStartTime="2026-09-21T16:00:00Z", end="2026-09-21T18:00:00Z")  # ends in ~4.5 h
+    ok = _market("s1", "Lakers vs. Celtics", ["0.94", "0.06"], ["L1", "C1"], **kw)
+    wide = _market("s2", "Knicks vs. Bulls", ["0.93", "0.07"], ["K2", "B2"], **kw)
+    books = {"C1": ob("C1", [(0.05, 500)], [(0.06, 500)]),     # 1 cent spread -> buy
+             "B2": ob("B2", [(0.03, 500)], [(0.08, 500)]),     # 5 cent spread -> the edge is gone
+             "L1": ob("L1", [(0.93, 500)], [(0.94, 500)]), "K2": ob("K2", [(0.92, 500)], [(0.93, 500)])}
+    cl = FakeClient(markets=[ok, wide], books=books)
+    eng = ScenarioEngine("underdog", _cfg(tmp_path, "underdog", max_position_usd=10, max_spread=0.03,
+                                          max_slippage=0.01), cl, SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["C1"]
+    p = eng.pf.positions["C1"]
+    assert math.isclose(p.cost, 10, abs_tol=0.05) and p.cost / p.qty <= 0.061
+    assert eng.guarded == 1

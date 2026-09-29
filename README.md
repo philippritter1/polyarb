@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 56 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
+python -m pytest -q                # 58 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -64,6 +64,7 @@ Neben der Arbitrage laufen weitere Strategien als eigene **Paper-Szenarien**. Je
 | Szenario | Idee | Risiko |
 |---|---|---|
 | `ladder` Logische Arbitrage | Märkte eines Events, die auseinander folgen („über 110k“ ⇒ „über 100k“, „bis Oktober“ ⇒ „bis Dezember“). Ist die engere Aussage teurer, YES auf die breite und NO auf die enge kaufen: zahlt immer ≥ 1 $, im Zwischenfall 2 $. Läuft mit der Arbitrage-Engine (Legs, Reparatur, REST-Fills) | Auflösungsregeln der beiden Märkte weichen ab; Kapital bis zur Auflösung gebunden |
+| `underdog` Underdog-Sport | Aus der Markt-Studie abgeleitet: Sport-Seiten zu 3–10 % wenige Stunden vor dem Ende gewannen deutlich öfter, als ihr Preis sagte. Kauft zum echten Ask, nur bei höchstens 3 Cent Spread, 10 $ pro Wette, 30 $ pro Spiel | Die meisten Wetten verlieren (lange Verlustserien). Der Vorteil verschwindet, wenn der echte Kaufpreis ~5 Cent über dem historischen Kurs liegt |
 | `endgame` Endspiel-Ernte | Favorit für 0,95–0,99 kaufen, kurz vor oder nach dem geplanten Ende; Sportspiele erst nach Abpfiff; sicherste Kandidaten zuerst, höchstens 2 neue Positionen pro Durchlauf und 100 $ pro Spiel | gewinnt oft wenig, ein Fehlgriff kostet den ganzen Einsatz |
 | `longshot` Longshot-NO | NO auf Außenseiter mit YES-Preis 2–8 % in Multi-Outcome-Events (Favorite-Longshot-Bias) | wie oben, breit gestreut über viele kleine Positionen |
 | `weather` Wetter-Modell | Temperatur-Buckets mit Ensemble-Prognosen (Open-Meteo: GFS, ECMWF, ICON) bewerten, kaufen, wenn das Modell 8–30 Prozentpunkte über dem Preis liegt. Nur Tage, die in der Stadt noch nicht begonnen haben | echte Prognosefehler; Station vs. Modellgitter |
@@ -77,6 +78,8 @@ Lokal: `python run.py scenario weather` startet ein Szenario, `python run.py das
 ## Markt-Studie und Export
 
 **Studie** (Tab „Studie“): `polyarb-study.timer` sammelt alle 30 Minuten aufgelöste Märkte der letzten 120 Tage (ab 1.000 $ Volumen; Temperatur-Buckets aus Wetter-Events schon ab 50 $, weil sie einzeln wenig gehandelt werden) mit ihrem Preisverlauf und speichert den YES-Preis 7 Tage, 1 Tag, 6 h und 1 h vor Schluss plus das Ergebnis (`data/study.sqlite`, inkrementell). Der Tab zeigt daraus die Kalibrierung: Gewinnen Seiten, die zu 95 % gehandelt wurden, wirklich in 95 % der Fälle? Nach Preisbereich, Zeitpunkt und Kategorie, mit 95-%-Bereich. Grün/rot markiert ist nur, was statistisch klar ist. So lassen sich Ideen wie Endspiel-Ernte oder Longshot-NO an Tausenden vergangener Märkte prüfen, statt Wochen auf Paper-Ergebnisse zu warten. Von Hand: `python run.py study --days 120`.
+
+**Stresstest** (im Tab „Studie“, `arb/backtest.py`): prüft die Regeln hinter Underdog, Endspiel-Ernte und Longshot-NO auf den Studiendaten gegen vier Arten, sich selbst zu täuschen: Kosten (Fee plus 0–5 Cent Aufschlag auf den historischen Kurs), Glück (Bootstrap über ganze Spiele, P(Verlust)), Zeit (erste gegen zweite Hälfte) und Schmerz (Drawdown und Verlustserie bei festen Einsätzen). Aktualisiert sich mit jedem Dashboard-Build.
 
 **Export** (Tab „Export“): alle Daten zum Herunterladen, im Format für deutsches Excel. Pro Szenario Trades und Equity-Verlauf, dazu die Studie (alle Märkte, Kalibrierung) und eine ZIP-Datei mit allem. Wird mit dem Dashboard alle 10 Minuten neu erzeugt.
 
@@ -95,6 +98,7 @@ arb/engine.py     Loop: Universe → Books → Scan → Size → Latenz → Fill
 arb/stream.py     WebSocket-Client und lokaler Orderbuch-Store
 arb/scenarios.py  Szenario-Engine (Budget, Positionen, Auflösung) + Strategien endgame / longshot / weather
 arb/ladder.py     Logik-Leitern in Events erkennen (Schwellen ↑/↓, Stichtage „by …“)
+arb/backtest.py   Stresstest von Preisbereich-Regeln auf den Studiendaten
 arb/study.py      Markt-Studie: aufgelöste Märkte + Preisverlauf sammeln, Kalibrierung berechnen
 arb/weather.py    Temperatur-Märkte parsen, Bucket-Wahrscheinlichkeiten aus Ensemble-Prognosen
 arb/storage.py    SQLite (scans, opportunities, executions, equity, settlements)

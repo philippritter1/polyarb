@@ -140,3 +140,18 @@ def test_backfill_resumes_after_max_new(tmp_path):
     assert b["backfill_days_left"] == 0
     import sqlite3
     assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM markets").fetchone()[0] == 10
+
+
+def test_stress_test_rules():
+    from arb.backtest import RULES, run_rule
+    # 200 sport games: underdog side at 5 % wins 10 % of the time; favourites at 97 % win 95 %
+    rows = []
+    for i in range(200):
+        won_underdog = 1 if i % 10 == 0 else 0
+        rows.append((f"Team {i} vs. Team {i + 1}: winner", "Sport", won_underdog, float(i), None, None, 0.05, 0.05))
+    under = run_rule(rows, RULES[0], n_boot=200)
+    assert under["n"] == 200 and abs(under["hit"] - 0.10) < 1e-9 and under["roi"]["0.00"] > 0.8
+    assert under["roi"]["0.05"] < under["roi"]["0.00"]  # every cent of surcharge costs
+    assert under["games"] == 200 and 0 <= under["p_loss"] <= 1 and under["dd_p95"] > 0
+    fav = run_rule(rows, RULES[2], n_boot=200)  # the same markets seen from the 95 % side
+    assert fav["roi"]["0.00"] < 0

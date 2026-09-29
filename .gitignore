@@ -6,5 +6,6 @@ __pycache__/
 venv/
 dashboard.html
 dashboard_mock.html
+trades.csv
 deploy/SECRETS.txt
 deploy/cloud-config.yaml

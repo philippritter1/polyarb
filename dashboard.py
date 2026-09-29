@@ -1,7 +1,10 @@
 """Build a self-contained HTML dashboard (no external scripts) from the SQLite log."""
 from __future__ import annotations
 
+import csv
+import io
 import json
+import os
 import sqlite3
 from collections import Counter
 from datetime import datetime
@@ -85,13 +88,61 @@ def collect(db_path: str, start_capital: float) -> dict:
     )
 
 
+STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
+                  "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO"}
+STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
+CSV_COLUMNS = [
+    ("Zeit", "ts"), ("Strategie", "strategy"), ("Strategie-Code", "strategy"), ("Markt", "title"),
+    ("Markt-ID", "basket_id"), ("Status", "status"), ("Menge Ziel", "target_qty"), ("Menge gefüllt", "matched_qty"),
+    ("Kapital $", "capital"), ("Erwartet $", "expected_profit"), ("Realisiert $", "realized_pnl"),
+    ("Gebunden $", "locked"), ("Erw. Auszahlung $", "expected_payout"), ("Offene Reste $", "residual"),
+    ("Latenz ms", "latency_ms"), ("Notiz", "note"), ("Fills (JSON)", "fills"),
+]
+
+
+def _num(v) -> str:
+    return "" if v is None else f"{v:.6f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
+def trades_csv(db_path: str) -> str:
+    """All executions as CSV for German Excel: ';' separator, decimal comma, local time."""
+    db = sqlite3.connect(db_path)
+    cols = [c for _, c in CSV_COLUMNS]
+    rows = _q(db, f"SELECT {', '.join(cols)} FROM executions ORDER BY ts")
+    db.close()
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    w.writerow([h for h, _ in CSV_COLUMNS])
+    for r in rows:
+        out = []
+        for (head, col), v in zip(CSV_COLUMNS, r):
+            if col == "ts":
+                v = datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M:%S")
+            elif head == "Strategie":
+                v = STRATEGY_NAMES.get(v, v)
+            elif col == "status":
+                v = STATUS_NAMES.get(v, v)
+            elif isinstance(v, float):
+                v = _num(v)
+            out.append("" if v is None else v)
+        w.writerow(out)
+    return buf.getvalue()
+
+
+def _write(path: Path, text: str, encoding: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding=encoding, newline="")
+    os.replace(tmp, path)  # the web server never sees a half-written file
+
+
 def build(db_path: str, out: str, start_capital: float, source: str = "auto") -> str:
     data = collect(db_path, float(start_capital))
     if source == "auto":
         source = "mock" if "mock" in Path(db_path).name else "paper"
     data["source"] = source
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
-    Path(out).write_text(html, encoding="utf-8")
+    _write(Path(out).with_name("trades.csv"), trades_csv(db_path), "utf-8-sig")  # BOM: Excel detects UTF-8
+    _write(Path(out), html, "utf-8")
     return out
 
 
@@ -139,6 +190,9 @@ th{color:var(--text2);font-weight:600}td.num,th.num{text-align:right}
 td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 .pos{color:var(--good)}.neg{color:var(--bad)}
 .st{font-size:11.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--border)}
+.head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.btn{font-size:12.5px;font-weight:600;color:var(--s1);text-decoration:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px}
+.btn:hover{border-color:var(--s1)}
 .warnbox{border-left:3px solid var(--warn);padding:8px 12px;background:var(--surface);border-radius:6px;margin-bottom:16px;font-size:13px}
 </style></head><body><div class="wrap">
 <h1>Polymarket Arbitrage – Paper Trading <span class="badge" id="src"></span></h1>
@@ -156,7 +210,8 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
  <div class="card"><h2>Wie nah ist der Markt an Arbitrage?</h2><p class="note">Pro Scan: niedrigste Summe YES-Ask + NO-Ask über alle Binärmärkte (vor Fees). Unter 1,00 = Rohsignal.</p><div id="hist"></div></div>
  <div class="card"><h2>Risk-Engine: Entscheidungen</h2><p class="note">Warum Chancen angenommen, verkleinert oder abgelehnt wurden.</p><div id="rsn"></div></div>
 </div>
-<div class="card"><h2>Letzte Ausführungen</h2><div class="tblwrap"><table id="tbl"></table></div></div>
+<div class="card"><div class="head"><h2>Letzte Ausführungen</h2><a class="btn" href="trades.csv" download>CSV-Export aller Trades</a></div>
+ <p class="note">Hier die letzten 25. Der Export enthält alle Ausführungen, wird mit dem Dashboard alle 10 Minuten aktualisiert und öffnet direkt in Excel.</p><div class="tblwrap"><table id="tbl"></table></div></div>
 </div><div class="tip" id="tip"></div>
 <script>
 const D=/*__DATA__*/null;

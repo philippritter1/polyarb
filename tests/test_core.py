@@ -271,3 +271,21 @@ def test_stream_engine_confirms_with_rest(tmp_path):
     assert got["Y"].asks[0].price == 0.45  # REST snapshot, not the (empty) local store
     eng.confirm_rest = False
     assert eng._exec_books(["Y", "N"]) == {}
+
+
+def test_trades_csv_export(tmp_path):
+    from arb.engine import Engine, SimClock
+    from dashboard import build
+    books = {"Y": ob("Y", [(0.38, 500)], [(0.40, 200)]), "N": ob("N", [(0.53, 500)], [(0.55, 200)])}
+    cfg = _cfg(tmp_path)
+    eng = Engine(cfg, _StaticClient([binary()], books), SimClock(1_000_000))
+    eng.step()
+    build(cfg["storage"]["db_path"], str(tmp_path / "index.html"), 2500)
+    raw = (tmp_path / "trades.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # BOM so Excel reads UTF-8
+    lines = raw.decode("utf-8-sig").splitlines()
+    assert lines[0].startswith("Zeit;Strategie;Strategie-Code;Markt")
+    row = lines[1].split(";")
+    assert row[1] == "Binär: YES+NO kaufen" and row[2] == "binary_buy_all" and row[5] in ("voll", "teilweise")
+    assert "," in row[8] and "." not in row[8]  # decimal comma
+    assert 'href="trades.csv"' in (tmp_path / "index.html").read_text(encoding="utf-8")

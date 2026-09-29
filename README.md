@@ -119,6 +119,8 @@ Was dann läuft (siehe `deploy/systemd/`):
 
 Die Server-Zeitzone ist Europe/Vienna (setzt `install.sh`).
 
+**Paper-Phase neu starten:** Einen neuen Text in `deploy/RESET_ID` committen. Beim nächsten Auto-Update verschiebt `install.sh` Datenbank und Portfolio einmalig nach `data/archive-<Zeitstempel>/`, und der Bot startet wieder mit dem Startkapital. Gelöscht wird nichts.
+
 ### Push-Nachrichten (ntfy)
 
 `deploy/notify.py` schickt alles an das ntfy-Topic `NTFY_TOPIC` aus `/etc/polyarb.env`:

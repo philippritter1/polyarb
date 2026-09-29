@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 31 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung); braucht requirements-dev.txt
+python -m pytest -q                # 32 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.

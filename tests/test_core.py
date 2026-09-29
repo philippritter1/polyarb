@@ -366,3 +366,11 @@ def test_engine_waits_market_delay(tmp_path):
     assert "delay=3s" in note
     # latency 0.35 + 3 s before the first leg, leg gap 0.15 + 3 s before the second
     assert clock.now() - 1_000_000 >= 0.35 + 3 + 0.15 + 3 - 1e-9
+
+
+def test_market_delay_parsing():
+    from arb.client import _delay
+    assert _delay({"secondsDelay": 1}) == 1.0
+    assert _delay({"secondsDelay": 0, "gameStartTime": "2026-09-28T18:00:00Z"}) == 0.0
+    assert _delay({"gameStartTime": "2026-09-28T18:00:00Z"}) == 3.0  # field missing on a game -> assume sports delay
+    assert _delay({}) == 0.0

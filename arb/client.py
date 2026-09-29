@@ -38,10 +38,20 @@ def _parse_ts(s: Optional[str]) -> Optional[float]:
         return None
 
 
+SPORTS_DELAY_FALLBACK_S = 3.0  # Polymarket docs: 3 s delay on marketable orders in sports markets
+
+
 def _delay(market: dict) -> float:
-    """Seconds Polymarket holds marketable orders before matching (Gamma `secondsDelay`, live sports)."""
+    """Seconds Polymarket holds marketable orders before matching (Gamma `secondsDelay`, live sports).
+
+    Gamma does not always return the field. A game market (has `gameStartTime`) without it is
+    assumed to use the documented sports delay, so the paper results err on the safe side.
+    """
+    v = market.get("secondsDelay")
+    if v in (None, ""):
+        return SPORTS_DELAY_FALLBACK_S if market.get("gameStartTime") else 0.0
     try:
-        return max(0.0, float(market.get("secondsDelay") or 0))
+        return max(0.0, float(v))
     except (TypeError, ValueError):
         return 0.0
 

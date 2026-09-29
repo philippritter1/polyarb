@@ -121,19 +121,37 @@ class Study:
                 return hist
         return []
 
+    def _weather_markets(self, t_lo: float, t_hi: float, min_volume: float) -> List[dict]:
+        """Temperature buckets trade little each (often < 1,000 $), so the volume filter of the main
+        listing drops them. Fetch closed weather events instead and keep their buckets from min_volume."""
+        events = self.client.paged("/events", {
+            "closed": "true", "tag_slug": "weather", "end_date_min": _iso(t_lo), "end_date_max": _iso(t_hi)},
+            max_items=2000)
+        out = []
+        for ev in events:
+            if "temperature in" not in (ev.get("title") or "").lower():
+                continue
+            for m in ev.get("markets") or []:
+                if float(m.get("volumeNum") or m.get("volume") or 0) >= min_volume:
+                    out.append(dict(m, endDate=m.get("endDate") or ev.get("endDate")))
+        return out
+
     def collect(self, days_back: float = 120, max_new: int = 3000, window_days: float = 2,
-                min_volume: float = 1000, now: Optional[float] = None) -> Dict[str, int]:
+                min_volume: float = 1000, weather_min_volume: float = 50,
+                now: Optional[float] = None) -> Dict[str, int]:
         """Walk back in windows of closed markets (Gamma caps offsets, windows keep each listing short)."""
         now = time.time() if now is None else now
         known = self._known()
-        stats = {"new": 0, "skipped": 0, "seen": 0}
+        stats = {"new": 0, "skipped": 0, "seen": 0, "weather": 0}
         t_hi = now
         while t_hi > now - days_back * DAY and stats["new"] < max_new:
             t_lo = t_hi - window_days * DAY
             markets = self.client.paged("/markets", {
                 "closed": "true", "end_date_min": _iso(t_lo), "end_date_max": _iso(t_hi),
                 "volume_num_min": min_volume, "order": "volume", "ascending": "false"}, max_items=2000)
-            for m in markets:
+            weather = self._weather_markets(t_lo, t_hi, weather_min_volume) if weather_min_volume else []
+            stats["weather"] += len(weather)
+            for m in markets + weather:
                 cid = str(m.get("conditionId") or m.get("id"))
                 stats["seen"] += 1
                 if cid in known:

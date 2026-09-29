@@ -20,6 +20,7 @@ def main():
     ap.add_argument("cmd", choices=["scan", "paper", "mock", "dashboard", "scenario", "study"])
     ap.add_argument("--days", type=float, default=120, help="study: how far back to collect resolved markets")
     ap.add_argument("--max-new", type=int, default=3000, help="study: max new markets per run")
+    ap.add_argument("--weather-min-volume", type=float, default=50, help="study: volume floor for temperature buckets")
     ap.add_argument("name", nargs="?", help="scenario name (for `scenario`)")
     ap.add_argument("--all", action="store_true", help="dashboard: also build every enabled scenario tab")
     ap.add_argument("--config", default="config.yaml")
@@ -63,7 +64,8 @@ def main():
         import os
         from arb.study import Study
         db = os.path.join(os.path.dirname(cfg["storage"]["db_path"]) or ".", "study.sqlite")
-        print(Study(client, db).collect(days_back=args.days, max_new=args.max_new))
+        print(Study(client, db).collect(days_back=args.days, max_new=args.max_new,
+                                        weather_min_volume=args.weather_min_volume))
         return
 
     if args.cmd == "scenario":

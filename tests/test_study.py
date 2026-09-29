@@ -41,8 +41,12 @@ class StudyClient:
         self.calls = 0
 
     def paged(self, path, params, max_items=1000):
+        if path == "/events":
+            return self.events if params.get("end_date_max", "") > "2026-09-20" else []
         self.calls += 1
         return self.markets if self.calls == 1 else []
+
+    events = []
 
     def get_json(self, url, params):
         end = params["endTs"]
@@ -84,3 +88,17 @@ def test_export_section(tmp_path):
     assert len(markets) == 21 and markets[0].startswith("Ende geplant;Geschlossen;Frage")
     study = (tmp_path / "www" / "study" / "index.html").read_text(encoding="utf-8")
     assert "20 aufgelöste Märkte" in study and "<svg" in study
+
+
+def test_weather_buckets_below_main_volume_floor(tmp_path):
+    cl = StudyClient(n=0)
+    cl.events = [dict(id=1, title="Highest temperature in Paris on September 21?", endDate="2026-09-21T13:33:20Z",
+                      markets=[dict(conditionId=f"w{i}", question=f"Will the highest temperature in Paris be {20 + i}°C?",
+                                    clobTokenIds=json.dumps([f"WY{i}", f"WN{i}"]), volumeNum=v,
+                                    outcomePrices=json.dumps(["1", "0"] if i == 1 else ["0", "1"]))
+                               for i, v in enumerate([300, 120, 20])]),
+                 dict(id=2, title="Will it snow in Paris?", markets=[])]
+    stats = Study(cl, str(tmp_path / "s.sqlite")).collect(days_back=4, now=END + 3600)
+    assert stats["weather"] == 2 and stats["new"] == 2  # the 20 $ bucket stays below the floor
+    cats = calibration(str(tmp_path / "s.sqlite"))
+    assert cats["n"] == 2

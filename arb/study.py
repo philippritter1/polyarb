@@ -6,7 +6,8 @@ outcome. From that the dashboard builds calibration tables: if 95-cent favourite
 time, buying them has an edge; if they win 93 %, it does not. Thousands of past markets answer in
 days what paper trading answers in months.
 
-Runs on the server (`python run.py study`, timer every 6 h), incremental: known markets are skipped.
+Runs on the server (`python run.py study`, timer every 30 min), incremental: known markets are skipped
+and a bookmark remembers how far back the collection already got.
 """
 from __future__ import annotations
 
@@ -136,42 +137,68 @@ class Study:
                     out.append(dict(m, endDate=m.get("endDate") or ev.get("endDate")))
         return out
 
+    def _meta(self, key: str, value: Optional[float] = None) -> Optional[float]:
+        self.db.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value REAL)")
+        if value is not None:
+            self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, value))
+            return value
+        row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
     def collect(self, days_back: float = 120, max_new: int = 3000, window_days: float = 2,
-                min_volume: float = 1000, weather_min_volume: float = 50,
+                min_volume: float = 1000, weather_min_volume: float = 50, recent_days: float = 7,
                 now: Optional[float] = None) -> Dict[str, int]:
-        """Walk back in windows of closed markets (Gamma caps offsets, windows keep each listing short)."""
+        """One run: first the last `recent_days` (markets that just closed, or resolved late after a
+        dispute), then the backfill continues where the previous run stopped (bookmark in `meta`).
+        Cheap enough to run every 30 minutes once the backfill is done."""
         now = time.time() if now is None else now
         known = self._known()
-        stats = {"new": 0, "skipped": 0, "seen": 0, "weather": 0}
+        stats = {"new": 0, "skipped": 0, "seen": 0, "weather": 0, "windows": 0}
+        oldest = now - days_back * DAY
         t_hi = now
-        while t_hi > now - days_back * DAY and stats["new"] < max_new:
+        while t_hi > now - recent_days * DAY and stats["new"] < max_new:
+            self._window(t_hi - window_days * DAY, t_hi, known, stats, max_new, min_volume, weather_min_volume, now)
+            t_hi -= window_days * DAY
+        t_hi = min(t_hi, self._meta("backfill_until") or t_hi)
+        while t_hi > oldest and stats["new"] < max_new:
             t_lo = t_hi - window_days * DAY
-            markets = self.client.paged("/markets", {
-                "closed": "true", "end_date_min": _iso(t_lo), "end_date_max": _iso(t_hi),
-                "volume_num_min": min_volume, "order": "volume", "ascending": "false"}, max_items=2000)
-            weather = self._weather_markets(t_lo, t_hi, weather_min_volume) if weather_min_volume else []
-            stats["weather"] += len(weather)
-            for m in markets + weather:
-                cid = str(m.get("conditionId") or m.get("id"))
-                stats["seen"] += 1
-                if cid in known:
-                    continue
-                known.add(cid)
-                row = self._row(m, cid, now)
-                if isinstance(row, str):
-                    self.db.execute("INSERT OR REPLACE INTO skipped VALUES(?,?,?)", (cid, row, now))
-                    stats["skipped"] += 1
-                else:
-                    self.db.execute("INSERT OR REPLACE INTO markets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
-                    stats["new"] += 1
-                if (stats["new"] + stats["skipped"]) % 50 == 0:
-                    self.db.commit()
-                if stats["new"] >= max_new:
-                    break
-            self.db.commit()
+            if self._window(t_lo, t_hi, known, stats, max_new, min_volume, weather_min_volume, now):
+                self._meta("backfill_until", t_lo)  # this window is complete, never list it again
+                self.db.commit()
             t_hi = t_lo
+        stats["backfill_days_left"] = round(max(0.0, ((self._meta("backfill_until") or now) - oldest) / DAY), 1)
         log.info("study: %s", stats)
         return stats
+
+    def _window(self, t_lo: float, t_hi: float, known: set, stats: dict, max_new: int, min_volume: float,
+                weather_min_volume: float, now: float) -> bool:
+        """Collect one window of closed markets. False if max_new stopped it midway."""
+        stats["windows"] += 1
+        markets = self.client.paged("/markets", {
+            "closed": "true", "end_date_min": _iso(t_lo), "end_date_max": _iso(t_hi),
+            "volume_num_min": min_volume, "order": "volume", "ascending": "false"}, max_items=2000)
+        weather = self._weather_markets(t_lo, t_hi, weather_min_volume) if weather_min_volume else []
+        stats["weather"] += len(weather)
+        for m in markets + weather:
+            cid = str(m.get("conditionId") or m.get("id"))
+            stats["seen"] += 1
+            if cid in known:
+                continue
+            if stats["new"] >= max_new:
+                self.db.commit()
+                return False
+            known.add(cid)
+            row = self._row(m, cid, now)
+            if isinstance(row, str):
+                self.db.execute("INSERT OR REPLACE INTO skipped VALUES(?,?,?)", (cid, row, now))
+                stats["skipped"] += 1
+            else:
+                self.db.execute("INSERT OR REPLACE INTO markets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                stats["new"] += 1
+            if (stats["new"] + stats["skipped"]) % 50 == 0:
+                self.db.commit()
+        self.db.commit()
+        return True
 
     def _row(self, m: dict, cid: str, now: float):
         toks = _parse_json_list(m.get("clobTokenIds"))

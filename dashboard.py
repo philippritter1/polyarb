@@ -330,7 +330,7 @@ def _calib_svg(rows: list) -> str:
 def study_page(cal: dict, nav: list) -> str:
     from arb.study import CHECKPOINT_NAMES
     if not cal.get("n"):
-        body = ('<p class="sub">Noch keine Daten. Der Sammler läuft alle 6 Stunden auf dem Server und holt '
+        body = ('<p class="sub">Noch keine Daten. Der Sammler läuft alle 30 Minuten auf dem Server und holt '
                 'aufgelöste Märkte mit Preisverlauf. Die ersten Ergebnisse erscheinen nach dem ersten Lauf.</p>')
         return _page("Markt-Studie: Wie gut sagen Preise den Ausgang voraus?", nav, body)
     rng = (datetime.fromtimestamp(cal["t0"]).strftime("%d.%m.%Y") + " – " +

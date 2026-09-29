@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 54 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
+python -m pytest -q                # 56 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -76,9 +76,11 @@ Lokal: `python run.py scenario weather` startet ein Szenario, `python run.py das
 
 ## Markt-Studie und Export
 
-**Studie** (Tab „Studie“): `polyarb-study.timer` sammelt alle 6 h aufgelöste Märkte der letzten 120 Tage (ab 1.000 $ Volumen; Temperatur-Buckets aus Wetter-Events schon ab 50 $, weil sie einzeln wenig gehandelt werden) mit ihrem Preisverlauf und speichert den YES-Preis 7 Tage, 1 Tag, 6 h und 1 h vor Schluss plus das Ergebnis (`data/study.sqlite`, inkrementell). Der Tab zeigt daraus die Kalibrierung: Gewinnen Seiten, die zu 95 % gehandelt wurden, wirklich in 95 % der Fälle? Nach Preisbereich, Zeitpunkt und Kategorie, mit 95-%-Bereich. Grün/rot markiert ist nur, was statistisch klar ist. So lassen sich Ideen wie Endspiel-Ernte oder Longshot-NO an Tausenden vergangener Märkte prüfen, statt Wochen auf Paper-Ergebnisse zu warten. Von Hand: `python run.py study --days 120`.
+**Studie** (Tab „Studie“): `polyarb-study.timer` sammelt alle 30 Minuten aufgelöste Märkte der letzten 120 Tage (ab 1.000 $ Volumen; Temperatur-Buckets aus Wetter-Events schon ab 50 $, weil sie einzeln wenig gehandelt werden) mit ihrem Preisverlauf und speichert den YES-Preis 7 Tage, 1 Tag, 6 h und 1 h vor Schluss plus das Ergebnis (`data/study.sqlite`, inkrementell). Der Tab zeigt daraus die Kalibrierung: Gewinnen Seiten, die zu 95 % gehandelt wurden, wirklich in 95 % der Fälle? Nach Preisbereich, Zeitpunkt und Kategorie, mit 95-%-Bereich. Grün/rot markiert ist nur, was statistisch klar ist. So lassen sich Ideen wie Endspiel-Ernte oder Longshot-NO an Tausenden vergangener Märkte prüfen, statt Wochen auf Paper-Ergebnisse zu warten. Von Hand: `python run.py study --days 120`.
 
 **Export** (Tab „Export“): alle Daten zum Herunterladen, im Format für deutsches Excel. Pro Szenario Trades und Equity-Verlauf, dazu die Studie (alle Märkte, Kalibrierung) und eine ZIP-Datei mit allem. Wird mit dem Dashboard alle 10 Minuten neu erzeugt.
+
+Jeder Studien-Lauf holt zuerst die zuletzt geschlossenen Märkte (7 Tage, auch spät aufgelöste) und setzt dann das Nachladen älterer Tage dort fort, wo der letzte Lauf aufgehört hat (Lesezeichen in `data/study.sqlite`). Ist die Historie komplett, dauert ein Lauf nur noch wenige Minuten.
 
 ## Architektur
 

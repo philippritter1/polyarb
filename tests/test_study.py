@@ -102,3 +102,41 @@ def test_weather_buckets_below_main_volume_floor(tmp_path):
     assert stats["weather"] == 2 and stats["new"] == 2  # the 20 $ bucket stays below the floor
     cats = calibration(str(tmp_path / "s.sqlite"))
     assert cats["n"] == 2
+
+
+class WindowClient(StudyClient):
+    """Counts market listings per window; every window holds one resolved market."""
+
+    def __init__(self):
+        super().__init__(n=0)
+        self.listed = []
+
+    def paged(self, path, params, max_items=1000):
+        if path == "/events":
+            return []
+        self.listed.append(params["end_date_max"])
+        i = len(self.listed)
+        return [dict(conditionId=f"{params['end_date_max']}", question=f"Will thing {i} happen?",
+                     clobTokenIds=json.dumps([f"Y{i}", f"N{i}"]), outcomePrices=json.dumps(["1", "0"]),
+                     endDate=params["end_date_max"], volumeNum=5000)]
+
+
+def test_bookmark_keeps_frequent_runs_cheap(tmp_path):
+    db = str(tmp_path / "s.sqlite")
+    cl = WindowClient()
+    first = Study(cl, db).collect(days_back=20, window_days=2, recent_days=4, now=END)
+    assert first["windows"] == 10 and first["backfill_days_left"] == 0
+    cl.listed = []
+    second = Study(cl, db).collect(days_back=20, window_days=2, recent_days=4, now=END + 1800)
+    assert second["windows"] == 2  # only the recent days are listed again, the backfill is done
+
+
+def test_backfill_resumes_after_max_new(tmp_path):
+    db = str(tmp_path / "s.sqlite")
+    cl = WindowClient()
+    a = Study(cl, db).collect(days_back=20, window_days=2, recent_days=4, max_new=5, now=END)
+    assert a["new"] == 5 and a["backfill_days_left"] > 0
+    b = Study(cl, db).collect(days_back=20, window_days=2, recent_days=4, max_new=100, now=END)
+    assert b["backfill_days_left"] == 0
+    import sqlite3
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM markets").fetchone()[0] == 10

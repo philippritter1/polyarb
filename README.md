@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 44 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien); braucht requirements-dev.txt
+python -m pytest -q                # 48 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -66,7 +66,9 @@ Neben der Arbitrage laufen weitere Strategien als eigene **Paper-Szenarien**. Je
 | `ladder` Logische Arbitrage | Märkte eines Events, die auseinander folgen („über 110k“ ⇒ „über 100k“, „bis Oktober“ ⇒ „bis Dezember“). Ist die engere Aussage teurer, YES auf die breite und NO auf die enge kaufen: zahlt immer ≥ 1 $, im Zwischenfall 2 $. Läuft mit der Arbitrage-Engine (Legs, Reparatur, REST-Fills) | Auflösungsregeln der beiden Märkte weichen ab; Kapital bis zur Auflösung gebunden |
 | `endgame` Endspiel-Ernte | Favorit für 0,95–0,99 kaufen, kurz vor oder nach dem geplanten Ende | gewinnt oft wenig, ein Fehlgriff kostet den ganzen Einsatz |
 | `longshot` Longshot-NO | NO auf Außenseiter mit YES-Preis 2–8 % in Multi-Outcome-Events (Favorite-Longshot-Bias) | wie oben, breit gestreut über viele kleine Positionen |
-| `weather` Wetter-Modell | Temperatur-Buckets mit Ensemble-Prognosen (Open-Meteo: GFS, ECMWF, ICON) bewerten, kaufen, wenn das Modell ≥ 8 Prozentpunkte über dem Preis liegt | echte Prognosefehler; Station vs. Modellgitter |
+| `weather` Wetter-Modell | Temperatur-Buckets mit Ensemble-Prognosen (Open-Meteo: GFS, ECMWF, ICON) bewerten, kaufen, wenn das Modell 8–30 Prozentpunkte über dem Preis liegt. Nur Tage, die in der Stadt noch nicht begonnen haben | echte Prognosefehler; Station vs. Modellgitter |
+
+Schutzregeln für alle Szenarien: höchstens `max_slippage` (3 Cent) über dem besten Ask kaufen; Wetter zusätzlich nicht, wenn Modell und Markt um mehr als `max_edge` auseinanderliegen oder der Markt den Token praktisch bei 0 sieht (dann weiß der Markt mehr). `reset: <neuer Wert>` startet ein Szenario neu.
 
 Die Ausführung ist so realistisch wie bei der Arbitrage: Latenz, Order-Verzögerung, frisches Orderbuch, Haircut und Fees. Positionen werden bis zur Auflösung gehalten und dann ausgezahlt. Die Karte **„Hat die Strategie einen Edge?“** vergleicht die Gewinnquote der aufgelösten Positionen mit dem Ø Einstiegspreis. Nur wenn die Strategie öfter gewinnt, als der Preis sagt, bleibt nach vielen Trades etwas übrig. Aussagekräftig ist das erst ab etwa 30 Auflösungen.
 

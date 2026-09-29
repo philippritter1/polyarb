@@ -93,6 +93,7 @@ class WeatherModel:
         self.ttl = ttl_s
         self._geo: Dict[str, Optional[Tuple[float, float]]] = {}
         self._fc: Dict[tuple, Tuple[float, dict]] = {}
+        self.utc_offset: Dict[str, float] = {}   # city -> seconds, from the forecast (timezone=auto)
 
     def locate(self, city: str) -> Optional[Tuple[float, float]]:
         key = city.lower()
@@ -114,8 +115,10 @@ class WeatherModel:
                 "latitude": loc[0], "longitude": loc[1], "daily": "temperature_2m_max,temperature_2m_min",
                 "models": self.models, "timezone": "auto", "forecast_days": 4,
                 "temperature_unit": "fahrenheit" if unit == "f" else "celsius"})
-            hit = (time.time(), (data or {}).get("daily") or {})
+            hit = (time.time(), (data or {}).get("daily") or {}, (data or {}).get("utc_offset_seconds"))
             self._fc[key] = hit
+        if hit[2] is not None:
+            self.utc_offset[city.lower()] = float(hit[2])
         daily = hit[1]
         days = daily.get("time") or []
         if day.isoformat() not in days:

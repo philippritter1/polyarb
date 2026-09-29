@@ -127,15 +127,20 @@ scenarios:
     enabled: true
     title: Wetter-Modell
     strategy: weather
+    reset: 2                     # neuer Wert = Szenario startet neu (v2: Fixes nach dem Totalverlust am 29.09.)
     capital_usd: 2500
     interval_min: 20
     models: gfs_seamless,ecmwf_ifs025,icon_seamless   # Open-Meteo Ensembles, kostenlos
-    min_edge: 0.08               # Modell-Wahrscheinlichkeit muss so viel über dem Preis liegen
+    min_edge: 0.08               # Modell-Wahrscheinlichkeit muss so viel über dem Preis liegen ...
+    max_edge: 0.30               # ... aber nicht mehr: größere Abweichung = Modell liegt falsch
+    min_ask: 0.03                # nichts kaufen, was der Markt praktisch bei 0 sieht
     min_prob: 0.05
-    max_days_ahead: 2            # nur heute bis übermorgen (Prognosen sind dann gut)
-    sigma_f: 1.8                 # Unsicherheit Station vs. Modell in °F ...
-    sigma_c: 1.0                 # ... bzw. °C
-    kelly_fraction: 0.25
+    min_days_ahead: 1            # nie einen Tag handeln, der in der Stadt schon begonnen hat
+    max_days_ahead: 2
+    sigma_f: 2.5                 # Unsicherheit Station vs. Modell in °F ...
+    sigma_c: 1.5                 # ... bzw. °C (vorher 1,8/1,0: viel zu selbstsicher)
+    kelly_fraction: 0.10
+    max_slippage: 0.03           # höchstens 3 Cent über dem besten Ask kaufen
     max_position_usd: 200
     max_event_usd: 400
     max_open_positions: 30

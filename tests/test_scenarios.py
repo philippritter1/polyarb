@@ -49,11 +49,12 @@ def test_bucket_probs_sum_to_one():
 
 # ---------------------------------------------------------------- fake Polymarket + Open-Meteo
 class FakeClient:
-    def __init__(self, markets=(), events=(), books=None, resolutions=None, forecast=None):
+    def __init__(self, markets=(), events=(), books=None, resolutions=None, forecast=None, utc_offset=0):
         self.data = {"/markets": list(markets), "/events": list(events)}
         self.bk = books or {}
         self.res = resolutions or {}
         self.forecast = forecast or {}
+        self.utc_offset = utc_offset
         self.fees = FeeResolver({"default_rate": 0.0})
 
     def paged(self, path, params, max_items=1000):
@@ -68,7 +69,7 @@ class FakeClient:
     def get_json(self, url, params):
         if "geocoding" in url:
             return {"results": [{"latitude": 43.7, "longitude": -79.4}]}
-        return {"daily": self.forecast}
+        return {"daily": self.forecast, "utc_offset_seconds": self.utc_offset}
 
 
 def _cfg(tmp_path, name, **sc):
@@ -125,9 +126,9 @@ def test_longshot_buys_no_on_small_candidates(tmp_path):
     assert list(eng.pf.positions) == ["NB"] and eng.pf.positions["NB"].label == "NO Outsider"
 
 
-def _weather_event():
+def _weather_event(day=22):
     buckets = ["69°F or below", "70-71°F", "72-73°F", "74-75°F", "76°F or higher"]
-    return dict(id=9, title="Highest temperature in Toronto on September 21?", endDate="2026-09-22T04:00:00Z",
+    return dict(id=9, title=f"Highest temperature in Toronto on September {day}?", endDate="2026-09-23T04:00:00Z",
                 markets=[dict(groupItemTitle=b, clobTokenIds=json.dumps([f"Y{i}", f"N{i}"]), enableOrderBook=True)
                          for i, b in enumerate(buckets)])
 
@@ -136,7 +137,7 @@ def test_weather_buys_underpriced_bucket(tmp_path):
     # 30 members at 72.2-72.8°F, sigma 1°F -> "72-73°F" ~ 0.67, neighbours ~ 0.18; market sells 72-73 at 0.40
     forecast = {"time": ["2026-09-21", "2026-09-22"]}
     for k in range(30):
-        forecast[f"temperature_2m_max_member{k:02d}_gfs"] = [72.5 + (k % 3 - 1) * 0.3, 60.0]
+        forecast[f"temperature_2m_max_member{k:02d}_gfs"] = [60.0, 72.5 + (k % 3 - 1) * 0.3]
     books = {f"Y{i}": ob(f"Y{i}", [(0.01, 100)], [(0.05, 100)]) for i in (0, 4)}
     books.update({f"Y{i}": ob(f"Y{i}", [(0.20, 100)], [(0.22, 100)]) for i in (1, 3)})
     books.update({f"N{i}": ob(f"N{i}", [(0.90, 100)], [(0.95, 100)]) for i in range(5)})
@@ -274,3 +275,54 @@ def test_budget_change_archives_scenario(tmp_path):
     (d / "scenario-endgame.sqlite").write_text("new")
     prepare_scenario_dir(str(d), "endgame", 2500)  # same budget -> untouched
     assert (d / "scenario-endgame.sqlite").read_text() == "new"
+
+
+def _loss_case_books():
+    # what happened on 29.09.: the day is (nearly) over, the market knows the bucket (YES 0.999),
+    # the overconfident model puts it at ~1 % -> it wanted NO for up to 0.91 while the NO ask was 0.001
+    books = {f"Y{i}": ob(f"Y{i}", [(0.001, 100)], [(0.002, 100)]) for i in range(5)}
+    books.update({f"N{i}": ob(f"N{i}", [(0.998, 100)], [(0.999, 100)]) for i in range(5)})
+    books["Y4"] = ob("Y4", [(0.998, 500)], [(0.999, 500)])
+    books["N4"] = ob("N4", [(0.0, 0)], [(0.001, 20), (0.05, 200), (0.40, 300), (0.90, 500)])
+    forecast = {"time": ["2026-09-21", "2026-09-22"]}
+    for k in range(30):
+        forecast[f"temperature_2m_max_member{k:02d}_gfs"] = [72.0 + (k % 3 - 1) * 0.3] * 2
+    return books, forecast
+
+
+def test_weather_skips_day_already_started_in_city(tmp_path):
+    books, forecast = _loss_case_books()
+    cl = FakeClient(events=[_weather_event(day=21)], books=books, forecast=forecast, utc_offset=8 * 3600)
+    eng = ScenarioEngine("weather", _cfg(tmp_path, "weather", sigma_f=1.0, min_edge=0.08), cl, SimClock(NOW))
+    eng.step()
+    assert not eng.pf.positions and eng.strategy.skipped.get("started") == 1
+
+
+def test_weather_guard_when_market_knows_better(tmp_path):
+    books, forecast = _loss_case_books()
+    cl = FakeClient(events=[_weather_event(day=22)], books=books, forecast=forecast)
+    eng = ScenarioEngine("weather", _cfg(tmp_path, "weather", sigma_f=1.0, min_edge=0.08), cl, SimClock(NOW))
+    eng.step()
+    assert not eng.pf.positions and eng.guarded >= 1  # NO at 0.001 vs model 0.99 -> not traded
+
+
+def test_scenario_never_walks_far_up_the_book(tmp_path):
+    m = _market("c1", "Will X happen?", ["0.95", "0.05"], ["Y1", "N1"])
+    cl = FakeClient(markets=[m], books={"Y1": ob("Y1", [(0.94, 500)], [(0.95, 10), (0.97, 50), (0.99, 500)])})
+    eng = ScenarioEngine("endgame", _cfg(tmp_path, "endgame", max_position_usd=200, max_slippage=0.03), cl,
+                         SimClock(NOW))
+    eng.step()
+    p = eng.pf.positions["Y1"]
+    # haircut 0.5: 5 @ 0.95 + 25 @ 0.97; the 0.99 level is more than 3 cents above the best ask
+    assert math.isclose(p.qty, 30) and p.cost / p.qty < 0.97
+
+
+def test_reset_value_restarts_scenario(tmp_path):
+    from arb.scenarios import prepare_scenario_dir
+    d = tmp_path / "data"
+    d.mkdir()
+    prepare_scenario_dir(str(d), "weather", 2500)
+    (d / "scenario-weather.sqlite").write_text("v1")
+    prepare_scenario_dir(str(d), "weather", 2500, "2")
+    assert not (d / "scenario-weather.sqlite").exists()
+    assert (d / "scenario-weather.capital").read_text() == "2500|2"

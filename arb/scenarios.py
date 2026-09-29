@@ -47,6 +47,10 @@ class Signal:
     delay_s: float = 0.0
     kelly: bool = False       # size by fractional Kelly on `fair` instead of a flat stake
     reason: str = ""
+    # sanity limits vs. the market (checked against the live ask): a model that disagrees with the
+    # market by more than max_edge, or buys what the market prices near zero, is usually just wrong
+    max_edge: Optional[float] = None
+    min_ask: float = 0.0
 
 
 @dataclass
@@ -213,7 +217,9 @@ class WeatherStrategy(Strategy):
     def candidates(self, now: float) -> List[Signal]:
         c = self.cfg
         min_edge, days = float(c.get("min_edge", 0.08)), int(c.get("max_days_ahead", 2))
-        sig = {"f": float(c.get("sigma_f", 1.8)), "c": float(c.get("sigma_c", 1.0))}
+        min_ahead = int(c.get("min_days_ahead", 1))
+        sig = {"f": float(c.get("sigma_f", 2.5)), "c": float(c.get("sigma_c", 1.5))}
+        max_edge, min_ask = c.get("max_edge", 0.30), float(c.get("min_ask", 0.03))
         today = datetime.fromtimestamp(now, tz=timezone.utc).date()
         out = []
         for ev in self._events():
@@ -243,6 +249,13 @@ class WeatherStrategy(Strategy):
             if len(members) < 5:
                 self.skipped["forecast"] = self.skipped.get("forecast", 0) + 1
                 continue
+            # never trade a day that has already started where the city is: the market then already
+            # sees the measured value, the model only its forecast
+            off = self.model.utc_offset.get(city.lower())
+            local_today = datetime.fromtimestamp(now + (off or 0), tz=timezone.utc).date()
+            if off is None or (day - local_today).days < min_ahead:
+                self.skipped["started"] = self.skipped.get("started", 0) + 1
+                continue
             end = _parse_ts(ev.get("endDate"))
             for m, (lo, hi, _), toks in buckets:
                 p = min(max(bucket_prob(members, lo, hi, sig[unit]), 0.0), 1.0)
@@ -254,17 +267,18 @@ class WeatherStrategy(Strategy):
                     if mx >= 0.01 and fair >= float(c.get("min_prob", 0.05)):
                         out.append(Signal(str(tok), f"event:{ev.get('id')}", ev.get("title", ""),
                                           f"{side} {label}", fair=fair, max_price=round(mx, 4), fee=fee,
-                                          end_ts=end, delay_s=_delay(m), kelly=True, reason=why))
+                                          end_ts=end, delay_s=_delay(m), kelly=True, reason=why,
+                                          max_edge=None if max_edge is None else float(max_edge), min_ask=min_ask))
         return out
 
 
 STRATEGIES = {"endgame": EndgameStrategy, "longshot": LongshotStrategy, "weather": WeatherStrategy}
 
 
-def prepare_scenario_dir(data_dir: str, name: str, capital: float) -> None:
-    """Start a scenario fresh when its budget changed: move its old files to data/archive-<ts>-<name>/.
-
-    Returns in % are only comparable if every run started with the configured capital.
+def prepare_scenario_dir(data_dir: str, name: str, capital: float, reset: str = "") -> None:
+    """Start a scenario fresh when its budget (or its `reset` value) changed: move its old files to
+    data/archive-<ts>-<name>/. Returns in % are only comparable if a run started with the configured
+    capital and one version of the strategy.
     """
     marker = os.path.join(data_dir, f"scenario-{name}.capital")
     files = [os.path.join(data_dir, f"scenario-{name}{ext}") for ext in (".sqlite", ".json")]
@@ -272,16 +286,17 @@ def prepare_scenario_dir(data_dir: str, name: str, capital: float) -> None:
     if os.path.exists(marker):
         with open(marker, encoding="utf-8") as f:
             old = f.read().strip()
-    if old != f"{capital:g}" and any(os.path.exists(p) for p in files):
+    want = f"{capital:g}" + (f"|{reset}" if reset else "")
+    if old != want and any(os.path.exists(p) for p in files):
         arch = os.path.join(data_dir, f"archive-{time.strftime('%Y%m%d-%H%M%S')}-{name}")
         os.makedirs(arch, exist_ok=True)
         for p in files:
             if os.path.exists(p):
                 os.replace(p, os.path.join(arch, os.path.basename(p)))
-        log.info("%s: budget changed (%s -> %g) – old data archived in %s", name, old, capital, arch)
+        log.info("%s: budget/reset changed (%s -> %s) – old data archived in %s", name, old, want, arch)
     os.makedirs(data_dir, exist_ok=True)
     with open(marker, "w", encoding="utf-8") as f:
-        f.write(f"{capital:g}")
+        f.write(want)
 
 
 def ladder_engine(name: str, cfg: dict, client, clock=None):
@@ -292,7 +307,7 @@ def ladder_engine(name: str, cfg: dict, client, clock=None):
     sc = cfg["scenarios"][name]
     data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
     capital = float(sc.get("capital_usd", 2500))
-    prepare_scenario_dir(data_dir, name, capital)
+    prepare_scenario_dir(data_dir, name, capital, str(sc.get("reset", "")))
     c = copy.deepcopy(dict(cfg))
     c["portfolio"] = dict(c["portfolio"], starting_capital_usd=capital)
     c["storage"] = dict(c["storage"], db_path=os.path.join(data_dir, f"scenario-{name}.sqlite"))
@@ -317,7 +332,7 @@ class ScenarioEngine:
         self.strategy = strategy or STRATEGIES[self.sc.get("strategy", name)](self.sc, client)
         self.start_capital = float(self.sc.get("capital_usd", 2500))
         data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
-        prepare_scenario_dir(data_dir, name, self.start_capital)
+        prepare_scenario_dir(data_dir, name, self.start_capital, str(self.sc.get("reset", "")))
         self.store = Store(os.path.join(data_dir, f"scenario-{name}.sqlite"))
         self.state_path = os.path.join(data_dir, f"scenario-{name}.json")
         self.pf = ScenarioPortfolio.load(self.state_path, self.start_capital)
@@ -325,7 +340,9 @@ class ScenarioEngine:
         self.latency_s = float(ex.get("latency_ms", 350)) / 1000
         self.haircut = float(ex.get("depth_haircut", 1.0))
         self.market_delay = bool(ex.get("respect_market_delay", True))
+        self.max_slippage = float(self.sc.get("max_slippage", 0.03))
         self._cooldown: Dict[str, float] = {}
+        self.guarded = 0
 
     # ------------------------------------------------------------ sizing
     def _budget(self, s: Signal, ask: float) -> tuple:
@@ -359,6 +376,11 @@ class ScenarioEngine:
             ob = books[s.token_id]
             if ob.best_ask > s.max_price + 1e-9:
                 continue
+            if ob.best_ask < s.min_ask - 1e-9 or (s.max_edge is not None and s.fair - ob.best_ask > s.max_edge):
+                self.guarded += 1  # "too good to be true": the market knows something the strategy doesn't
+                continue
+            # never walk far up a thin book: at most max_slippage above the best ask
+            s.max_price = min(s.max_price, round(ob.best_ask + self.max_slippage, 4))
             n_opps += 1
             if len(self.pf.positions) >= n_open:
                 break
@@ -371,8 +393,8 @@ class ScenarioEngine:
         self.store.commit()
         pf.save(self.state_path)
         skipped = getattr(self.strategy, "skipped", None)
-        log.info("%s: %d signals, %d below max price, %d open, equity %.2f%s", self.name, len(signals), n_opps,
-                 len(pf.positions), pf.equity, f", skipped {skipped}" if skipped else "")
+        log.info("%s: %d signals, %d below max price, %d open, equity %.2f, guarded %d%s", self.name, len(signals),
+                 n_opps, len(pf.positions), pf.equity, self.guarded, f", skipped {skipped}" if skipped else "")
 
     def _trade(self, s: Signal, ob: OrderBook, now: float) -> None:
         budget, binding = self._budget(s, ob.best_ask)

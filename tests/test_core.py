@@ -284,8 +284,32 @@ def test_trades_csv_export(tmp_path):
     raw = (tmp_path / "trades.csv").read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")  # BOM so Excel reads UTF-8
     lines = raw.decode("utf-8-sig").splitlines()
-    assert lines[0].startswith("Zeit;Strategie;Strategie-Code;Markt")
-    row = lines[1].split(";")
-    assert row[1] == "Binär: YES+NO kaufen" and row[2] == "binary_buy_all" and row[5] in ("voll", "teilweise")
-    assert "," in row[8] and "." not in row[8]  # decimal comma
+    head = lines[0].split(";")
+    assert head[:4] == ["Zeit", "Typ", "Strategie", "Strategie-Code"]
+    row = dict(zip(head, lines[1].split(";")))
+    assert row["Typ"] == "Ausführung" and row["Strategie"] == "Binär: YES+NO kaufen"
+    assert row["Strategie-Code"] == "binary_buy_all" and row["Status"] in ("voll", "teilweise")
+    assert "," in row["Kapital $"] and "." not in row["Kapital $"]  # decimal comma
     assert 'href="trades.csv"' in (tmp_path / "index.html").read_text(encoding="utf-8")
+
+
+def test_trades_csv_includes_settlements(tmp_path):
+    from arb.storage import Store
+    from arb.models import ExecutionResult
+    from dashboard import trades_csv
+    f = NOFEE
+    b = Basket("event:1", "negrisk", "Wer gewinnt?", ["A", "B", "C"], ["a", "b", "c"], [f, f, f], end_ts=86400 * 10)
+    books = {"A": ob("A", [], [(0.30, 100)]), "B": ob("B", [], [(0.30, 100)]), "C": ob("C", [], [(0.35, 100)])}
+    o = build_opportunity(b, books, "buy_all", 50, now=0)
+    br = PaperBroker(dict(depth_haircut=1.0), 0.0, 2500)
+    st = Store(str(tmp_path / "t.sqlite"))
+    st.execution(100.0, br.execute(o, lambda t: books, 0), 350)
+    st.settlement(900_000.0, "event:1", "basket", 100, 100, br.settle_basket(br.pf.locked[0], True))
+    st.commit()
+    lines = trades_csv(str(tmp_path / "t.sqlite")).splitlines()
+    head = lines[0].split(";")
+    rows = [dict(zip(head, l.split(";"))) for l in lines[1:]]
+    assert [r["Typ"] for r in rows] == ["Ausführung", "Auszahlung Korb"]
+    pay = rows[1]
+    assert pay["Markt"] == "Wer gewinnt?" and pay["Strategie"] == "Multi-Outcome-Korb"
+    assert pay["Auszahlung $"] == "100" and pay["Realisiert $"] == "5"

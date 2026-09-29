@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 26 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export); braucht requirements-dev.txt
+python -m pytest -q                # 27 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -111,7 +111,7 @@ Was dann läuft (siehe `deploy/systemd/`):
 
 - `polyarb`: der Bot im WebSocket-Modus, startet bei Absturz automatisch neu
 - `polyarb-update.timer`: alle 10 Minuten `git pull`, bei Änderungen `install.sh` und Neustart
-- `polyarb-dash.timer`: aktualisiert das Dashboard alle 10 Minuten, inklusive `trades.csv` mit allen Ausführungen (Button „CSV-Export aller Trades“, Format für deutsches Excel)
+- `polyarb-dash.timer`: aktualisiert das Dashboard alle 10 Minuten, inklusive `trades.csv` mit allen Ausführungen und späteren Auszahlungen (Button „CSV-Export aller Trades“, Format für deutsches Excel)
 - `polyarb-watch.timer`: alle 5 Minuten Watchdog und Trade-Alerts (siehe unten)
 - `polyarb-report.timer`: Statusbericht über die letzten 4 h um 00, 04, 12, 16 und 20 Uhr
 - `polyarb-daily.timer`: Tagesbericht über die letzten 24 h um 08 Uhr

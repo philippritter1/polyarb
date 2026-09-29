@@ -92,12 +92,17 @@ STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": 
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
-    ("Zeit", "ts"), ("Strategie", "strategy"), ("Strategie-Code", "strategy"), ("Markt", "title"),
-    ("Markt-ID", "basket_id"), ("Status", "status"), ("Menge Ziel", "target_qty"), ("Menge gefüllt", "matched_qty"),
-    ("Kapital $", "capital"), ("Erwartet $", "expected_profit"), ("Realisiert $", "realized_pnl"),
-    ("Gebunden $", "locked"), ("Erw. Auszahlung $", "expected_payout"), ("Offene Reste $", "residual"),
-    ("Latenz ms", "latency_ms"), ("Notiz", "note"), ("Fills (JSON)", "fills"),
+    ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
+    ("Markt", "title"), ("Markt-ID", "basket_id"), ("Status", "status"), ("Menge Ziel", "target_qty"),
+    ("Menge gefüllt", "matched_qty"), ("Kapital $", "capital"), ("Erwartet $", "expected_profit"),
+    ("Realisiert $", "realized_pnl"), ("Gebunden $", "locked"), ("Erw. Auszahlung $", "expected_payout"),
+    ("Auszahlung $", "payout"), ("Offene Reste $", "residual"), ("Latenz ms", "latency_ms"),
+    ("Notiz", "note"), ("Fills (JSON)", "fills"),
 ]
+SETTLE_TYPES = {"basket": "Auszahlung Korb", "residual": "Rest aufgelöst", "unwind": "Rest verkauft"}
+EXEC_FIELDS = ["ts", "basket_id", "title", "strategy", "status", "target_qty", "matched_qty", "capital",
+               "expected_profit", "realized_pnl", "locked", "expected_payout", "residual", "latency_ms",
+               "note", "fills"]
 
 
 def _num(v) -> str:
@@ -105,26 +110,37 @@ def _num(v) -> str:
 
 
 def trades_csv(db_path: str) -> str:
-    """All executions as CSV for German Excel: ';' separator, decimal comma, local time."""
+    """All executions plus their later settlements (basket payouts, leftover sales) in one CSV,
+    sorted by time, for German Excel: ';' separator, decimal comma, local time.
+
+    Summing "Realisiert $" over all rows gives the booked PnL: an execution books merge profit
+    and unwind losses, a basket books its profit only when the event resolves.
+    """
     db = sqlite3.connect(db_path)
-    cols = [c for _, c in CSV_COLUMNS]
-    rows = _q(db, f"SELECT {', '.join(cols)} FROM executions ORDER BY ts")
+    rows = [dict(zip(EXEC_FIELDS, r), typ="Ausführung")
+            for r in _q(db, f"SELECT {', '.join(EXEC_FIELDS)} FROM executions")]
+    by_basket = {r["basket_id"]: r for r in rows}
+    for ts, ref, kind, qty, payout, pnl in _q(db, "SELECT ts, ref, kind, qty, payout, pnl FROM settlements"):
+        # basket settlements reference the event id, leftovers the token id (found in the fills)
+        src = by_basket.get(ref) or next((r for r in rows if ref and ref in (r["fills"] or "")), {})
+        rows.append(dict(ts=ts, typ=SETTLE_TYPES.get(kind, kind), basket_id=src.get("basket_id", ref),
+                         title=src.get("title", ""), strategy=src.get("strategy", ""), matched_qty=qty,
+                         realized_pnl=pnl, payout=None if kind == "unwind" else payout,
+                         note="" if src.get("basket_id") == ref else f"Token {ref}"))
     db.close()
+    rows.sort(key=lambda r: r["ts"])
+
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
     w.writerow([h for h, _ in CSV_COLUMNS])
     for r in rows:
+        r["strategy_name"] = STRATEGY_NAMES.get(r.get("strategy"), r.get("strategy"))
+        r["status"] = STATUS_NAMES.get(r.get("status"), r.get("status"))
+        r["ts"] = datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d %H:%M:%S")
         out = []
-        for (head, col), v in zip(CSV_COLUMNS, r):
-            if col == "ts":
-                v = datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M:%S")
-            elif head == "Strategie":
-                v = STRATEGY_NAMES.get(v, v)
-            elif col == "status":
-                v = STATUS_NAMES.get(v, v)
-            elif isinstance(v, float):
-                v = _num(v)
-            out.append("" if v is None else v)
+        for _, col in CSV_COLUMNS:
+            v = r.get(col)
+            out.append(_num(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else ("" if v is None else v))
         w.writerow(out)
     return buf.getvalue()
 
@@ -211,7 +227,7 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
  <div class="card"><h2>Risk-Engine: Entscheidungen</h2><p class="note">Warum Chancen angenommen, verkleinert oder abgelehnt wurden.</p><div id="rsn"></div></div>
 </div>
 <div class="card"><div class="head"><h2>Letzte Ausführungen</h2><a class="btn" href="trades.csv" download>CSV-Export aller Trades</a></div>
- <p class="note">Hier die letzten 25. Der Export enthält alle Ausführungen, wird mit dem Dashboard alle 10 Minuten aktualisiert und öffnet direkt in Excel.</p><div class="tblwrap"><table id="tbl"></table></div></div>
+ <p class="note">Hier die letzten 25. Der Export enthält alle Ausführungen und späteren Auszahlungen, wird mit dem Dashboard alle 10 Minuten aktualisiert und öffnet direkt in Excel.</p><div class="tblwrap"><table id="tbl"></table></div></div>
 </div><div class="tip" id="tip"></div>
 <script>
 const D=/*__DATA__*/null;

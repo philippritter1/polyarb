@@ -39,8 +39,8 @@ if [ ! -f /etc/caddy/.polyarb ]; then
   systemctl restart caddy
 fi
 systemctl daemon-reload
-systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer
-systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer
+systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
+systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
 systemctl restart polyarb.service
 # paper scenarios from config.yaml: one polyarb-scenario@<name> per enabled entry, the rest stopped
 SCEN=$(.venv/bin/python -c "from arb.config import load_config; c=load_config('config.yaml'); print(' '.join(k for k, v in (c.get('scenarios') or {}).items() if v.get('enabled')))")

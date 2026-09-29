@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import os
 import sqlite3
+import zipfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -162,6 +164,30 @@ def trades_csv(db_path: str) -> str:
     return buf.getvalue()
 
 
+def _csv(header: list, rows: list) -> str:
+    """German-Excel CSV: ';' separator, decimal comma."""
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    w.writerow(header)
+    for r in rows:
+        w.writerow([_num(v) if isinstance(v, float) else ("" if v is None else v) for v in r])
+    return buf.getvalue()
+
+
+def equity_csv(db_path: str, every_s: float = 300) -> str:
+    """Equity curve, one row per `every_s` (the bot logs every few seconds)."""
+    rows = []
+    if Path(db_path).exists():
+        db = sqlite3.connect(db_path)
+        last = -1e18
+        for r in _q(db, "SELECT ts, equity, cash, locked, residual, realized_cum, halted FROM equity ORDER BY ts"):
+            if r[0] - last >= every_s:
+                rows.append([datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M:%S"), *r[1:6], r[6] or ""])
+                last = r[0]
+        db.close()
+    return _csv(["Zeit", "Equity $", "Cash $", "Gebunden $", "Offene Reste $", "Realisiert kumuliert $", "Pausiert"], rows)
+
+
 def _write(path: Path, text: str, encoding: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding=encoding, newline="")
@@ -178,6 +204,7 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     _write(Path(out).with_name("trades.csv"), trades_csv(db_path), "utf-8-sig")  # BOM: Excel detects UTF-8
+    _write(Path(out).with_name("equity.csv"), equity_csv(db_path), "utf-8-sig")
     _write(Path(out), html, "utf-8")
     return out
 
@@ -196,7 +223,8 @@ def _summary(db_path: str, start: float) -> float:
 
 
 def build_all(cfg: dict, out: str) -> list:
-    """Arbitrage page at `out`, every enabled scenario at <dir>/<name>/index.html, linked by a tab bar."""
+    """Arbitrage page at `out`, every enabled scenario at <dir>/<name>/, the market study at <dir>/study/
+    and the export section at <dir>/export/ – all linked by one tab bar."""
     root = Path(out).parent
     data_dir = Path(cfg["storage"]["db_path"]).parent
     pages = [dict(key="", label="Arbitrage", db=cfg["storage"]["db_path"], kind="arb",
@@ -208,13 +236,186 @@ def build_all(cfg: dict, out: str) -> list:
                               kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
-    built = []
-    for p in pages:
-        up = "../" if p["key"] else ""  # scenario pages live one folder below the arbitrage page
+    extra = [("study", "Studie"), ("export", "Export")]
+
+    def nav_for(active: str) -> list:
+        up = "../" if active else ""  # every page except the arbitrage one lives one folder down
         nav = [dict(label=q["label"], href=up + q["key"] + "/" if q["key"] else up or "./",
-                    ret=rets[q["key"]], active=q is p) for q in pages]
-        built.append(build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav))
+                    ret=rets[q["key"]], active=q["key"] == active) for q in pages]
+        return nav + [dict(label=l, href=up + k + "/", ret=None, active=k == active) for k, l in extra]
+
+    built = [build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav_for(p["key"]))
+             for p in pages]
+
+    from arb.study import calibration
+    study_db = str(data_dir / "study.sqlite")
+    (root / "study").mkdir(parents=True, exist_ok=True)
+    _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study")), "utf-8")
+    built.append(str(root / "study" / "index.html"))
+
+    exp = root / "export"
+    exp.mkdir(parents=True, exist_ok=True)
+    markets, calib = study_csvs(study_db)
+    _write(exp / "studie-maerkte.csv", markets, "utf-8-sig")
+    _write(exp / "studie-kalibrierung.csv", calib, "utf-8-sig")
+    files = []  # (group, label, path relative to export/, file on disk, name inside the zip)
+    for p in pages:
+        folder = p["out"].parent
+        slug = p["key"] or "arbitrage"
+        rel = "../" + (p["key"] + "/" if p["key"] else "")
+        files += [(p["label"], "Alle Trades und Auszahlungen", rel + "trades.csv", folder / "trades.csv", f"{slug}/trades.csv"),
+                  (p["label"], "Equity-Verlauf (alle 5 Min.)", rel + "equity.csv", folder / "equity.csv", f"{slug}/equity.csv")]
+    files += [("Studie", "Aufgelöste Märkte mit Preisen vor Schluss und Ergebnis", "studie-maerkte.csv",
+               exp / "studie-maerkte.csv", "studie/maerkte.csv"),
+              ("Studie", "Kalibrierung nach Zeitpunkt und Preisbereich", "studie-kalibrierung.csv",
+               exp / "studie-kalibrierung.csv", "studie/kalibrierung.csv")]
+    tmp = exp / "polyarb-export.zip.tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for *_, disk, arc in files:
+            if disk.exists():
+                z.write(disk, arc)
+    os.replace(tmp, exp / "polyarb-export.zip")
+    _write(exp / "index.html", export_page(files, exp / "polyarb-export.zip", nav_for("export")), "utf-8")
+    built.append(str(exp / "index.html"))
     return built
+
+
+# ====================================================================== study & export pages (static)
+def _nav_html(nav: list) -> str:
+    out = []
+    for n in nav:
+        r = n.get("ret")
+        span = "" if r is None else (f'<span class="{"pos" if r > 0.00005 else "neg" if r < -0.00005 else ""}">'
+                                     f'{"+" if r >= 0 else ""}{r * 100:.1f} %</span>'.replace(".", ","))
+        out.append(f'<a class="tab{" on" if n["active"] else ""}" href="{n["href"]}">{html.escape(n["label"])}{span}</a>')
+    return f'<nav class="nav">{"".join(out)}</nav>'
+
+
+def _page(title: str, nav: list, body: str) -> str:
+    style = TEMPLATE.split("<style>", 1)[1].split("</style>", 1)[0]
+    return (f'<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" '
+            f'content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><style>{style}'
+            f'.dl{{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--grid)}}'
+            f'.dl:last-child{{border-bottom:0}}.dl .m{{color:var(--text2);font-size:12.5px}}</style></head>'
+            f'<body><div class="wrap">{_nav_html(nav)}<h1>{html.escape(title)}</h1>{body}</div></body></html>')
+
+
+def _de(v: float, d: int = 1) -> str:
+    return f"{v:.{d}f}".replace(".", ",")
+
+
+def _calib_svg(rows: list) -> str:
+    """Price (x) vs. realized win rate (y) for 1 day and 1 hour before close; diagonal = fair."""
+    W, H, m = 520, 300, dict(l=44, r=12, t=10, b=34)
+    X = lambda v: m["l"] + v * (W - m["l"] - m["r"])
+    Y = lambda v: m["t"] + (1 - v) * (H - m["t"] - m["b"])
+    parts = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Kalibrierung">']
+    for v in (0, 0.25, 0.5, 0.75, 1):
+        parts.append(f'<line x1="{m["l"]}" x2="{W - m["r"]}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" stroke="var(--grid)"/>'
+                     f'<text x="{m["l"] - 6}" y="{Y(v) + 4:.1f}" text-anchor="end">{int(v * 100)} %</text>'
+                     f'<text x="{X(v):.1f}" y="{H - 12}" text-anchor="middle">{int(v * 100)} %</text>')
+    parts.append(f'<line x1="{X(0)}" y1="{Y(0)}" x2="{X(1)}" y2="{Y(1)}" stroke="var(--muted)" stroke-dasharray="4 4"/>')
+    for cp, col in (("p_1d", "var(--s1)"), ("p_1h", "var(--s2)")):
+        pts = [r for r in rows if r["cp"] == cp]
+        if pts:
+            parts.append('<path d="' + "".join(f'{"L" if i else "M"}{X(r["price"]):.1f},{Y(r["rate"]):.1f}'
+                                               for i, r in enumerate(pts)) + f'" fill="none" stroke="{col}" stroke-width="2"/>')
+            parts += [f'<circle cx="{X(r["price"]):.1f}" cy="{Y(r["rate"]):.1f}" r="4" fill="{col}">'
+                      f'<title>Preis Ø {_de(r["price"] * 100)} % – gewonnen {_de(r["rate"] * 100)} % (n={r["n"]})</title></circle>'
+                      for r in pts]
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def study_page(cal: dict, nav: list) -> str:
+    from arb.study import CHECKPOINT_NAMES
+    if not cal.get("n"):
+        body = ('<p class="sub">Noch keine Daten. Der Sammler läuft alle 6 Stunden auf dem Server und holt '
+                'aufgelöste Märkte mit Preisverlauf. Die ersten Ergebnisse erscheinen nach dem ersten Lauf.</p>')
+        return _page("Markt-Studie: Wie gut sagen Preise den Ausgang voraus?", nav, body)
+    rng = (datetime.fromtimestamp(cal["t0"]).strftime("%d.%m.%Y") + " – " +
+           datetime.fromtimestamp(cal["t1"]).strftime("%d.%m.%Y")) if cal.get("t0") else ""
+    body = [f'<p class="sub">{cal["n"]:,} aufgelöste Märkte · {rng}</p>'.replace(",", "."),
+            '<div class="warnbox"><b>So liest du das:</b> Jede Zeile fasst alle Seiten zusammen, die zu diesem Preis '
+            'gehandelt wurden. Liegt „tatsächlich gewonnen“ über dem Ø Preis, war der Kauf im Schnitt profitabel '
+            '(vor Fees). <b>Grün/rot markiert</b> ist nur, wo der Unterschied statistisch klar ist (95-%-Bereich '
+            'schließt den Preis aus). Jeder Markt zählt zweimal: als YES zum Preis p und als NO zu 1−p.</div>',
+            '<div class="grid2"><div class="card"><h2>Kalibrierung</h2><p class="note">Punkte auf der gestrichelten '
+            'Linie = Preis sagt den Ausgang richtig voraus. <span style="color:var(--s1)">●</span> 1 Tag vorher, '
+            '<span style="color:var(--s2)">●</span> 1 h vorher.</p>' + _calib_svg(cal["rows"]) + '</div>']
+    cats = cal.get("cats") or []
+    rows = "".join(f'<tr><td>{html.escape(c["cat"])}</td><td>{c["group"]}</td><td class="num">{c["n"]}</td>'
+                   f'<td class="num">{_de(c["price"] * 100)} %</td><td class="num">{_de(c["rate"] * 100)} %</td>'
+                   f'<td class="num {_edge_cls(c)}">{"+" if c["edge"] >= 0 else ""}{_de(c["edge"] * 100)}</td></tr>'
+                   for c in cats) or '<tr><td colspan="6">Noch zu wenige Märkte je Kategorie.</td></tr>'
+    body.append('<div class="card"><h2>Nach Kategorie (1 Tag vorher)</h2><p class="note">Wo sind Favoriten oder '
+                'Außenseiter falsch bepreist? Differenz in Prozentpunkten.</p><div class="tblwrap"><table><tr>'
+                '<th>Kategorie</th><th>Gruppe</th><th class="num">n</th><th class="num">Ø Preis</th>'
+                f'<th class="num">gewonnen</th><th class="num">Diff.</th></tr>{rows}</table></div></div></div>')
+    for cp, name in CHECKPOINT_NAMES.items():
+        rs = [r for r in cal["rows"] if r["cp"] == cp]
+        if not rs:
+            continue
+        trs = "".join(f'<tr><td>{_de(r["lo"] * 100, 0)}–{_de(r["hi"] * 100, 0)} %</td><td class="num">{r["n"]}</td>'
+                      f'<td class="num">{_de(r["price"] * 100)} %</td><td class="num">{_de(r["rate"] * 100)} %</td>'
+                      f'<td class="num">{_de(r["ci_lo"] * 100)}–{_de(r["ci_hi"] * 100)} %</td>'
+                      f'<td class="num {_edge_cls(r)}">{"+" if r["edge"] >= 0 else ""}{_de(r["edge"] * 100)}</td></tr>'
+                      for r in rs)
+        body.append(f'<div class="card"><h2>{name}</h2><div class="tblwrap"><table><tr><th>Preisbereich</th>'
+                    '<th class="num">n</th><th class="num">Ø Preis</th><th class="num">tatsächlich gewonnen</th>'
+                    f'<th class="num">95-%-Bereich</th><th class="num">Diff. (Pkt.)</th></tr>{trs}</table></div></div>')
+    return _page("Markt-Studie: Wie gut sagen Preise den Ausgang voraus?", nav, "".join(body))
+
+
+def _edge_cls(r: dict) -> str:
+    return "pos" if r["ci_lo"] > r["price"] else "neg" if r["ci_hi"] < r["price"] else ""
+
+
+def study_csvs(study_db: str) -> tuple:
+    from arb.study import calibration
+    rows = []
+    if Path(study_db).exists():
+        db = sqlite3.connect(study_db)
+        try:
+            for r in _q(db, """SELECT end_ts, close_ts, question, category, neg_risk, volume, outcome,
+                                      p_7d, p_1d, p_6h, p_1h, n_points, condition_id FROM markets ORDER BY end_ts"""):
+                rows.append([datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M") if r[0] else "",
+                             datetime.fromtimestamp(r[1]).strftime("%Y-%m-%d %H:%M") if r[1] else "",
+                             r[2], r[3], "ja" if r[4] else "nein", float(r[5] or 0), "YES" if r[6] else "NO",
+                             *r[7:11], r[11], r[12]])
+        except sqlite3.OperationalError:
+            pass
+        db.close()
+    markets = _csv(["Ende geplant", "Geschlossen", "Frage", "Kategorie", "Multi-Outcome", "Volumen $", "Ergebnis",
+                    "YES 7 Tage vorher", "YES 1 Tag vorher", "YES 6 h vorher", "YES 1 h vorher", "Preispunkte",
+                    "Markt-ID"], rows)
+    cal = calibration(study_db)
+    crow = [[r["cp"], f'{r["lo"]:.2f}-{r["hi"]:.2f}', r["n"], r["price"], r["rate"], r["ci_lo"], r["ci_hi"], r["edge"]]
+            for r in cal["rows"]]
+    calib = _csv(["Zeitpunkt", "Preisbereich", "n", "Ø Preis", "gewonnen", "95% von", "95% bis", "Differenz"], crow)
+    return markets, calib
+
+
+def export_page(files: list, zip_path: Path, nav: list) -> str:
+    def meta(p: Path) -> str:
+        if not p.exists():
+            return "noch keine Daten"
+        rows = max(0, p.read_bytes().count(b"\n") - 1) if p.suffix == ".csv" else None
+        size = p.stat().st_size
+        sz = f"{size / 1e6:.1f} MB" if size > 1e6 else f"{size / 1e3:.0f} KB"
+        return (f"{rows:,} Zeilen · ".replace(",", ".") if rows is not None else "") + sz
+    groups: dict = {}
+    for group, label, href, disk, _ in files:
+        groups.setdefault(group, []).append(
+            f'<div class="dl"><div><div>{html.escape(label)}</div><div class="m">{meta(disk)}</div></div>'
+            f'<a class="btn" href="{href}" download>CSV</a></div>')
+    body = [f'<p class="sub">Stand {datetime.now().strftime("%d.%m.%Y %H:%M")} · wird alle 10 Minuten neu erzeugt. '
+            'Alle CSVs im Format für deutsches Excel (Semikolon, Dezimalkomma).</p>',
+            f'<div class="card"><div class="dl"><div><div><b>Alles auf einmal</b></div><div class="m">ZIP mit allen '
+            f'Dateien unten · {meta(zip_path)}</div></div><a class="btn" href="polyarb-export.zip" download>ZIP</a>'
+            '</div></div>']
+    body += [f'<div class="card"><h2>{html.escape(g)}</h2>{"".join(items)}</div>' for g, items in groups.items()]
+    return _page("Export", nav, "".join(body))
 
 
 TEMPLATE = r"""<!doctype html>
@@ -299,7 +500,7 @@ const tip=$("tip");
 $("ttl").textContent=D.title;document.title=D.title;
 if(D.kind!=="arb"&&D.kind!=="ladder"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
  $("pnlnote").textContent="Erwartet = Gewinn, wenn jede Position so ausgeht, wie die Strategie annimmt. Realisiert zählt erst bei Auflösung."}
-$("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}">${n.label}<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span></a>`).join(""):"";
+$("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}">${n.label}${n.ret==null?"":`<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span>`}</a>`).join(""):"";
 function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";tip.style.top=(e.clientY+14)+"px"}
 function hideTip(){tip.style.display="none"}
 const NS="http://www.w3.org/2000/svg";

@@ -1,0 +1,12 @@
+[Unit]
+Description=Polyarb market study (resolved markets + price history)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=polyarb
+WorkingDirectory=/opt/polyarb
+EnvironmentFile=/etc/polyarb.env
+ExecStart=/opt/polyarb/.venv/bin/python run.py study --days 120 --max-new 3000
+TimeoutStartSec=4h
+Nice=10

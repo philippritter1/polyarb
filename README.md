@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 27 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export); braucht requirements-dev.txt
+python -m pytest -q                # 31 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -36,10 +36,11 @@ Der Scanner geht das Orderbuch **Level für Level** durch. Er nimmt eine Einheit
 ## Ausführungssimulation (Paper)
 
 1. Die Chance wird im Snapshot erkannt. Gekreuzte Bücher (Bid ≥ Ask) werden ignoriert, weil sie nur eine veraltete lokale Kopie sein können.
-2. Der Bot wartet `latency_ms` (Standard 350 ms) und **lädt das Buch neu**. Im WebSocket-Modus kommt dieses Buch per REST direkt von Polymarket (`confirm_with_rest`). Eine Chance, die nur in der lokalen Kopie existiert, zählt damit als „verpasst“.
+2. Der Bot wartet `latency_ms` (Standard 350 ms) und **lädt das Buch neu**. Bei Märkten mit Order-Verzögerung (Live-Sport, Feld `secondsDelay` der Gamma-API) kommt diese Verzögerung für jede Order-Runde dazu (`respect_market_delay`). Im WebSocket-Modus kommt dieses Buch per REST direkt von Polymarket (`confirm_with_rest`). Eine Chance, die nur in der lokalen Kopie existiert, zählt damit als „verpasst“.
 3. **Sequential Mode:** Das knappste Leg geht zuerst raus (IOC zum Limit). Die restlichen Legs werden auf dessen Fill skaliert. Verfehlt das erste Leg, kostet das nichts.
 4. Vom sichtbaren Volumen wird nur `depth_haircut` (50 %) gefüllt. Das bildet ab, dass andere Bots schneller sind.
-5. Ungehedgte Reste werden sofort in den Bid verkauft. Was dort nicht absetzbar ist, bleibt als „Residual“ offen. Der Bot versucht es in jedem Zyklus erneut.
+5. **Leg-Reparatur:** Bleibt ein Leg hinter den anderen zurück, versucht der Bot zuerst, die fehlenden Shares nachzukaufen. Das tut er nur, solange das Ergebnis besser ist als ein Notverkauf der übrigen Legs (`repair_legs`).
+   Erst danach werden ungehedgte Reste sofort in den Bid verkauft. Was dort nicht absetzbar ist, bleibt als „Residual“ offen. Der Bot versucht es in jedem Zyklus erneut.
 6. **Verbrauchte Liquidität:** Paper-Orders erreichen Polymarket nie, das Live-Buch zeigt die „gekauften“ Orders also weiter an. Der Bot zieht deshalb die gefüllten Mengen vom Buch ab, bis das Preislevel real verschwindet oder `consumed_ttl_s` (60 s) vorbei ist. So wird dieselbe Liquidität nicht mehrfach gezählt.
 
 ## Risk-Engine (`arb/risk.py`)

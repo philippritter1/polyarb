@@ -156,6 +156,7 @@ class PaperBroker:
         self.haircut = float(cfg_exec.get("depth_haircut", 1.0))
         self.unwind = bool(cfg_exec.get("unwind_on_leg_failure", True))
         self.sequential = cfg_exec.get("leg_mode", "sequential") == "sequential"
+        self.repair = bool(cfg_exec.get("repair_legs", True))
         self.gas = gas_usd
         self.pf = PaperPortfolio(cash=starting_cash)
         self._consumed: List[tuple] = []
@@ -232,13 +233,13 @@ class PaperBroker:
             return ExecutionResult(opp, "missed", 0.0, note="book unavailable")
         if not self.sequential:
             order = list(range(len(opp.legs)))
-            return self._run(opp, books1, books1, order, now)
+            return self._run(opp, books1, books1, order, now, fetch)
         order = sorted(range(len(opp.legs)), key=lambda i: self._depth_ratio(opp, i, books1))
         books2 = copy.deepcopy(fetch([t for j, t in enumerate(tids) if j != order[0]]))
         books2[tids[order[0]]] = books1[tids[order[0]]]
         if any(t not in books2 for t in tids):
             books2 = books1
-        return self._run(opp, books1, books2, order, now)
+        return self._run(opp, books1, books2, order, now, fetch)
 
     def _depth_ratio(self, opp: Opportunity, i: int, books) -> float:
         leg = opp.legs[i]
@@ -248,7 +249,61 @@ class PaperBroker:
                                      else l.price >= leg.limit_price - 1e-9)]
         return sum(ok) * self.haircut / leg.qty
 
-    def _run(self, opp, books1, books2, order, now) -> ExecutionResult:
+    def _repair(self, opp, latest, done, parts_by_leg, fills, fetch) -> float:
+        """Some legs came up short: try to buy the missing shares instead of dumping the rest.
+
+        Dumping keeps min(done) sets and sells every other leg's excess into its bid; completing
+        keeps max(done) sets. Completing is worth it while its cost stays below
+            budget = (max - min) * payout - proceeds_of_dumping,
+        so a repair never ends worse than the dump would have. Returns shares bought.
+        """
+        n, hi, lo = len(done), max(done), min(done)
+        dump = 0.0
+        for i in range(n):
+            ob = latest.get(opp.legs[i].token_id)
+            if done[i] - lo > 1e-9 and ob:
+                _, parts = _ioc(copy.deepcopy(ob.bids), None, done[i] - lo, "SELL", 1.0)
+                dump += sum(p * s for p, s in parts) - self._fee(opp, i, parts)
+        budget = (hi - lo) * opp.basket.payout - dump
+        short = sorted((i for i in range(n) if done[i] < hi - 1e-9), key=lambda i: done[i])
+        if budget <= 0 or not short:
+            return 0.0
+        # the repair orders go out one round later -> fresh books, minus what we just took
+        books = copy.deepcopy(fetch([opp.legs[i].token_id for i in short]))
+        taken = ConsumedLiquidity(ttl_s=1e9)
+        taken.add(self._consumed, 0.0)
+        books = taken.apply(books, 0.0)
+        bought = 0.0
+        for k, i in enumerate(short):
+            leg, spec = opp.legs[i], opp.basket.fees[i]
+            ob = books.get(leg.token_id)
+            if ob is None:
+                continue
+            # split what is left of the budget over the remaining short legs by their detected cost
+            ref = {j: opp.legs[j].avg_price + opp.legs[j].fee_usd / opp.qty for j in short[k:]}
+            weight = sum((hi - done[j]) * ref[j] for j in short[k:])
+            allin = budget * ref[i] / weight if weight > 0 else 0.0
+            ok = [lv.price for lv in ob.asks if lv.price + spec.per_share(lv.price) <= allin + 1e-12]
+            if not ok:
+                continue
+            q, parts = _ioc(ob.asks, max(ok), hi - done[i], "BUY", self.haircut)
+            if q <= 1e-9:
+                continue
+            self._mark_consumed(leg.token_id, "asks", parts, self.haircut)
+            fee = self._fee(opp, i, parts)
+            notional = sum(p * s for p, s in parts)
+            self.pf.cash -= notional + fee
+            budget -= notional + fee
+            old = fills[i]
+            tot_q = old.qty + q
+            fills[i] = Fill(leg.token_id, "BUY", tot_q, (old.avg_price * old.qty + notional) / tot_q,
+                            old.fee_usd + fee)
+            parts_by_leg[i] = parts_by_leg[i] + parts
+            done[i] += q
+            bought += q
+        return bought
+
+    def _run(self, opp, books1, books2, order, now, fetch=None) -> ExecutionResult:
         buy = opp.direction == "buy_all"
         cash0 = self.pf.cash
         self._consumed: List[tuple] = []
@@ -275,8 +330,12 @@ class PaperBroker:
                 target = q                                     # size the rest to what filled
                 if q <= 1e-9:
                     break                                      # first leg missed -> nothing else sent
-        fills_final = [f for f in fills if f is not None]
         latest = books2
+        repaired = 0.0
+        if buy and self.repair and fetch is not None and all(f is not None for f in fills) \
+                and max(done) - min(done) > 1e-9:
+            repaired = self._repair(opp, latest, done, parts_by_leg, fills, fetch)
+        fills_final = [f for f in fills if f is not None]
 
         unwind_fills, residual_usd = [], 0.0
         locked = payout = 0.0
@@ -345,7 +404,8 @@ class PaperBroker:
         return ExecutionResult(opp, status, matched, fills_final, unwind_fills,
                                realized_pnl=realized, locked_capital=locked, expected_payout=payout,
                                residual_exposure_usd=residual_usd,
-                               note=f"legs={[round(d, 2) for d in done]} order={order}",
+                               note=f"legs={[round(d, 2) for d in done]} order={order}"
+                                    + (f" repaired={repaired:.2f}" if repaired else ""),
                                consumed=self._consumed)
 
     # -------------------------------------------------------------- persistence

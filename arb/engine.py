@@ -51,6 +51,7 @@ class Engine:
         self.leg_gap_s = float(cfg["execution"].get("leg_gap_ms", 150)) / 1000
         self.consumed = ConsumedLiquidity(float(cfg["execution"].get("consumed_ttl_s", 60)))
         self.confirm_rest = bool(cfg["execution"].get("confirm_with_rest", True))
+        self.market_delay = bool(cfg["execution"].get("respect_market_delay", True))
         self.baskets: List[Basket] = []
         self._universe_ts = 0.0
         self.max_trades_per_scan = 5
@@ -90,6 +91,8 @@ class Engine:
         self.leg_gap_s = float(ex.get("leg_gap_ms", 150)) / 1000
         self.consumed.ttl = float(ex.get("consumed_ttl_s", 60))
         self.confirm_rest = bool(ex.get("confirm_with_rest", True))
+        self.market_delay = bool(ex.get("respect_market_delay", True))
+        self.broker.repair = bool(ex.get("repair_legs", True))
         self._universe_ts = 0.0  # refresh universe with new filters
         log.info("config reloaded from %s", self.config_path)
 
@@ -160,13 +163,15 @@ class Engine:
                 continue
             self.store.opportunity(opp, "accepted", reason, sized.qty)
 
-            # --- execution: wait latency, look at the book again, fill against it
-            self.clock.sleep(self.latency_s)
+            # --- execution: wait latency, look at the book again, fill against it.
+            # Markets with an order delay (live sports) hold every order round that long.
+            delay = sized.basket.delay_s if self.market_delay else 0.0
+            self.clock.sleep(self.latency_s + delay)
             calls = {"n": 0, "last": {}}
 
-            def fetch(tids, _c=calls):
+            def fetch(tids, _c=calls, _d=delay):
                 if _c["n"] > 0:
-                    self.clock.sleep(self.leg_gap_s)   # time between first and following legs
+                    self.clock.sleep(self.leg_gap_s + _d)   # next order round after the previous fill
                 _c["n"] += 1
                 bk = get_books(tids)
                 _c["last"].update(bk)
@@ -178,6 +183,7 @@ class Engine:
             det = self.scanner.raw_sum(sized.basket, books, sized.direction)
             res.note += f" sum_detect={det:.4f}" if det is not None else ""
             res.note += f" sum_exec={fresh:.4f}" if fresh is not None else " sum_exec=n/a"
+            res.note += f" delay={delay:g}s" if delay else ""
             leg_failure = bool(res.unwind_fills) or res.residual_exposure_usd > 0
             self.risk.record_execution(leg_failure, self.clock.now())
             self.store.execution(self.clock.now(), res, self.latency_s * 1000)

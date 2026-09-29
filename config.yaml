@@ -49,6 +49,8 @@ execution:                     # Realismus der Paper-Simulation
   unwind_on_leg_failure: true  # ungehedgte Reste sofort in den Bid verkaufen
   confirm_with_rest: true      # WebSocket-Modus: vor dem Fill frisches REST-Buch laden statt der lokalen Kopie
   consumed_ttl_s: 60           # von Paper-Fills "verbrauchte" Liquidität bleibt so lange aus dem Buch entfernt
+  repair_legs: true            # fehlendes Leg nachkaufen statt Rest zu verschleudern, solange das besser ist als der Notverkauf
+  respect_market_delay: true   # Order-Verzögerung von Polymarket (secondsDelay, Live-Sport) in die Latenz einrechnen
 
 risk:
   max_trade_pct: 0.10          # max. 10 % des Equity pro Trade (=250 $ bei 2,5k)

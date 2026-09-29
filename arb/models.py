@@ -65,6 +65,7 @@ class Basket:
     end_ts: Optional[float] = None   # unix ts of expected resolution
     category: str = ""
     payout: float = 1.0              # USDC one complete set is worth
+    delay_s: float = 0.0             # Polymarket holds marketable orders this long (live sports)
 
 
 @dataclass

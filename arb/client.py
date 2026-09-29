@@ -38,6 +38,14 @@ def _parse_ts(s: Optional[str]) -> Optional[float]:
         return None
 
 
+def _delay(market: dict) -> float:
+    """Seconds Polymarket holds marketable orders before matching (Gamma `secondsDelay`, live sports)."""
+    try:
+        return max(0.0, float(market.get("secondsDelay") or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class PaginationEnd(Exception):
     """4xx from the API, e.g. offset beyond what Gamma allows (422)."""
 
@@ -161,6 +169,7 @@ class PolymarketClient:
             return None
         fee = self.fees.resolve(m)
         return Basket(
+            delay_s=_delay(m),
             basket_id=m.get("conditionId") or str(m.get("id")),
             kind="binary",
             title=m.get("question", ""),
@@ -224,7 +233,8 @@ class PolymarketClient:
             labels.append(m.get("groupItemTitle") or m.get("question", "")[:40])
             fees.append(self.fees.resolve(m, cat))
         common = dict(title=ev.get("title", ""), labels=labels, fees=fees,
-                      end_ts=_parse_ts(ev.get("endDate")), category=cat)
+                      end_ts=_parse_ts(ev.get("endDate")), category=cat,
+                      delay_s=max(_delay(m) for m in markets))
         return [
             Basket(basket_id=f"event:{ev.get('id')}", kind="negrisk", token_ids=yes, **common),
             Basket(basket_id=f"event:{ev.get('id')}:no", kind="negrisk_no", token_ids=no,

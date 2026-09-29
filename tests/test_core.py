@@ -95,7 +95,8 @@ def test_paper_full_fill_binary_merge():
 
 
 def test_paper_leg_failure_unwinds_parallel():
-    br = PaperBroker(dict(depth_haircut=1.0, unwind_on_leg_failure=True, leg_mode="parallel"), 0.0, 2500)
+    br = PaperBroker(dict(depth_haircut=1.0, unwind_on_leg_failure=True, leg_mode="parallel", repair_legs=False),
+                     0.0, 2500)
     detect = {"Y": ob("Y", [(0.38, 500)], [(0.40, 50)]), "N": ob("N", [(0.53, 500)], [(0.55, 80)])}
     o = build_opportunity(binary(), detect, "buy_all", 50)
     # after latency the cheap NO ask is gone -> only YES fills, then gets dumped at 0.38
@@ -313,3 +314,55 @@ def test_trades_csv_includes_settlements(tmp_path):
     pay = rows[1]
     assert pay["Markt"] == "Wer gewinnt?" and pay["Strategie"] == "Multi-Outcome-Korb"
     assert pay["Auszahlung $"] == "100" and pay["Realisiert $"] == "5"
+
+
+# ---------------------------------------------------------------- leg repair & market delay
+def test_repair_buys_missing_leg_instead_of_dumping():
+    br = PaperBroker(dict(depth_haircut=1.0, leg_mode="parallel"), 0.0, 2500)
+    detect = {"Y": ob("Y", [(0.38, 500)], [(0.40, 50)]), "N": ob("N", [(0.53, 500)], [(0.55, 80)])}
+    o = build_opportunity(binary(), detect, "buy_all", 50)
+    # NO re-quoted to 0.58: dumping YES at 0.38 loses 1.00, completing at 0.58 still earns 0.02/set
+    fresh = {"Y": ob("Y", [(0.38, 500)], [(0.40, 50)]), "N": ob("N", [(0.53, 500)], [(0.58, 80)])}
+    r = br.execute(o, lambda t: fresh, 0)
+    assert r.status == "filled" and not r.unwind_fills and "repaired=50.00" in r.note
+    assert math.isclose(r.realized_pnl, 50 * (1 - 0.40 - 0.58))
+
+
+def test_repair_skipped_when_dumping_is_cheaper():
+    br = PaperBroker(dict(depth_haircut=1.0, leg_mode="parallel"), 0.0, 2500)
+    detect = {"Y": ob("Y", [(0.38, 500)], [(0.40, 50)]), "N": ob("N", [(0.53, 500)], [(0.55, 80)])}
+    o = build_opportunity(binary(), detect, "buy_all", 50)
+    # completing at 0.70 would lose 0.10/set, dumping YES at 0.38 only 0.02/share
+    fresh = {"Y": ob("Y", [(0.38, 500)], [(0.40, 50)]), "N": ob("N", [(0.53, 500)], [(0.70, 80)])}
+    r = br.execute(o, lambda t: fresh, 0)
+    assert r.status == "missed" and r.unwind_fills and "repaired" not in r.note
+    assert math.isclose(r.realized_pnl, 50 * (0.38 - 0.40))
+
+
+def test_repair_on_no_basket_like_guadeloupe():
+    # sequential: the first leg fills 15, then the second leg's book thins out before our order lands
+    br = PaperBroker(dict(depth_haircut=1.0, leg_mode="sequential"), 0.0, 2500)
+    detect = {"nA": ob("nA", [(0.80, 100)], [(0.95, 15)]), "nB": ob("nB", [(0.20, 100)], [(0.25, 15)]),
+              "nC": ob("nC", [(0.30, 100)], [(0.69, 15)])}
+    o = build_opportunity(no_basket(), detect, "buy_all", 50, now=0)
+    later = {"nA": ob("nA", [(0.80, 100)], [(0.95, 15)]), "nB": ob("nB", [(0.20, 100)], [(0.25, 7.5), (0.28, 50)]),
+             "nC": ob("nC", [(0.30, 100)], [(0.69, 15)])}
+    calls = []
+    r = br.execute(o, lambda t: calls.append(t) or (detect if len(calls) == 1 else later), 0)
+    assert len(calls) == 3  # first leg, other legs, repair round
+    assert r.status == "filled" and math.isclose(r.matched_qty, 15) and not r.unwind_fills
+    assert math.isclose(r.realized_pnl, 7.5 * (2 - 0.95 - 0.25 - 0.69) + 7.5 * (2 - 0.95 - 0.28 - 0.69))
+
+
+def test_engine_waits_market_delay(tmp_path):
+    from arb.engine import Engine, SimClock
+    books = {"Y": ob("Y", [(0.38, 500)], [(0.40, 200)]), "N": ob("N", [(0.53, 500)], [(0.55, 200)])}
+    b = binary()
+    b.delay_s = 3.0
+    clock = SimClock(1_000_000)
+    eng = Engine(_cfg(tmp_path), _StaticClient([b], books), clock)
+    eng.step()
+    note = eng.store.db.execute("SELECT note FROM executions").fetchone()[0]
+    assert "delay=3s" in note
+    # latency 0.35 + 3 s before the first leg, leg gap 0.15 + 3 s before the second
+    assert clock.now() - 1_000_000 >= 0.35 + 3 + 0.15 + 3 - 1e-9

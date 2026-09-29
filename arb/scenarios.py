@@ -51,6 +51,7 @@ class Signal:
     # market by more than max_edge, or buys what the market prices near zero, is usually just wrong
     max_edge: Optional[float] = None
     min_ask: float = 0.0
+    safest_first: bool = False  # rank by price (most certain first) instead of by edge
 
 
 @dataclass
@@ -125,16 +126,18 @@ def _iso(ts: float) -> str:
 
 
 class EndgameStrategy(Strategy):
-    """Favorite of a binary market at min_price..max_price within hours of its scheduled end.
+    """Favorite of a binary market at min_price..max_price shortly before or after its scheduled end.
 
     The bet: once an outcome is practically decided, the last cents are still paid for waiting
-    (and for dispute risk). Wins small often; one wrong call costs a whole stake.
+    (and for dispute risk). Wins small often; one wrong call costs a whole stake. Games only count
+    once they are over (gameStartTime + game_hours): before that a 0.93 favorite is just a bet.
     """
 
     def candidates(self, now: float) -> List[Signal]:
         c = self.cfg
         lo, hi = float(c.get("min_price", 0.95)), float(c.get("max_price", 0.99))
-        ahead, behind = float(c.get("max_hours_to_end", 48)) * 3600, float(c.get("max_hours_after_end", 72)) * 3600
+        ahead, behind = float(c.get("max_hours_to_end", 12)) * 3600, float(c.get("max_hours_after_end", 72)) * 3600
+        game_s = float(c.get("game_hours", 3)) * 3600
         markets = self.client.paged("/markets", {
             "active": "true", "closed": "false", "liquidity_num_min": c.get("min_liquidity", 1000),
             "end_date_min": _iso(now - behind), "end_date_max": _iso(now + ahead)},
@@ -146,6 +149,9 @@ class EndgameStrategy(Strategy):
                 continue
             if not m.get("acceptingOrders", True):
                 continue
+            start = _parse_ts(m.get("gameStartTime"))
+            if start and now < start + game_s:
+                continue  # game not over yet: nothing is decided
             toks, prices = _parse_json_list(m.get("clobTokenIds")), _parse_json_list(m.get("outcomePrices"))
             outs = _parse_json_list(m.get("outcomes")) or ["Yes", "No"]
             if len(toks) != 2 or len(prices) != 2:
@@ -153,9 +159,12 @@ class EndgameStrategy(Strategy):
             i = 0 if float(prices[0]) >= float(prices[1]) else 1
             if not lo - 0.02 <= float(prices[i]) <= hi:
                 continue
-            out.append(Signal(str(toks[i]), str(m.get("conditionId") or m.get("id")), m.get("question", ""),
+            evs = m.get("events") or [{}]
+            group = f"event:{evs[0].get('id')}" if evs[0].get("id") else str(m.get("conditionId") or m.get("id"))
+            out.append(Signal(str(toks[i]), group, m.get("question", ""),
                               str(outs[i]), fair=1.0, max_price=hi, fee=self.fees.resolve(m),
-                              end_ts=end, delay_s=_delay(m), reason=f"favorite {float(prices[i]):.3f}"))
+                              end_ts=end, delay_s=_delay(m), reason=f"favorite {float(prices[i]):.3f}",
+                              min_ask=lo, safest_first=True))
         return out
 
 
@@ -368,9 +377,12 @@ class ScenarioEngine:
         tokens = list(dict.fromkeys([s.token_id for s in signals] + list(self.pf.positions)))
         books = self.client.books(tokens) if tokens else {}
         n_open = int(self.sc.get("max_open_positions", 20))
-        # best edge first: fair value minus current ask
+        n_new = int(self.sc.get("max_new_per_step", 3))  # spread entries over time, not all in one scan
+        # best edge first (fair value minus ask); "safest first" strategies by price
         ranked = sorted((s for s in signals if books.get(s.token_id) and books[s.token_id].asks),
-                        key=lambda s: s.fair - books[s.token_id].best_ask, reverse=True)
+                        key=lambda s: books[s.token_id].best_ask if s.safest_first else s.fair - books[s.token_id].best_ask,
+                        reverse=True)
+        opened = 0
         n_opps = 0
         for s in ranked:
             ob = books[s.token_id]
@@ -382,9 +394,11 @@ class ScenarioEngine:
             # never walk far up a thin book: at most max_slippage above the best ask
             s.max_price = min(s.max_price, round(ob.best_ask + self.max_slippage, 4))
             n_opps += 1
-            if len(self.pf.positions) >= n_open:
+            if len(self.pf.positions) >= n_open or opened >= n_new:
                 break
+            before = len(self.pf.positions)
             self._trade(s, ob, now)
+            opened += len(self.pf.positions) > before
         self._settle(now)
         self._mark(books)
         pf = self.pf

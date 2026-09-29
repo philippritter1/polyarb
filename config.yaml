@@ -100,15 +100,18 @@ scenarios:
     enabled: true
     title: Endspiel-Ernte
     strategy: endgame
+    reset: 2                     # v2: Fixes nach dem 29.09. (Mindestpreis, nur beendete Spiele, Streuung)
     capital_usd: 2500
     interval_min: 10
-    min_price: 0.95              # Favorit kostet mindestens ...
+    min_price: 0.95              # Favorit kostet mindestens ... (gilt für den echten Ask)
     max_price: 0.99              # ... und höchstens so viel
-    max_hours_to_end: 48         # geplantes Ende höchstens so weit in der Zukunft
+    max_hours_to_end: 12         # geplantes Ende höchstens so weit in der Zukunft
     max_hours_after_end: 72      # oder bis so lange danach (Ergebnis steht, Auflösung läuft)
+    game_hours: 3                # Sportspiele erst ab Anpfiff + 3 h (vorher ist nichts entschieden)
     min_liquidity: 1000
-    max_position_usd: 200        # ein Fehlgriff kostet höchstens das (8 % des Budgets)
-    max_event_usd: 200
+    max_position_usd: 100        # ein Fehlgriff kostet höchstens das (4 % des Budgets)
+    max_event_usd: 100           # pro Ereignis/Spiel, nicht pro Einzelmarkt
+    max_new_per_step: 2          # höchstens 2 neue Positionen pro Durchlauf
     max_open_positions: 25
   longshot:
     enabled: true
@@ -122,6 +125,7 @@ scenarios:
     min_liquidity: 1000
     max_position_usd: 100        # klein und breit gestreut (4 % des Budgets)
     max_event_usd: 300
+    max_new_per_step: 3
     max_open_positions: 40
   weather:
     enabled: true

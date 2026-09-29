@@ -326,3 +326,35 @@ def test_reset_value_restarts_scenario(tmp_path):
     prepare_scenario_dir(str(d), "weather", 2500, "2")
     assert not (d / "scenario-weather.sqlite").exists()
     assert (d / "scenario-weather.capital").read_text() == "2500|2"
+
+
+# ---------------------------------------------------------------- endgame v2 (after 29.09.)
+def test_endgame_enforces_min_price_and_finished_games(tmp_path):
+    cheap = _market("c1", "Exact Score: A 2 - 0 B?", ["0.07", "0.93"], ["Y1", "N1"])       # ask 0.934 < 0.95
+    pregame = _market("c2", "Will A win?", ["0.96", "0.04"], ["Y2", "N2"],
+                      gameStartTime="2026-09-21T13:00:00Z")                               # kick-off 33 min ago
+    done = _market("c3", "Will C win?", ["0.97", "0.03"], ["Y3", "N3"], gameStartTime="2026-09-21T08:00:00Z")
+    cl = FakeClient(markets=[cheap, pregame, done],
+                    books={"N1": ob("N1", [(0.93, 500)], [(0.934, 500)]), "Y2": ob("Y2", [(0.95, 500)], [(0.96, 500)]),
+                           "Y3": ob("Y3", [(0.96, 500)], [(0.97, 500)])})
+    eng = ScenarioEngine("endgame", _cfg(tmp_path, "endgame", max_position_usd=100), cl, SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["Y3"]
+
+
+def test_endgame_spreads_entries_and_caps_per_event(tmp_path):
+    ms = [_market(f"c{i}", f"Exact Score {i}?", ["0.03", "0.97"], [f"Y{i}", f"N{i}"], events=[{"id": 77}])
+          for i in range(3)]
+    ms += [_market(f"d{i}", f"Other {i}?", ["0.97", "0.03"], [f"A{i}", f"B{i}"]) for i in range(4)]
+    books = {f"N{i}": ob(f"N{i}", [(0.96, 500)], [(0.97, 500)]) for i in range(3)}
+    books.update({f"A{i}": ob(f"A{i}", [(0.96, 500)], [(0.97 + i * 0.005, 500)]) for i in range(4)})
+    cl = FakeClient(markets=ms, books=books)
+    eng = ScenarioEngine("endgame", _cfg(tmp_path, "endgame", max_position_usd=100, max_event_usd=100,
+                                          max_new_per_step=2), cl, SimClock(NOW))
+    eng.step()
+    assert len(eng.pf.positions) == 2
+    assert {"A3", "A2"} == set(eng.pf.positions)  # safest (highest price) first
+    for _ in range(5):
+        eng.step()
+    event_77 = [t for t in eng.pf.positions if t.startswith("N")]
+    assert len(event_77) == 1  # one match = one 100 $ stake, not three

@@ -58,11 +58,14 @@ def main():
     client = PolymarketClient(cfg["api"], cfg["fees"])
 
     if args.cmd == "scenario":
-        from arb.scenarios import ScenarioEngine
+        from arb.scenarios import ScenarioEngine, ladder_engine
         if not args.name or args.name not in (cfg.get("scenarios") or {}):
             ap.error(f"unknown scenario {args.name!r} – defined: {', '.join(cfg.get('scenarios') or {})}")
-        ScenarioEngine(args.name, cfg, client).run(duration_s=args.hours * 3600 if args.hours else None,
-                                                    exit_on_code_change=True)
+        duration = args.hours * 3600 if args.hours else None
+        if cfg["scenarios"][args.name].get("strategy", args.name) == "ladder":
+            ladder_engine(args.name, cfg, client).run(duration_s=duration, exit_on_code_change=True)
+        else:
+            ScenarioEngine(args.name, cfg, client).run(duration_s=duration, exit_on_code_change=True)
         return
 
     if args.cmd == "scan":

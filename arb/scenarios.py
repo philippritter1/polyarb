@@ -11,6 +11,7 @@ Strategies
   endgame  – favorites at 0.95-0.99 shortly before / after the scheduled end ("almost decided")
   longshot – NO on multi-outcome candidates priced 2-8 % (favorite-longshot bias)
   weather  – temperature buckets priced from ensemble forecasts (arb/weather.py)
+  ladder   – logic arbitrage between related markets (arb/ladder.py), run by the arbitrage engine
 """
 from __future__ import annotations
 
@@ -260,6 +261,52 @@ class WeatherStrategy(Strategy):
 STRATEGIES = {"endgame": EndgameStrategy, "longshot": LongshotStrategy, "weather": WeatherStrategy}
 
 
+def prepare_scenario_dir(data_dir: str, name: str, capital: float) -> None:
+    """Start a scenario fresh when its budget changed: move its old files to data/archive-<ts>-<name>/.
+
+    Returns in % are only comparable if every run started with the configured capital.
+    """
+    marker = os.path.join(data_dir, f"scenario-{name}.capital")
+    files = [os.path.join(data_dir, f"scenario-{name}{ext}") for ext in (".sqlite", ".json")]
+    old = None
+    if os.path.exists(marker):
+        with open(marker, encoding="utf-8") as f:
+            old = f.read().strip()
+    if old != f"{capital:g}" and any(os.path.exists(p) for p in files):
+        arch = os.path.join(data_dir, f"archive-{time.strftime('%Y%m%d-%H%M%S')}-{name}")
+        os.makedirs(arch, exist_ok=True)
+        for p in files:
+            if os.path.exists(p):
+                os.replace(p, os.path.join(arch, os.path.basename(p)))
+        log.info("%s: budget changed (%s -> %g) – old data archived in %s", name, old, capital, arch)
+    os.makedirs(data_dir, exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write(f"{capital:g}")
+
+
+def ladder_engine(name: str, cfg: dict, client, clock=None):
+    """Logic-ladder arbitrage as a scenario: the multi-leg arbitrage engine (sequential legs, leg
+    repair, REST fills) on ladder baskets only, with its own budget, database and portfolio."""
+    import copy
+    from .engine import Engine
+    sc = cfg["scenarios"][name]
+    data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
+    capital = float(sc.get("capital_usd", 2500))
+    prepare_scenario_dir(data_dir, name, capital)
+    c = copy.deepcopy(dict(cfg))
+    c["portfolio"] = dict(c["portfolio"], starting_capital_usd=capital)
+    c["storage"] = dict(c["storage"], db_path=os.path.join(data_dir, f"scenario-{name}.sqlite"))
+    c["universe"] = dict(c["universe"], include_binary=False, include_negrisk_baskets=False, include_negrisk_no=False,
+                         include_ladders=True, max_ladder_events=int(sc.get("max_events", 300)),
+                         max_days_to_resolution=float(sc.get("max_days_to_resolution", 90)))
+    c["scanner"] = dict(c["scanner"], **{k: sc[k] for k in ("min_edge_bps", "min_profit_usd", "min_annualized_return",
+                                                              "scan_interval_s") if k in sc})
+    if "risk" in sc:
+        c["risk"] = dict(c["risk"], **sc["risk"])
+    return Engine(c, client, clock=clock, persist=True,
+                  state_path=os.path.join(data_dir, f"scenario-{name}.json"))
+
+
 # ====================================================================== engine
 class ScenarioEngine:
     def __init__(self, name: str, cfg: dict, client, clock=None, strategy: Optional[Strategy] = None):
@@ -268,8 +315,9 @@ class ScenarioEngine:
         self.sc = cfg["scenarios"][name]
         self.clock = clock or RealClock()
         self.strategy = strategy or STRATEGIES[self.sc.get("strategy", name)](self.sc, client)
-        self.start_capital = float(self.sc.get("capital_usd", 500))
+        self.start_capital = float(self.sc.get("capital_usd", 2500))
         data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
+        prepare_scenario_dir(data_dir, name, self.start_capital)
         self.store = Store(os.path.join(data_dir, f"scenario-{name}.sqlite"))
         self.state_path = os.path.join(data_dir, f"scenario-{name}.json")
         self.pf = ScenarioPortfolio.load(self.state_path, self.start_capital)

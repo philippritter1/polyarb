@@ -84,38 +84,50 @@ api:
 # Anders als die Arbitrage können diese Trades verlieren. enabled: false schaltet eines ab.
 # ------------------------------------------------------------
 scenarios:
+  # Alle Szenarien starten mit demselben Budget wie die Arbitrage (2.500 $), damit die
+  # Renditen vergleichbar sind. Ändert sich capital_usd, startet das Szenario neu (alte Daten archiviert).
+  ladder:
+    enabled: true
+    title: Logische Arbitrage
+    strategy: ladder             # Leitern wie "über 100k / über 110k" oder "bis Oktober / bis Dezember"
+    capital_usd: 2500
+    scan_interval_s: 30          # REST-Polling über alle Leiter-Märkte
+    max_events: 300              # meistgehandelte Events nach 24h-Volumen
+    max_days_to_resolution: 90
+    min_edge_bps: 50
+    min_annualized_return: 0.25  # Kapital ist bis zur Auflösung gebunden
   endgame:
     enabled: true
     title: Endspiel-Ernte
     strategy: endgame
-    capital_usd: 500
+    capital_usd: 2500
     interval_min: 10
     min_price: 0.95              # Favorit kostet mindestens ...
     max_price: 0.99              # ... und höchstens so viel
     max_hours_to_end: 48         # geplantes Ende höchstens so weit in der Zukunft
     max_hours_after_end: 72      # oder bis so lange danach (Ergebnis steht, Auflösung läuft)
     min_liquidity: 1000
-    max_position_usd: 40         # ein Fehlgriff kostet höchstens das
-    max_event_usd: 40
+    max_position_usd: 200        # ein Fehlgriff kostet höchstens das (8 % des Budgets)
+    max_event_usd: 200
     max_open_positions: 25
   longshot:
     enabled: true
     title: Longshot-NO
     strategy: longshot
-    capital_usd: 500
+    capital_usd: 2500
     interval_min: 30
     yes_min: 0.02                # Außenseiter mit YES-Preis zwischen ...
     yes_max: 0.08                # ... und diesem Wert -> NO kaufen
     max_days_to_end: 30
     min_liquidity: 1000
-    max_position_usd: 20         # klein und breit gestreut
-    max_event_usd: 60
+    max_position_usd: 100        # klein und breit gestreut (4 % des Budgets)
+    max_event_usd: 300
     max_open_positions: 40
   weather:
     enabled: true
     title: Wetter-Modell
     strategy: weather
-    capital_usd: 500
+    capital_usd: 2500
     interval_min: 20
     models: gfs_seamless,ecmwf_ifs025,icon_seamless   # Open-Meteo Ensembles, kostenlos
     min_edge: 0.08               # Modell-Wahrscheinlichkeit muss so viel über dem Preis liegen
@@ -124,6 +136,6 @@ scenarios:
     sigma_f: 1.8                 # Unsicherheit Station vs. Modell in °F ...
     sigma_c: 1.0                 # ... bzw. °C
     kelly_fraction: 0.25
-    max_position_usd: 40
-    max_event_usd: 80
+    max_position_usd: 200
+    max_event_usd: 400
     max_open_positions: 30

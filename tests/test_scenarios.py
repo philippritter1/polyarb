@@ -75,7 +75,7 @@ def _cfg(tmp_path, name, **sc):
     return {"storage": {"db_path": str(tmp_path / "polyarb.sqlite")},
             "portfolio": {"starting_capital_usd": 2500},
             "execution": {"latency_ms": 350, "depth_haircut": 0.5, "respect_market_delay": True},
-            "scenarios": {name: dict(enabled=True, strategy=name, capital_usd=500, title=name.title(), **sc)}}
+            "scenarios": {name: dict(dict(enabled=True, strategy=name, capital_usd=500, title=name.title()), **sc)}}
 
 
 def _market(cid, q, prices, toks, end="2026-09-21T20:00:00Z", **kw):
@@ -176,3 +176,101 @@ def test_dashboard_tabs_and_calibration(tmp_path):
     assert data["calib"]["n"] == 1 and data["calib"]["wins"] == 1 and data["kind"] == "endgame"
     assert '"href": "endgame/"' in root
     assert (tmp_path / "www" / "endgame" / "trades.csv").exists()
+
+
+# ---------------------------------------------------------------- logic ladders
+def _lm(mid, label, q, toks, end="2026-10-01T00:00:00Z"):
+    return dict(id=mid, groupItemTitle=label, question=q, clobTokenIds=json.dumps(toks), endDate=end,
+                enableOrderBook=True, acceptingOrders=True)
+
+
+def _fee(m, cat=""):
+    from arb.models import FeeSpec
+    return FeeSpec(0.0)
+
+
+def test_ladder_thresholds_up_and_down():
+    from arb.ladder import ladders_from_event
+    ev = dict(id=1, title="What price will Bitcoin hit in October?", markets=[
+        _lm(1, "↑ 120,000", "Will Bitcoin reach $120,000?", ["Y120", "N120"]),
+        _lm(2, "↑ 130,000", "Will Bitcoin reach $130,000?", ["Y130", "N130"]),
+        _lm(3, "↓ 100,000", "Will Bitcoin dip to $100,000?", ["Y100", "N100"]),
+        _lm(4, "↓ 90,000", "Will Bitcoin dip to $90,000?", ["Y90", "N90"])])
+    got = {tuple(b.token_ids) for b in ladders_from_event(ev, _fee)}
+    # hitting 130k implies 120k; dipping to 90k implies dipping to 100k
+    assert got == {("Y120", "N130"), ("Y100", "N90")}
+
+
+def test_ladder_deadlines_and_rejects():
+    from arb.ladder import ladders_from_event
+    ev = dict(id=2, title="Fed cut by ...?", markets=[
+        _lm(1, "October", "Will the Fed cut by October 31?", ["YO", "NO_"], end="2026-10-31T00:00:00Z"),
+        _lm(2, "December", "Will the Fed cut by December 31?", ["YD", "ND"], end="2026-12-31T00:00:00Z")])
+    assert [b.token_ids for b in ladders_from_event(ev, _fee)] == [["YD", "NO_"]]
+    buckets = dict(id=3, title="BTC range?", markets=[_lm(1, "100-105k", "above?", ["a", "b"]),
+                                                      _lm(2, "105-110k", "above?", ["c", "d"])])
+    assert ladders_from_event(buckets, _fee) == []
+    assert ladders_from_event(dict(ev, negRisk=True), _fee) == []
+    # same threshold ladder but different days: "above 110k on Oct 2" does not imply "above 100k on Oct 1"
+    days = dict(id=4, title="BTC above?", markets=[
+        _lm(1, "100k", "Will BTC be above $100k on Oct 1?", ["A", "a"], end="2026-10-01T00:00:00Z"),
+        _lm(2, "110k", "Will BTC be above $110k on Oct 2?", ["B", "b"], end="2026-10-02T00:00:00Z")])
+    assert ladders_from_event(days, _fee) == []
+
+
+class LadderClient(FakeClient):
+    def ladder_baskets(self, min_liq, max_events=300):
+        from arb.ladder import ladders_from_event
+        return [b for ev in self.data["/events"] for b in ladders_from_event(ev, _fee)]
+
+    def basket_payout(self, token_ids):
+        finals = [self.res.get(t) for t in token_ids]
+        return None if None in finals else float(sum(finals))
+
+
+def test_ladder_scenario_trades_and_settles(tmp_path):
+    from arb.scenarios import ladder_engine
+    ev = dict(id=5, title="Bitcoin above ___ on Oct 1?", markets=[
+        _lm(1, "100k", "Will BTC be above $100k on Oct 1?", ["Y100", "N100"]),
+        _lm(2, "110k", "Will BTC be above $110k on Oct 1?", ["Y110", "N110"])])
+    # market says above 110k (0.55) is likelier than above 100k (0.50): YES 100k 0.50 + NO 110k 0.45 = 0.95
+    books = {"Y100": ob("Y100", [(0.49, 400)], [(0.50, 400)]), "N100": ob("N100", [(0.49, 400)], [(0.51, 400)]),
+             "Y110": ob("Y110", [(0.54, 400)], [(0.56, 400)]), "N110": ob("N110", [(0.44, 400)], [(0.45, 400)])}
+    cl = LadderClient(events=[ev], books=books)
+    cfg = _cfg(tmp_path, "ladder", capital_usd=2500)
+    cfg.update(portfolio={"starting_capital_usd": 2500}, fees={"merge_gas_usd": 0.0},
+               universe={"refresh_minutes": 30, "min_liquidity_usd": 1000, "max_markets": 800},
+               scanner={"scan_interval_s": 8, "min_edge_bps": 50, "min_profit_usd": 0.5, "min_annualized_return": 0.0},
+               risk=dict(max_trade_pct=0.10, max_market_pct=0.20, max_locked_pct=0.60, max_unhedged_usd=75,
+                         daily_loss_limit_pct=0.02, max_consecutive_leg_failures=5, kelly_fraction=0.5,
+                         basket_failure_prob=0.01, cash_buffer_pct=0.10))
+    cfg["execution"].update(leg_mode="sequential", leg_gap_ms=150)
+    clock = SimClock(NOW)
+    eng = ladder_engine("ladder", cfg, cl, clock)
+    assert eng.store.db.execute("PRAGMA database_list").fetchone()[2].endswith("scenario-ladder.sqlite")
+    eng.step()
+    locked = eng.broker.pf.locked
+    assert len(locked) == 1 and locked[0].basket_id.startswith("ladder:")
+    b = locked[0]
+    # BTC ends at 105k: above 100k yes, above 110k no -> both legs pay, 2 $ per set
+    cl.res.update({"Y100": 1.0, "N110": 1.0})
+    clock.t = NOW + 30 * 86_400
+    eng.step()
+    assert not eng.broker.pf.locked
+    row = eng.store.db.execute("SELECT qty, payout, pnl FROM settlements").fetchone()
+    assert math.isclose(row[1], 2 * b.qty) and math.isclose(row[2], 2 * b.qty - b.cost)
+
+
+def test_budget_change_archives_scenario(tmp_path):
+    from arb.scenarios import prepare_scenario_dir
+    d = tmp_path / "data"
+    d.mkdir()
+    (d / "scenario-endgame.sqlite").write_text("old")
+    (d / "scenario-endgame.json").write_text("{}")
+    prepare_scenario_dir(str(d), "endgame", 2500)  # no marker yet -> started with the old budget
+    assert not (d / "scenario-endgame.sqlite").exists()
+    arch = [p for p in d.iterdir() if p.name.startswith("archive-")]
+    assert len(arch) == 1 and (arch[0] / "scenario-endgame.sqlite").read_text() == "old"
+    (d / "scenario-endgame.sqlite").write_text("new")
+    prepare_scenario_dir(str(d), "endgame", 2500)  # same budget -> untouched
+    assert (d / "scenario-endgame.sqlite").read_text() == "new"

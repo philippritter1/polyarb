@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .models import ExecutionResult, FeeSpec, Fill, Level, Opportunity, OrderBook
+from .models import HELD_KINDS, ExecutionResult, FeeSpec, Fill, Level, Opportunity, OrderBook
 from .risk import PortfolioView
 
 
@@ -342,7 +342,7 @@ class PaperBroker:
         if buy:
             matched = min(done)
             min_size = max(latest[t].min_order_size for t in opp.basket.token_ids)
-            if 0 < matched < min_size and opp.basket.kind == "negrisk":
+            if 0 < matched < min_size and opp.basket.kind in HELD_KINDS:
                 matched = 0.0
             matched_cost = 0.0
             for i in range(n):
@@ -445,8 +445,9 @@ class PaperBroker:
             if ob and ob.best_bid is not None:
                 self.pf.residual_marks[t] = ob.best_bid
 
-    def settle_basket(self, b: LockedBasket, paid_out: bool) -> float:
-        payout = b.qty if paid_out else 0.0
+    def settle_basket(self, b: LockedBasket, paid_out) -> float:
+        """paid_out: True/False for exactly-one-pays sets, or USDC per set (a ladder pays 1 or 2)."""
+        payout = b.qty * float(paid_out)
         self.pf.cash += payout
         pnl = payout - b.cost
         self.pf.realized_pnl += pnl

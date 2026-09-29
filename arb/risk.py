@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
-from .models import Opportunity
+from .models import HELD_KINDS, Opportunity
 
 
 @dataclass
@@ -96,7 +96,7 @@ class RiskManager:
             "cash": pf.cash - self.cash_buffer * pf.equity,
             "market_pct": self.max_market_pct * pf.equity - pf.exposure_by_basket.get(opp.basket.basket_id, 0.0),
         }
-        if opp.basket.kind == "negrisk":
+        if opp.basket.kind in HELD_KINDS:
             caps["locked_pct"] = self.max_locked_pct * pf.equity - pf.locked
             caps["kelly"] = self.kelly_capital(opp, pf.equity)
 

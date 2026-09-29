@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
+# baskets held until the markets resolve (no merge/convert): negRisk YES sets and logic ladders
+HELD_KINDS = ("negrisk", "ladder")
+
+
 @dataclass
 class Level:
     price: float
@@ -55,9 +59,10 @@ class Basket:
     - negRisk event: [YES_1, ..., YES_n]    -> pays 1, held until resolution (lock-up)
     - negRisk NO set: [NO_1, ..., NO_n]     -> pays n-1, CONVERTED instantly via the
       NegRiskAdapter (n NO -> n-1 USDC), kind "negrisk_no"
+    - logic ladder: [YES broad, NO narrow]  -> pays 1 or 2 (narrow implies broad), held, kind "ladder"
     """
     basket_id: str            # conditionId (binary) or event id (negRisk)
-    kind: str                 # "binary" | "negrisk"
+    kind: str                 # "binary" | "negrisk" | "negrisk_no" | "ladder"
     title: str
     token_ids: List[str]
     labels: List[str]

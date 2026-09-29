@@ -303,6 +303,20 @@ class PolymarketClient:
     def token_resolution(self, token_id: str) -> Optional[float]:
         return self.market_resolution(token_id)
 
+    def basket_payout(self, token_ids: List[str]) -> Optional[float]:
+        """USDC one set pays (sum of final token prices), None while any leg is unresolved."""
+        finals = [self.market_resolution(t) for t in token_ids]
+        return None if any(f is None for f in finals) else float(sum(finals))
+
+    def ladder_baskets(self, min_liquidity: float, max_events: int = 300) -> List[Basket]:
+        from .ladder import ladders_from_event
+        events = self.paged("/events", {"active": "true", "closed": "false", "liquidity_min": min_liquidity,
+                                        "order": "volume24hr", "ascending": "false"}, max_items=max_events)
+        out: List[Basket] = []
+        for ev in events:
+            out.extend(ladders_from_event(ev, self.fees.resolve, _delay))
+        return out
+
     def basket_resolution(self, token_ids: List[str]) -> Optional[bool]:
         """True if exactly-one-pays basket paid out, False if none did, None if still pending."""
         finals = [self.market_resolution(t) for t in token_ids]

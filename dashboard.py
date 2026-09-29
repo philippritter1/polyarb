@@ -105,7 +105,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
-                  "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
+                  "ladder_buy_all": "Logische Arbitrage", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -205,7 +205,7 @@ def build_all(cfg: dict, out: str) -> list:
     for name, sc in (cfg.get("scenarios") or {}).items():
         if sc.get("enabled"):
             pages.append(dict(key=name, label=sc.get("title", name), db=str(data_dir / f"scenario-{name}.sqlite"),
-                              kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 500)),
+                              kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
     built = []
@@ -297,7 +297,7 @@ const pct=v=>fmt(v*100,1)+" %";
 const dt=t=>new Date(t*1000).toLocaleString("de-AT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
 const tip=$("tip");
 $("ttl").textContent=D.title;document.title=D.title;
-if(D.kind!=="arb"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
+if(D.kind!=="arb"&&D.kind!=="ladder"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
  $("pnlnote").textContent="Erwartet = Gewinn, wenn jede Position so ausgeht, wie die Strategie annimmt. Realisiert zählt erst bei Auflösung."}
 $("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}">${n.label}<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span></a>`).join(""):"";
 function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";tip.style.top=(e.clientY+14)+"px"}
@@ -314,7 +314,7 @@ if(D.source==="mock")$("halt").innerHTML+=`<div class="warnbox">Diese Zahlen sta
 const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)}`],["Rendite",pct(K.ret),`Max. Drawdown ${pct(K.mdd)}`],
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
-if(D.kind!=="arb"){tiles[2][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[4]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[5][2]="Preis unter der Strategie-Grenze"}
+if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[2][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[4]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[5][2]="Preis unter der Strategie-Grenze"}
 $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
 
 // ---------- equity line
@@ -335,7 +335,7 @@ $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</
  hit.addEventListener("mouseleave",()=>{hideTip();cross.setAttribute("visibility","hidden");dot.setAttribute("visibility","hidden")});
 })();
 
-const NAMES={binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO",
+const NAMES={ladder_buy_all:"Logische Arbitrage",binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO",
  endgame_buy:"Endspiel-Ernte",longshot_buy:"Longshot: NO kaufen",weather_buy:"Wetter-Modell"};
 // ---------- grouped bars: expected vs realized
 (function(){
@@ -368,8 +368,9 @@ const NAMES={binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Spl
  });
 })();
 
-// ---------- scenarios: calibration instead of the arbitrage histogram
-if(D.kind!=="arb"){const C=D.calib;$("histcard").innerHTML=`<h2>Hat die Strategie einen Edge?</h2>
+// ---------- scenarios: calibration instead of the arbitrage histogram (ladders are arbitrage: neither)
+if(D.kind==="ladder")$("histcard").style.display="none";
+else if(D.kind!=="arb"){const C=D.calib;$("histcard").innerHTML=`<h2>Hat die Strategie einen Edge?</h2>
  <p class="note">Aufgelöste Positionen: Gewinnt die Strategie öfter, als der Einstiegspreis sagt? Nur dann bleibt nach vielen Trades Gewinn übrig. Aussagekräftig erst ab etwa 30 Auflösungen.</p>
  <div class="kpis">${[["Aufgelöst",C.n,`offen: ${C.open[0]} (${usd(C.open[1])})`],["Gewinnquote",C.n?pct(C.wins/C.n):"–",`${C.wins} von ${C.n}`],
  ["Preis sagte",C.n?pct(C.price):"–","Ø Einstiegspreis"],["PnL aufgelöst",usd(C.pnl),D.kind==="weather"?`Modell sagte ${C.n?pct(C.model):"–"}`:"nach Fees"]]

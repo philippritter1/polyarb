@@ -36,7 +36,7 @@ class SimClock:
 
 class Engine:
     def __init__(self, cfg, client, clock=None, store: Optional[Store] = None,
-                 config_path: Optional[str] = None, persist: bool = False):
+                 config_path: Optional[str] = None, persist: bool = False, state_path: Optional[str] = None):
         self.cfg = cfg
         self.config_path = config_path
         self._cfg_mtime = os.path.getmtime(config_path) if config_path else None
@@ -58,7 +58,8 @@ class Engine:
         self._cooldown: Dict[str, float] = {}
         self.state_path = None
         if persist:
-            self.state_path = os.path.join(os.path.dirname(cfg["storage"]["db_path"]) or ".", "portfolio.json")
+            self.state_path = state_path or os.path.join(os.path.dirname(cfg["storage"]["db_path"]) or ".",
+                                                         "portfolio.json")
             if self.broker.load(self.state_path):
                 log.info("portfolio restored: cash %.2f, %d baskets, %d residuals", self.broker.pf.cash,
                          len(self.broker.pf.locked), len(self.broker.pf.residuals))
@@ -104,14 +105,16 @@ class Engine:
             baskets += self.client.binary_baskets(float(u["min_liquidity_usd"]), int(u["max_markets"]))
         if u.get("include_negrisk_baskets", False):
             baskets += self.client.negrisk_baskets(float(u["min_liquidity_usd"]))
+        if u.get("include_ladders", False):
+            baskets += self.client.ladder_baskets(float(u["min_liquidity_usd"]), int(u.get("max_ladder_events", 300)))
         if not u.get("include_negrisk_no", True):
             baskets = [b for b in baskets if b.kind != "negrisk_no"]
         self.baskets = baskets
         self._universe_ts = self.clock.now()
         n_tok = sum(len(b.token_ids) for b in baskets)
-        log.info("universe: %d baskets (%d binary, %d negRisk YES, %d negRisk NO), %d tokens",
-                 len(baskets), sum(b.kind == "binary" for b in baskets),
-                 sum(b.kind == "negrisk" for b in baskets), sum(b.kind == "negrisk_no" for b in baskets), n_tok)
+        log.info("universe: %d baskets (%d binary, %d negRisk YES, %d negRisk NO, %d ladder), %d tokens",
+                 len(baskets), sum(b.kind == "binary" for b in baskets), sum(b.kind == "negrisk" for b in baskets),
+                 sum(b.kind == "negrisk_no" for b in baskets), sum(b.kind == "ladder" for b in baskets), n_tok)
 
     # ------------------------------------------------------------ one cycle
     def step(self) -> None:
@@ -214,11 +217,13 @@ class Engine:
         for b in list(self.broker.pf.locked):
             if b.end_ts and now < b.end_ts:
                 continue
-            paid = self.client.basket_resolution(b.token_ids)
+            # a ladder pays the sum of its legs (1 or 2 per set), other baskets exactly one leg
+            paid = (self.client.basket_payout(b.token_ids) if b.basket_id.startswith("ladder:")
+                    else self.client.basket_resolution(b.token_ids))
             if paid is None:
                 continue
             pnl = self.broker.settle_basket(b, paid)
-            self.store.settlement(now, b.basket_id, "basket", b.qty, b.qty if paid else 0, pnl)
+            self.store.settlement(now, b.basket_id, "basket", b.qty, b.qty * float(paid), pnl)
             log.info("settled basket %s paid=%s pnl %+.2f", b.title[:50], paid, pnl)
         for t in list(self.broker.pf.residuals):
             final = self.client.token_resolution(t)

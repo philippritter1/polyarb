@@ -15,7 +15,7 @@ import math
 import time
 from typing import Dict, List, Optional
 
-from .models import Basket, Leg, Opportunity, OrderBook
+from .models import HELD_KINDS, Basket, Leg, Opportunity, OrderBook
 
 SECONDS_PER_DAY = 86_400
 
@@ -148,7 +148,7 @@ def build_opportunity(
 
     lockup_days = 0.0
     annualized = None
-    if basket.kind == "negrisk":
+    if basket.kind in HELD_KINDS:
         if basket.end_ts:
             lockup_days = max((basket.end_ts - now) / SECONDS_PER_DAY, 0.5)
         else:
@@ -206,7 +206,7 @@ class Scanner:
         opps: List[Opportunity] = []
         for b in baskets:
             self.stats["baskets_scanned"] += 1
-            if b.kind == "negrisk" and b.end_ts and (b.end_ts - now) / SECONDS_PER_DAY > self.max_days:
+            if b.kind in HELD_KINDS and b.end_ts and (b.end_ts - now) / SECONDS_PER_DAY > self.max_days:
                 continue
             if not self.books_sane(b, books):
                 continue

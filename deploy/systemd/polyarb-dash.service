@@ -7,4 +7,4 @@ Type=oneshot
 User=polyarb
 WorkingDirectory=/opt/polyarb
 EnvironmentFile=/etc/polyarb.env
-ExecStart=/opt/polyarb/.venv/bin/python run.py dashboard --out /var/www/polyarb/index.html
+ExecStart=/opt/polyarb/.venv/bin/python run.py dashboard --all --out /var/www/polyarb/index.html

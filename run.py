@@ -17,7 +17,9 @@ from arb.config import load_config
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["scan", "paper", "mock", "dashboard"])
+    ap.add_argument("cmd", choices=["scan", "paper", "mock", "dashboard", "scenario"])
+    ap.add_argument("name", nargs="?", help="scenario name (for `scenario`)")
+    ap.add_argument("--all", action="store_true", help="dashboard: also build every enabled scenario tab")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--hours", type=float, default=None)
     ap.add_argument("--db", default=None, help="override storage.db_path")
@@ -31,7 +33,11 @@ def main():
         cfg["storage"]["db_path"] = args.db
 
     if args.cmd == "dashboard":
-        from dashboard import build
+        from dashboard import build, build_all
+        if args.all:
+            for out in build_all(cfg, args.out):
+                print(f"wrote {out}")
+            return
         out = build(cfg["storage"]["db_path"], args.out, cfg["portfolio"]["starting_capital_usd"])
         print(f"wrote {out}")
         return
@@ -50,6 +56,14 @@ def main():
 
     from arb.client import PolymarketClient
     client = PolymarketClient(cfg["api"], cfg["fees"])
+
+    if args.cmd == "scenario":
+        from arb.scenarios import ScenarioEngine
+        if not args.name or args.name not in (cfg.get("scenarios") or {}):
+            ap.error(f"unknown scenario {args.name!r} – defined: {', '.join(cfg.get('scenarios') or {})}")
+        ScenarioEngine(args.name, cfg, client).run(duration_s=args.hours * 3600 if args.hours else None,
+                                                    exit_on_code_change=True)
+        return
 
     if args.cmd == "scan":
         from arb.scanner import Scanner

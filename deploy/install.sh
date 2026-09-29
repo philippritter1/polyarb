@@ -12,11 +12,11 @@ mkdir -p data /var/www/polyarb
 # Paper reset: a new value in deploy/RESET_ID archives the paper data once and the bot starts fresh
 # with its starting capital. Nothing is deleted – old data moves to data/archive-<timestamp>/.
 if [ -f deploy/RESET_ID ] && [ "$(cat deploy/RESET_ID)" != "$(cat data/.reset_id 2>/dev/null || true)" ]; then
-  systemctl stop polyarb.service || true
+  systemctl stop polyarb.service 'polyarb-scenario@*.service' || true
   ARCH="data/archive-$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$ARCH"
-  for f in polyarb.sqlite polyarb.sqlite-journal polyarb.sqlite-wal portfolio.json; do
-    if [ -e "data/$f" ]; then mv "data/$f" "$ARCH/"; fi
+  for f in data/polyarb.sqlite data/polyarb.sqlite-journal data/polyarb.sqlite-wal data/portfolio.json data/scenario-*; do
+    if [ -e "$f" ]; then mv "$f" "$ARCH/"; fi
   done
   cp deploy/RESET_ID data/.reset_id
 fi
@@ -42,6 +42,16 @@ systemctl daemon-reload
 systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer
 systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer
 systemctl restart polyarb.service
+# paper scenarios from config.yaml: one polyarb-scenario@<name> per enabled entry, the rest stopped
+SCEN=$(.venv/bin/python -c "from arb.config import load_config; c=load_config('config.yaml'); print(' '.join(k for k, v in (c.get('scenarios') or {}).items() if v.get('enabled')))")
+for u in $(ls /etc/systemd/system/multi-user.target.wants/ 2>/dev/null | grep '^polyarb-scenario@' || true); do
+  n=${u#polyarb-scenario@}; n=${n%.service}
+  case " $SCEN " in *" $n "*) ;; *) systemctl disable --now "$u" || true ;; esac
+done
+for n in $SCEN; do
+  systemctl enable "polyarb-scenario@$n.service"
+  systemctl restart "polyarb-scenario@$n.service"
+done
 if [ "$FIRST" = 1 ]; then
   sleep 5
   sudo -u polyarb bash -c 'set -a; source /etc/polyarb.env; cd /opt/polyarb && .venv/bin/python deploy/notify.py start' || true

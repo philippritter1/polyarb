@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 32 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung); braucht requirements-dev.txt
+python -m pytest -q                # 40 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -57,6 +57,20 @@ Der Scanner geht das Orderbuch **Level für Level** durch. Er nimmt eine Einheit
 | `daily_loss_limit_pct` | 2 % | **Kill-Switch** für den Tag |
 | `max_consecutive_leg_failures` | 5 | danach 30 min Pause |
 
+## Szenarien: weitere Strategien parallel testen
+
+Neben der Arbitrage laufen weitere Strategien als eigene **Paper-Szenarien**. Jedes hat ein eigenes Budget, eine eigene Datenbank (`data/scenario-<name>.sqlite`), einen eigenen Prozess (`polyarb-scenario@<name>`) und einen eigenen Tab im Dashboard, inklusive CSV-Export. Anders als die Arbitrage **können diese Trades verlieren**. Welche Szenarien laufen, steht in `config.yaml` unter `scenarios:`. `enabled: false` schaltet eines beim nächsten Update ab.
+
+| Szenario | Idee | Risiko |
+|---|---|---|
+| `endgame` Endspiel-Ernte | Favorit für 0,95–0,99 kaufen, kurz vor oder nach dem geplanten Ende | gewinnt oft wenig, ein Fehlgriff kostet den ganzen Einsatz |
+| `longshot` Longshot-NO | NO auf Außenseiter mit YES-Preis 2–8 % in Multi-Outcome-Events (Favorite-Longshot-Bias) | wie oben, breit gestreut über viele kleine Positionen |
+| `weather` Wetter-Modell | Temperatur-Buckets mit Ensemble-Prognosen (Open-Meteo: GFS, ECMWF, ICON) bewerten, kaufen, wenn das Modell ≥ 8 Prozentpunkte über dem Preis liegt | echte Prognosefehler; Station vs. Modellgitter |
+
+Die Ausführung ist so realistisch wie bei der Arbitrage: Latenz, Order-Verzögerung, frisches Orderbuch, Haircut und Fees. Positionen werden bis zur Auflösung gehalten und dann ausgezahlt. Die Karte **„Hat die Strategie einen Edge?“** vergleicht die Gewinnquote der aufgelösten Positionen mit dem Ø Einstiegspreis. Nur wenn die Strategie öfter gewinnt, als der Preis sagt, bleibt nach vielen Trades etwas übrig. Aussagekräftig ist das erst ab etwa 30 Auflösungen.
+
+Lokal: `python run.py scenario weather` startet ein Szenario, `python run.py dashboard --all` baut alle Tabs.
+
 ## Architektur
 
 ```
@@ -68,6 +82,8 @@ arb/risk.py       Sizing & Limits, Kill-Switches
 arb/paper.py      Paper-Broker: IOC-Fills, Merge/Split, Unwind, Settlement, Portfolio
 arb/engine.py     Loop: Universe → Books → Scan → Size → Latenz → Fill → Log (Engine = Polling, StreamEngine = WebSocket)
 arb/stream.py     WebSocket-Client und lokaler Orderbuch-Store
+arb/scenarios.py  Szenario-Engine (Budget, Positionen, Auflösung) + Strategien endgame / longshot / weather
+arb/weather.py    Temperatur-Märkte parsen, Bucket-Wahrscheinlichkeiten aus Ensemble-Prognosen
 arb/storage.py    SQLite (scans, opportunities, executions, equity, settlements)
 arb/mock.py       synthetischer Markt für Offline-Tests
 arb/netcheck.py   Netzwerk-Diagnose beim Start
@@ -112,7 +128,8 @@ Was dann läuft (siehe `deploy/systemd/`):
 
 - `polyarb`: der Bot im WebSocket-Modus, startet bei Absturz automatisch neu
 - `polyarb-update.timer`: alle 10 Minuten `git pull`, bei Änderungen `install.sh` und Neustart
-- `polyarb-dash.timer`: aktualisiert das Dashboard alle 10 Minuten, inklusive `trades.csv` mit allen Ausführungen und späteren Auszahlungen (Button „CSV-Export aller Trades“, Format für deutsches Excel)
+- `polyarb-scenario@<name>`: je ein Prozess pro aktiviertem Szenario aus `config.yaml`
+- `polyarb-dash.timer`: aktualisiert das Dashboard (alle Tabs) alle 10 Minuten, inklusive `trades.csv` mit allen Ausführungen und späteren Auszahlungen (Button „CSV-Export aller Trades“, Format für deutsches Excel)
 - `polyarb-watch.timer`: alle 5 Minuten Watchdog und Trade-Alerts (siehe unten)
 - `polyarb-report.timer`: Statusbericht über die letzten 4 h um 00, 04, 12, 16 und 20 Uhr
 - `polyarb-daily.timer`: Tagesbericht über die letzten 24 h um 08 Uhr

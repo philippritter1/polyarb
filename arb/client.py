@@ -251,6 +251,28 @@ class PolymarketClient:
                    payout=float(len(no) - 1), **common),
         ]
 
+    def paged(self, path: str, params: dict, max_items: int = 1000) -> List[dict]:
+        """All items of a Gamma listing (/markets, /events) up to max_items."""
+        out: List[dict] = []
+        offset = 0
+        while len(out) < max_items and offset <= MAX_OFFSET:
+            try:
+                page = self._get(f"{self.gamma}{path}", dict(params, limit=PAGE, offset=offset))
+            except PaginationEnd as e:
+                log.info("%s pagination stopped: %s", path, e)
+                break
+            if not page:
+                break
+            out.extend(page)
+            offset += len(page)
+            if len(page) < PAGE:
+                break
+        return out[:max_items]
+
+    def get_json(self, url: str, params: dict) -> dict:
+        """GET any JSON API with the same retry/throttle handling (used for weather forecasts)."""
+        return self._get(url, params)
+
     # -------------------------------------------------------------- books
     def books(self, token_ids: Iterable[str]) -> Dict[str, OrderBook]:
         ids = list(dict.fromkeys(token_ids))

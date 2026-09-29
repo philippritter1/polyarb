@@ -118,7 +118,7 @@ def cmd_watch():
         if rows:
             st["last_exec_ts"] = rows[-1][0]
             names = {"binary_buy_all": "YES+NO kaufen", "binary_sell_all": "Split & verkaufen",
-                     "negrisk_buy_all": "Korb", "negrisk_no_buy_all": "alle NO"}
+                     "negrisk_buy_all": "Korb", "negrisk_no_buy_all": "alle NO"}  # arbitrage bot only
             status_de = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
             hits = [r for r in rows if r[3] in ("filled", "partial")]
             real = sum(r[7] or 0 for r in rows)

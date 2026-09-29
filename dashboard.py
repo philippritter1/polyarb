@@ -38,8 +38,23 @@ def collect(db_path: str, start_capital: float) -> dict:
         d["realized"] += real or 0
         d["expected"] += exp or 0
     settle = {k: dict(n=n, pnl=p) for k, n, p in _q(db, "SELECT kind, COUNT(*), SUM(pnl) FROM settlements GROUP BY 1")}
-    if "basket" in settle and "negrisk_buy_all" in by_strat:
-        by_strat["negrisk_buy_all"]["realized"] += settle["basket"]["pnl"]
+    # payouts at resolution (baskets, scenario positions) count for the strategy that opened them
+    for s, pnl in _q(db, """SELECT e.strategy, SUM(s.pnl) FROM settlements s
+                            JOIN (SELECT DISTINCT basket_id, strategy FROM executions) e ON s.ref = e.basket_id
+                            WHERE s.kind IN ('basket', 'position') GROUP BY 1"""):
+        if s in by_strat:
+            by_strat[s]["realized"] += pnl or 0
+
+    # scenarios: did positions win as often as the entry price / the strategy's model said?
+    cal = _q(db, """SELECT s.payout > 0, e.capital / e.matched_qty, e.expected_payout / e.matched_qty, s.pnl
+                    FROM settlements s JOIN executions e ON s.ref = e.basket_id
+                    WHERE s.kind = 'position' AND e.matched_qty > 0""")
+    calib = dict(n=len(cal), wins=sum(1 for r in cal if r[0]),
+                 price=sum(r[1] for r in cal) / len(cal) if cal else 0,
+                 model=sum(r[2] for r in cal) / len(cal) if cal else 0,
+                 pnl=sum(r[3] or 0 for r in cal),
+                 open=_q(db, """SELECT COUNT(*), COALESCE(SUM(locked), 0) FROM executions e
+                                WHERE matched_qty > 0 AND NOT EXISTS (SELECT 1 FROM settlements s WHERE s.ref = e.basket_id)""")[0])
 
     reasons = Counter()
     for dec, reason, n in _q(db, "SELECT decision, reason, COUNT(*) FROM opportunities GROUP BY 1,2"):
@@ -82,14 +97,15 @@ def collect(db_path: str, start_capital: float) -> dict:
                  baskets=scans[-1][2] if scans else 0),
         strat=by_strat, reasons=reasons.most_common(10),
         hist=dict(labels=labels, counts=hist, n=len(buys)),
-        settle=settle,
+        settle=settle, calib=calib,
         execs=[dict(t=r[0], s=r[1], title=r[2], st=r[3], tq=r[4], mq=r[5], cap=r[6], exp=r[7],
                     real=r[8], lock=r[9], res=r[10]) for r in execs],
     )
 
 
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
-                  "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO"}
+                  "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
+                  "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -99,7 +115,8 @@ CSV_COLUMNS = [
     ("Auszahlung $", "payout"), ("Offene Reste $", "residual"), ("Latenz ms", "latency_ms"),
     ("Notiz", "note"), ("Fills (JSON)", "fills"),
 ]
-SETTLE_TYPES = {"basket": "Auszahlung Korb", "residual": "Rest aufgelöst", "unwind": "Rest verkauft"}
+SETTLE_TYPES = {"basket": "Auszahlung Korb", "residual": "Rest aufgelöst", "unwind": "Rest verkauft",
+                "position": "Auszahlung Position"}
 EXEC_FIELDS = ["ts", "basket_id", "title", "strategy", "status", "target_qty", "matched_qty", "capital",
                "expected_profit", "realized_pnl", "locked", "expected_payout", "residual", "latency_ms",
                "note", "fills"]
@@ -151,15 +168,53 @@ def _write(path: Path, text: str, encoding: str) -> None:
     os.replace(tmp, path)  # the web server never sees a half-written file
 
 
-def build(db_path: str, out: str, start_capital: float, source: str = "auto") -> str:
+def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
+          kind: str = "arb", nav: list | None = None) -> str:
     data = collect(db_path, float(start_capital))
     if source == "auto":
         source = "mock" if "mock" in Path(db_path).name else "paper"
-    data["source"] = source
+    data.update(source=source, kind=kind, nav=nav or [],
+                title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
     _write(Path(out).with_name("trades.csv"), trades_csv(db_path), "utf-8-sig")  # BOM: Excel detects UTF-8
     _write(Path(out), html, "utf-8")
     return out
+
+
+def _summary(db_path: str, start: float) -> float:
+    """Return since start from the last equity row (0 if the scenario has no data yet)."""
+    if not Path(db_path).exists():
+        return 0.0
+    db = sqlite3.connect(db_path)
+    try:
+        row = db.execute("SELECT equity FROM equity ORDER BY ts DESC LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    db.close()
+    return (row[0] / start - 1) if row and start else 0.0
+
+
+def build_all(cfg: dict, out: str) -> list:
+    """Arbitrage page at `out`, every enabled scenario at <dir>/<name>/index.html, linked by a tab bar."""
+    root = Path(out).parent
+    data_dir = Path(cfg["storage"]["db_path"]).parent
+    pages = [dict(key="", label="Arbitrage", db=cfg["storage"]["db_path"], kind="arb",
+                  start=float(cfg["portfolio"]["starting_capital_usd"]), out=Path(out),
+                  title="Polymarket Arbitrage – Paper Trading")]
+    for name, sc in (cfg.get("scenarios") or {}).items():
+        if sc.get("enabled"):
+            pages.append(dict(key=name, label=sc.get("title", name), db=str(data_dir / f"scenario-{name}.sqlite"),
+                              kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 500)),
+                              out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
+    rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
+    built = []
+    for p in pages:
+        up = "../" if p["key"] else ""  # scenario pages live one folder below the arbitrage page
+        nav = [dict(label=q["label"], href=up + q["key"] + "/" if q["key"] else up or "./",
+                    ret=rets[q["key"]], active=q is p) for q in pages]
+        built.append(build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav))
+    return built
 
 
 TEMPLATE = r"""<!doctype html>
@@ -209,21 +264,25 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 .head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
 .btn{font-size:12.5px;font-weight:600;color:var(--s1);text-decoration:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px}
 .btn:hover{border-color:var(--s1)}
+.nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.tab{font-size:13px;font-weight:600;color:var(--text2);text-decoration:none;border:1px solid var(--border);border-radius:999px;padding:5px 12px;background:var(--surface)}
+.tab.on{color:var(--text);border-color:var(--s1)}.tab span{font-weight:500;margin-left:6px}
 .warnbox{border-left:3px solid var(--warn);padding:8px 12px;background:var(--surface);border-radius:6px;margin-bottom:16px;font-size:13px}
 </style></head><body><div class="wrap">
-<h1>Polymarket Arbitrage – Paper Trading <span class="badge" id="src"></span></h1>
+<nav class="nav" id="nav"></nav>
+<h1><span id="ttl"></span> <span class="badge" id="src"></span></h1>
 <p class="sub" id="range"></p>
 <div id="halt"></div>
 <div class="kpis" id="kpis"></div>
-<div class="card"><h2>Equity</h2><p class="note">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div id="eq"></div></div>
+<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div id="eq"></div></div>
 <div class="grid2">
- <div class="card"><h2>Erwarteter vs. realisierter Gewinn je Strategie</h2><p class="note">Die Lücke ist, was Latenz, Konkurrenz und Leg-Failures kosten.</p>
+ <div class="card"><h2>Erwarteter vs. realisierter Gewinn je Strategie</h2><p class="note" id="pnlnote">Die Lücke ist, was Latenz, Konkurrenz und Leg-Failures kosten.</p>
   <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Erwartet bei Erkennung</span><span><i class="sw" style="background:var(--s2)"></i>Realisiert</span></div><div id="pnl"></div></div>
  <div class="card"><h2>Ausführung je Strategie</h2><p class="note">Anteil der Versuche, die voll, teilweise oder gar nicht gefüllt wurden.</p>
   <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Voll</span><span><i class="sw" style="background:var(--s3)"></i>Teilweise</span><span><i class="sw" style="background:var(--s2)"></i>Verpasst</span></div><div id="exec"></div></div>
 </div>
 <div class="grid2">
- <div class="card"><h2>Wie nah ist der Markt an Arbitrage?</h2><p class="note">Pro Scan: niedrigste Summe YES-Ask + NO-Ask über alle Binärmärkte (vor Fees). Unter 1,00 = Rohsignal.</p><div id="hist"></div></div>
+ <div class="card" id="histcard"><h2>Wie nah ist der Markt an Arbitrage?</h2><p class="note">Pro Scan: niedrigste Summe YES-Ask + NO-Ask über alle Binärmärkte (vor Fees). Unter 1,00 = Rohsignal.</p><div id="hist"></div></div>
  <div class="card"><h2>Risk-Engine: Entscheidungen</h2><p class="note">Warum Chancen angenommen, verkleinert oder abgelehnt wurden.</p><div id="rsn"></div></div>
 </div>
 <div class="card"><div class="head"><h2>Letzte Ausführungen</h2><a class="btn" href="trades.csv" download>CSV-Export aller Trades</a></div>
@@ -237,6 +296,10 @@ const usd=v=>(v<0?"−":"")+"$"+fmt(Math.abs(v));
 const pct=v=>fmt(v*100,1)+" %";
 const dt=t=>new Date(t*1000).toLocaleString("de-AT",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
 const tip=$("tip");
+$("ttl").textContent=D.title;document.title=D.title;
+if(D.kind!=="arb"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
+ $("pnlnote").textContent="Erwartet = Gewinn, wenn jede Position so ausgeht, wie die Strategie annimmt. Realisiert zählt erst bei Auflösung."}
+$("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}">${n.label}<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span></a>`).join(""):"";
 function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";tip.style.top=(e.clientY+14)+"px"}
 function hideTip(){tip.style.display="none"}
 const NS="http://www.w3.org/2000/svg";
@@ -251,6 +314,7 @@ if(D.source==="mock")$("halt").innerHTML+=`<div class="warnbox">Diese Zahlen sta
 const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)}`],["Rendite",pct(K.ret),`Max. Drawdown ${pct(K.mdd)}`],
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
+if(D.kind!=="arb"){tiles[2][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[4]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[5][2]="Preis unter der Strategie-Grenze"}
 $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
 
 // ---------- equity line
@@ -271,7 +335,8 @@ $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</
  hit.addEventListener("mouseleave",()=>{hideTip();cross.setAttribute("visibility","hidden");dot.setAttribute("visibility","hidden")});
 })();
 
-const NAMES={binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO"};
+const NAMES={binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO",
+ endgame_buy:"Endspiel-Ernte",longshot_buy:"Longshot: NO kaufen",weather_buy:"Wetter-Modell"};
 // ---------- grouped bars: expected vs realized
 (function(){
  const S=Object.entries(D.strat);const box=$("pnl");if(!S.length){box.textContent="Noch keine Trades.";return}
@@ -303,8 +368,14 @@ const NAMES={binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Spl
  });
 })();
 
+// ---------- scenarios: calibration instead of the arbitrage histogram
+if(D.kind!=="arb"){const C=D.calib;$("histcard").innerHTML=`<h2>Hat die Strategie einen Edge?</h2>
+ <p class="note">Aufgelöste Positionen: Gewinnt die Strategie öfter, als der Einstiegspreis sagt? Nur dann bleibt nach vielen Trades Gewinn übrig. Aussagekräftig erst ab etwa 30 Auflösungen.</p>
+ <div class="kpis">${[["Aufgelöst",C.n,`offen: ${C.open[0]} (${usd(C.open[1])})`],["Gewinnquote",C.n?pct(C.wins/C.n):"–",`${C.wins} von ${C.n}`],
+ ["Preis sagte",C.n?pct(C.price):"–","Ø Einstiegspreis"],["PnL aufgelöst",usd(C.pnl),D.kind==="weather"?`Modell sagte ${C.n?pct(C.model):"–"}`:"nach Fees"]]
+ .map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("")}</div>`}
 // ---------- histogram of closest buy sums
-(function(){
+(function(){if(D.kind!=="arb")return;
  const Hh=D.hist,box=$("hist");if(!Hh.n){box.textContent="Noch keine Scans.";return}
  const W=520,H=240,m={l:44,r:8,t:10,b:44};const svg=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img","aria-label":"Verteilung der Ask-Summen"},box);
  const mx=Math.max(...Hh.counts)*1.08||1,Y=v=>m.t+(1-v/mx)*(H-m.t-m.b),bw=(W-m.l-m.r)/Hh.counts.length;

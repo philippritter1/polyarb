@@ -1,0 +1,14 @@
+[Unit]
+Description=Polyarb paper scenario %i
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=polyarb
+WorkingDirectory=/opt/polyarb
+EnvironmentFile=/etc/polyarb.env
+ExecStart=/opt/polyarb/.venv/bin/python run.py scenario %i
+Restart=always
+RestartSec=60
+[Install]
+WantedBy=multi-user.target

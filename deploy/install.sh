@@ -39,8 +39,11 @@ if [ ! -f /etc/caddy/.polyarb ]; then
   systemctl restart caddy
 fi
 systemctl daemon-reload
-systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
-systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-daily.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
+systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
+systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
+# seit 01.10.: nur noch der 4-h-Bericht (08 Uhr gehört jetzt dazu), kein eigener Tagesbericht
+systemctl disable --now polyarb-daily.timer || true
+systemctl restart polyarb-report.timer  # neuer Zeitplan
 systemctl restart polyarb.service
 # paper scenarios from config.yaml: one polyarb-scenario@<name> per enabled entry, the rest stopped
 SCEN=$(.venv/bin/python -c "from arb.config import load_config; c=load_config('config.yaml'); print(' '.join(k for k, v in (c.get('scenarios') or {}).items() if v.get('enabled')))")

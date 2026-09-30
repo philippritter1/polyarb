@@ -1,7 +1,7 @@
 [Unit]
-Description=Polyarb status report (00, 04, 12, 16, 20 Uhr; 08 Uhr kommt der Tagesbericht)
+Description=Polyarb Bericht aller Strategien alle 4 h (00, 04, 08, 12, 16, 20 Uhr)
 [Timer]
-OnCalendar=*-*-* 00,04,12,16,20:00:00
+OnCalendar=*-*-* 00,04,08,12,16,20:00:00
 Persistent=true
 [Install]
 WantedBy=timers.target

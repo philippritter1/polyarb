@@ -1,8 +1,11 @@
 """Push-Benachrichtigungen über ntfy.sh (kostenlose App, kein Account nötig).
 
   python deploy/notify.py start     # "Bot läuft" + Dashboard-Link
-  python deploy/notify.py watch     # alle 15 min: Alarm bei Stillstand, Kill-Switch, API-Problemen
-  python deploy/notify.py daily     # tägliche Zusammenfassung
+  python deploy/notify.py watch     # alle 5 min: Alarm bei Stillstand, Kill-Switch, API-Problemen
+  python deploy/notify.py report 4  # alle 4 h: alle Strategien, realisierter Gewinn/Verlust gesamt und seit dem letzten Bericht
+  python deploy/notify.py daily     # dasselbe über 24 h
+
+Einzelne Trade- und Auszahlungsnachrichten sind seit 01.10. aus (NOTIFY_TRADES=1 / NOTIFY_PAYOUTS=1 schalten sie wieder ein).
 """
 from __future__ import annotations
 
@@ -19,6 +22,32 @@ import requests
 TOPIC = os.environ.get("NTFY_TOPIC", "")
 URL = os.environ.get("DASH_URL", "")
 USER = os.environ.get("DASH_USER", "")
+
+
+def _cfg() -> dict:
+    try:
+        import yaml
+        return yaml.safe_load((Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa – never let a config problem silence the watchdog
+        return {}
+
+
+def books() -> list:
+    """Every book that trades: the arbitrage bot plus each enabled scenario (db, start capital, title)."""
+    if os.environ.get("POLYARB_DB"):  # tests / manual runs: one given database
+        return [dict(label=T["label"] or "Polyarb", db=os.environ["POLYARB_DB"],
+                     start=float(os.environ.get("START_CAPITAL", T["start"])))]
+    base = Path(__file__).resolve().parents[1]
+    cfg = _cfg()
+    data = Path(((cfg.get("storage") or {}).get("db_path")) or "data/polyarb.sqlite")
+    data = data if data.is_absolute() else base / data
+    out = [dict(label="Arbitrage", db=str(data),
+                start=float((cfg.get("portfolio") or {}).get("starting_capital_usd", 2500)))]
+    for name, sc in (cfg.get("scenarios") or {}).items():
+        if sc and sc.get("enabled"):
+            out.append(dict(label=sc.get("title", name), db=str(data.parent / f"scenario-{name}.sqlite"),
+                            start=float(sc.get("capital_usd", 2500))))
+    return out
 
 
 def _target() -> dict:
@@ -57,13 +86,13 @@ STRATEGY_NAMES = {"binary_buy_all": "YES+NO kaufen", "binary_sell_all": "Split &
                   "weather_buy": "Wetter"}
 
 
-def push(title: str, msg: str, prio: str = "default", tags: str = "chart_with_upwards_trend"):
+def push(title: str, msg: str, prio: str = "default", tags: str = "chart_with_upwards_trend", click: str = ""):
     if not TOPIC:
         print(f"[no topic] {title}: {msg}")
         return
     headers = {"Title": title, "Priority": prio, "Tags": tags}
-    if T["url"]:
-        headers["Click"] = T["url"]
+    if click or T["url"]:
+        headers["Click"] = click or T["url"]
     requests.post(f"https://ntfy.sh/{TOPIC}", data=msg.encode("utf-8"), headers=headers, timeout=10)
 
 
@@ -144,7 +173,7 @@ def cmd_watch():
     st.setdefault("boot", now)
 
     # --- trade alerts: every executed paper trade since the last check
-    if os.environ.get("NOTIFY_TRADES", "1") == "1":
+    if os.environ.get("NOTIFY_TRADES", "0") == "1":
         last_ts = st.get("last_exec_ts")
         if last_ts is None:
             last_ts = now  # first run: don't replay history
@@ -173,7 +202,7 @@ def cmd_watch():
             st["last_exec_ts"] = last_ts
 
     # --- payouts: positions and baskets that resolved since the last check
-    if os.environ.get("NOTIFY_PAYOUTS", "1") == "1":
+    if os.environ.get("NOTIFY_PAYOUTS", "0") == "1":
         last_s = st.get("last_settle_ts")
         if last_s is None:
             last_s = now  # first run: don't replay history
@@ -196,48 +225,51 @@ def cmd_watch():
 
 
 def cmd_daily():
-    report(24, f"{NAME} Tagesbericht")
+    overview(24, "Polyarb Tagesbericht")
 
 
 def cmd_report():
     h = float(sys.argv[2]) if len(sys.argv) > 2 else float(os.environ.get("REPORT_HOURS", "4"))
-    report(h, f"{NAME} Update ({h:g}h)")
+    overview(h, f"Polyarb {h:g}h-Bericht")
 
 
-def report(hours: float, title: str):
-    now = time.time()
-    since = now - hours * 3600
-    eq = q("SELECT ts, equity, locked, residual FROM equity ORDER BY ts DESC LIMIT 1")
-    eq_then = q("SELECT equity FROM equity WHERE ts <= ? ORDER BY ts DESC LIMIT 1", (since,))
-    if not eq:
-        push(f"{NAME}: noch keine Daten", "Der Bot hat bisher keine Equity-Daten geschrieben.", "high", "warning")
+def book_stats(b: dict, since: float) -> dict:
+    """Realized PnL of one book: total (booked at resolution/merge) and the change since `since`."""
+    global DB
+    DB, keep = b["db"], DB
+    try:
+        now = q("SELECT equity, realized_cum FROM equity ORDER BY ts DESC LIMIT 1")
+        then = q("SELECT realized_cum FROM equity WHERE ts <= ? ORDER BY ts DESC LIMIT 1", (since,))
+        res = q("""SELECT COUNT(*), SUM(payout > 0) FROM settlements
+                   WHERE ts > ? AND kind IN ('position', 'basket')""", (since,))
+    finally:
+        DB = keep
+    if not now:
+        return dict(b, ok=False)
+    real = now[0][1] or 0.0
+    return dict(b, ok=True, real=real, delta=real - ((then[0][0] or 0.0) if then else 0.0), equity=now[0][0],
+                n=res[0][0] if res else 0, won=(res[0][1] or 0) if res else 0)
+
+
+def overview(hours: float, title: str):
+    """One message for all strategies: realized result in total and over the last `hours`."""
+    since = time.time() - hours * 3600
+    stats = [book_stats(b, since) for b in books()]
+    live = [x for x in stats if x["ok"]]
+    if not live:
+        push(f"{title}: noch keine Daten", "Kein Buch hat bisher Daten geschrieben.", "high", "warning")
         return
-    e = eq[0][1]
-    e0 = eq_then[0][0] if eq_then else START
-    ex = q("""SELECT status, COUNT(*), SUM(realized_pnl), SUM(expected_profit) FROM executions
-              WHERE ts > ? GROUP BY status""", (since,))
-    n = {s: c for s, c, _, _ in ex}
-    tries = sum(n.values())
-    exp = sum(x[3] or 0 for x in ex)
-    real = sum(x[2] or 0 for x in ex)
-    opps = q("SELECT COUNT(*) FROM opportunities WHERE ts > ?", (since,))[0][0]
-    scans = q("SELECT COUNT(*), MIN(best_buy_sum), MAX(best_sell_sum) FROM scans WHERE ts > ?", (since,))[0]
-    lines = [
-        f"Equity {usd(e)} ({(e / START - 1) * 100:+.2f} % gesamt)",
-        f"Letzte {hours:g}h: {usd(e - e0)}",
-        f"Chancen: {opps} | Trades: {tries} (voll {n.get('filled', 0)}, teilw. {n.get('partial', 0)}, verpasst {n.get('missed', 0)})",
-    ]
-    if exp:
-        lines.append(f"Capture: {real / exp * 100:.0f} % (realisiert {usd(real)} von {usd(exp)})")
-    res = q("""SELECT COUNT(*), SUM(payout > 0), SUM(pnl) FROM settlements
-               WHERE ts > ? AND kind IN ('position', 'basket')""", (since,))[0]
-    if res[0]:
-        lines.append(f"Aufgelöst: {res[0]} ({res[1] or 0} gewonnen, {res[0] - (res[1] or 0)} verloren) | {usd(res[2] or 0)}")
-    if scans[0] and not T["label"]:
-        lines.append(f"Scans: {scans[0]:,} | engste YES+NO-Summe: {scans[1]:.4f}" if scans[1] else f"Scans: {scans[0]:,}")
-    if eq[0][2] or eq[0][3]:
-        lines.append(f"Gebunden {usd(eq[0][2])} | offene Reste {usd(eq[0][3])}")
-    push(title, "\n".join(lines), tags="bar_chart")
+    tot_real, tot_start = sum(x["real"] for x in live), sum(x["start"] for x in live)
+    tot_delta = sum(x["delta"] for x in live)
+    lines = [f"Gesamt realisiert {usd(tot_real)} ({tot_real / tot_start * 100:+.2f} % auf {usd(tot_start)})",
+             f"Letzte {hours:g}h: {usd(tot_delta)}", ""]
+    for x in sorted(live, key=lambda x: -x["real"]):
+        arrow = "▲" if x["real"] > 0 else "▼" if x["real"] < 0 else "•"
+        res = f" · {x['won']}✓ {x['n'] - x['won']}✗" if x["n"] else ""
+        lines.append(f"{arrow} {x['label']}: {usd(x['real'])} ({x['real'] / x['start'] * 100:+.2f} %)"
+                     f" | {hours:g}h {usd(x['delta'])}{res}")
+    lines += [f"• {x['label']}: noch keine Daten" for x in stats if not x["ok"]]
+    push(title, "\n".join(lines), tags="bar_chart", click=URL)
 
 
 def cmd_msg():

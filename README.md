@@ -157,8 +157,8 @@ Was dann läuft (siehe `deploy/systemd/`):
 - `polyarb-scenario@<name>`: je ein Prozess pro aktiviertem Szenario aus `config.yaml`
 - `polyarb-dash.timer`: aktualisiert das Dashboard (alle Tabs) alle 10 Minuten, inklusive `trades.csv` mit allen Ausführungen und späteren Auszahlungen (Button „CSV-Export aller Trades“, Format für deutsches Excel)
 - `polyarb-watch.timer`: alle 5 Minuten Watchdog und Trade-Alerts (siehe unten)
-- `polyarb-report.timer`: Statusbericht über die letzten 4 h um 00, 04, 12, 16 und 20 Uhr
-- `polyarb-daily.timer`: Tagesbericht über die letzten 24 h um 08 Uhr
+- `polyarb-report.timer`: ein Bericht über **alle Strategien** um 00, 04, 08, 12, 16 und 20 Uhr – realisierter Gewinn/Verlust gesamt und in den letzten 4 h, je Strategie mit gewonnenen/verlorenen Auflösungen
+- `polyarb-daily.timer`: seit 01.10. abgeschaltet (08 Uhr gehört zum 4-h-Bericht)
 
 Die Server-Zeitzone ist Europe/Vienna (setzt `install.sh`).
 
@@ -166,7 +166,7 @@ Die Server-Zeitzone ist Europe/Vienna (setzt `install.sh`).
 
 ### Push-Nachrichten (ntfy)
 
-`deploy/notify.py` schickt alles an das ntfy-Topic `NTFY_TOPIC` aus `/etc/polyarb.env`. Welchem Buch die Nachrichten folgen, steht in `config.yaml` unter `notify: scenario:` (aktuell `underdog`; leer = Arbitrage). Bei einem Szenario kommen zusätzlich Nachrichten zu Auszahlungen (gewonnen/verloren mit PnL); der Klick führt direkt auf dessen Tab.
+`deploy/notify.py` schickt alles an das ntfy-Topic `NTFY_TOPIC` aus `/etc/polyarb.env`. Welchem Buch die Nachrichten folgen, steht in `config.yaml` unter `notify: scenario:` (aktuell `underdog`; leer = Arbitrage). Seit 01.10. kommen außer dem 4-h-Bericht nur noch Alarme (Bot steht, Kill-Switch, fehlgeschlagenes Update); einzelne Trade- und Auszahlungsnachrichten lassen sich mit `NOTIFY_TRADES=1` / `NOTIFY_PAYOUTS=1` in `/etc/polyarb.env` wieder einschalten.
 
 | Nachricht | Wann |
 |---|---|

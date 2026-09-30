@@ -396,13 +396,24 @@ def test_notifications_follow_the_underdog_scenario(tmp_path):
                if (tmp_path / "data").exists() else str(tmp_path / "scenario-underdog.sqlite"),
                NOTIFY_STATE=str(state), START_CAPITAL="500")
     root = Path(__file__).resolve().parents[1]
+    # since 01.10. single trade/payout pushes are off by default: only problems and the 4-hour report
     out = subprocess.run([sys.executable, "deploy/notify.py", "watch"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
+    assert "Trade" not in out and "Auszahlung" not in out
+    state.write_text(json.dumps({"last_exec_ts": 0, "last_settle_ts": 0, "boot": 0}))
+    out = subprocess.run([sys.executable, "deploy/notify.py", "watch"], cwd=root,
+                         env=dict(env, NOTIFY_TRADES="1", NOTIFY_PAYOUTS="1"), capture_output=True, text=True).stdout
     assert "Polyarb Underdog-Sport: Trade" in out and "Stk. für $10" in out
     assert "Polyarb Underdog-Sport: Auszahlung" in out and "1 gewonnen, 0 verloren" in out
+    pnl = eng.pf.realized_pnl
+    rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "4"], cwd=root, env=env,
+                         capture_output=True, text=True).stdout
+    assert pnl > 0 and "Polyarb 4h-Bericht" in rep  # the simulated trades lie outside the last 4 h ...
+    assert f"Gesamt realisiert ${pnl:,.2f} ({pnl / 500 * 100:+.2f} % auf $500.00)" in rep
+    assert f"▲ Underdog-Sport: ${pnl:,.2f} (+{pnl / 500 * 100:.2f} %) | 4h $0.00" in rep
     rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "100000"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
-    assert "Aufgelöst: 1 (1 gewonnen, 0 verloren)" in rep and "YES+NO" not in rep
+    assert f"| 100000h ${pnl:,.2f} · 1✓ 0✗" in rep  # ... but inside a long window
 
 
 def test_sport_band_filters_on_volume_at_purchase(tmp_path):

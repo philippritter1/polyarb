@@ -1,5 +1,5 @@
 [Unit]
-Description=Polyarb status report every few hours
+Description=Polyarb Bericht aller Strategien (realisiert gesamt und letzte 4 h)
 After=network-online.target
 Wants=network-online.target
 [Service]

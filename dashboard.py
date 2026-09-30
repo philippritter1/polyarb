@@ -23,9 +23,11 @@ def collect(db_path: str, start_capital: float) -> dict:
     db = sqlite3.connect(db_path)
     eq = _q(db, "SELECT ts, equity, cash, locked, residual, realized_cum, halted FROM equity ORDER BY ts")
     step = max(1, len(eq) // 600)
-    curve = [dict(t=r[0], e=round(r[1], 2), l=round(r[3], 2)) for r in eq[::step]]
+    # r = start + realized PnL: what the book is worth counting only resolved/merged positions
+    curve = [dict(t=r[0], e=round(r[1], 2), l=round(r[3], 2), r=round(start_capital + (r[5] or 0), 2)) for r in eq[::step]]
     if eq and (not curve or curve[-1]["t"] != eq[-1][0]):
-        curve.append(dict(t=eq[-1][0], e=round(eq[-1][1], 2), l=round(eq[-1][3], 2)))
+        curve.append(dict(t=eq[-1][0], e=round(eq[-1][1], 2), l=round(eq[-1][3], 2),
+                          r=round(start_capital + (eq[-1][5] or 0), 2)))
 
     peak, mdd = start_capital, 0.0
     for r in eq:
@@ -90,6 +92,7 @@ def collect(db_path: str, start_capital: float) -> dict:
     return dict(
         start=start_capital, curve=curve,
         kpi=dict(equity=last[1], cash=last[2], locked=last[3], residual=last[4], realized=last[1] - start_capital,
+                 real=last[5] or 0.0, real_ret=((last[5] or 0.0) / start_capital) if start_capital else 0,
                  ret=(last[1] / start_capital - 1) if start_capital else 0, mdd=mdd,
                  attempts=attempts, hit=(hits / attempts) if attempts else 0,
                  capture=(sum(d["realized"] for d in by_strat.values()) / exp_total) if exp_total else 0,
@@ -195,11 +198,11 @@ def _write(path: Path, text: str, encoding: str) -> None:
 
 
 def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
-          kind: str = "arb", nav: list | None = None) -> str:
+          kind: str = "arb", nav: list | None = None, overview: list | None = None) -> str:
     data = collect(db_path, float(start_capital))
     if source == "auto":
         source = "mock" if "mock" in Path(db_path).name else "paper"
-    data.update(source=source, kind=kind, nav=nav or [],
+    data.update(source=source, kind=kind, nav=nav or [], overview=overview or [],
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -209,17 +212,27 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     return out
 
 
-def _summary(db_path: str, start: float) -> float:
-    """Return since start from the last equity row (0 if the scenario has no data yet)."""
+def _summary(db_path: str, start: float) -> dict:
+    """Last equity row of a book: return incl. open positions (at the bid) and realized only."""
+    out = dict(start=start, equity=start, real=0.0, ret=0.0, real_ret=0.0, n=0, won=0, open=0)
     if not Path(db_path).exists():
-        return 0.0
+        return out
     db = sqlite3.connect(db_path)
     try:
-        row = db.execute("SELECT equity FROM equity ORDER BY ts DESC LIMIT 1").fetchone()
+        row = db.execute("SELECT equity, realized_cum FROM equity ORDER BY ts DESC LIMIT 1").fetchone()
+        res = db.execute("SELECT COUNT(*), SUM(payout > 0) FROM settlements WHERE kind IN ('position', 'basket')").fetchone()
+        opn = db.execute("""SELECT COUNT(*) FROM executions e WHERE matched_qty > 0
+                            AND NOT EXISTS (SELECT 1 FROM settlements s WHERE s.ref = e.basket_id)""").fetchone()
     except sqlite3.OperationalError:
-        row = None
+        row = res = opn = None
     db.close()
-    return (row[0] / start - 1) if row and start else 0.0
+    if row and start:
+        out.update(equity=row[0], real=row[1] or 0.0, ret=row[0] / start - 1, real_ret=(row[1] or 0.0) / start)
+    if res:
+        out.update(n=res[0] or 0, won=res[1] or 0)
+    if opn:
+        out.update(open=opn[0] or 0)
+    return out
 
 
 def _cached_stress(study_db: str, stress_test) -> list:
@@ -266,10 +279,13 @@ def build_all(cfg: dict, out: str) -> list:
     def nav_for(active: str) -> list:
         up = "../" if active else ""  # every page except the arbitrage one lives one folder down
         nav = [dict(label=q["label"], href=up + q["key"] + "/" if q["key"] else up or "./",
-                    ret=rets[q["key"]], active=q["key"] == active) for q in pages]
+                    ret=rets[q["key"]]["ret"], real=rets[q["key"]]["real_ret"], active=q["key"] == active)
+               for q in pages]
         return nav + [dict(label=l, href=up + k + "/", ret=None, active=k == active) for k, l in extra]
 
-    built = [build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav_for(p["key"]))
+    overview = [dict(rets[p["key"]], label=p["label"], href=(p["key"] + "/") if p["key"] else "./") for p in pages]
+    built = [build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav_for(p["key"]),
+                   overview=overview if not p["key"] else None)
              for p in pages]
 
     from arb.backtest import stress_test
@@ -322,7 +338,8 @@ def _nav_html(nav: list) -> str:
         r = n.get("ret")
         span = "" if r is None else (f'<span class="{"pos" if r > 0.00005 else "neg" if r < -0.00005 else ""}">'
                                      f'{"+" if r >= 0 else ""}{r * 100:.1f} %</span>'.replace(".", ","))
-        out.append(f'<a class="tab{" on" if n["active"] else ""}" href="{n["href"]}">{html.escape(n["label"])}{span}</a>')
+        tip = "" if n.get("real") is None else f' title="realisiert {n["real"] * 100:+.1f} %"'.replace(".", ",")
+        out.append(f'<a class="tab{" on" if n["active"] else ""}" href="{n["href"]}"{tip}>{html.escape(n["label"])}{span}</a>')
     return f'<nav class="nav">{"".join(out)}</nav>'
 
 
@@ -595,8 +612,9 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <h1><span id="ttl"></span> <span class="badge" id="src"></span></h1>
 <p class="sub" id="range"></p>
 <div id="halt"></div>
+<div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
 <div class="kpis" id="kpis"></div>
-<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div id="eq"></div></div>
+<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i>Vermögen realisiert (Start + realisierter PnL)</span></div><div id="eq"></div></div>
 <div class="grid2">
  <div class="card"><h2>Erwarteter vs. realisierter Gewinn je Strategie</h2><p class="note" id="pnlnote">Die Lücke ist, was Latenz, Konkurrenz und Leg-Failures kosten.</p>
   <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Erwartet bei Erkennung</span><span><i class="sw" style="background:var(--s2)"></i>Realisiert</span></div><div id="pnl"></div></div>
@@ -621,7 +639,7 @@ const tip=$("tip");
 $("ttl").textContent=D.title;document.title=D.title;
 if(D.kind!=="arb"&&D.kind!=="ladder"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
  $("pnlnote").textContent="Erwartet = Gewinn, wenn jede Position so ausgeht, wie die Strategie annimmt. Realisiert zählt erst bei Auflösung."}
-$("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}">${n.label}${n.ret==null?"":`<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span>`}</a>`).join(""):"";
+$("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}"${n.real==null?"":` title="realisiert ${(n.real>=0?"+":"")+fmt(n.real*100,1)} %"`}>${n.label}${n.ret==null?"":`<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span>`}</a>`).join(""):"";
 function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";tip.style.top=(e.clientY+14)+"px"}
 function hideTip(){tip.style.display="none"}
 const NS="http://www.w3.org/2000/svg";
@@ -633,32 +651,41 @@ const K=D.kpi;
 $("range").textContent=K.t0?`${dt(K.t0)} – ${dt(K.t1)} · ${K.scans.toLocaleString("de-AT")} Scans · ${K.baskets} Märkte/Körbe · Median-Scan ${fmt(K.med_scan_ms,0)} ms`:"Noch keine Daten";
 if(K.halted)$("halt").innerHTML=`<div class="warnbox"><b>Handel pausiert:</b> ${K.halted}</div>`;
 if(D.source==="mock")$("halt").innerHTML+=`<div class="warnbox">Diese Zahlen stammen aus dem <b>synthetischen Mock-Markt</b> und testen nur die Pipeline. Sie sagen nichts über reale Profitabilität aus.</div>`;
-const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)}`],["Rendite",pct(K.ret),`Max. Drawdown ${pct(K.mdd)}`],
+const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Positionen`],["Rendite",pct(K.ret),`Max. Drawdown ${pct(K.mdd)}`],
+ ["Vermögen realisiert",usd(D.start+K.real),"Start + nur aufgelöste Gewinne/Verluste"],["Rendite realisiert",pct(K.real_ret),`PnL realisiert ${usd(K.real)}`],
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
-if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[2][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[4]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[5][2]="Preis unter der Strategie-Grenze"}
+if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[6]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[7][2]="Preis unter der Strategie-Grenze"}
+if(D.overview&&D.overview.length>1){const O=D.overview,sg=v=>v>0.00005?"pos":v<-0.00005?"neg":"";
+ const tot=O.reduce((a,o)=>({start:a.start+o.start,equity:a.equity+o.equity,real:a.real+o.real,n:a.n+o.n,won:a.won+o.won,open:a.open+o.open}),{start:0,equity:0,real:0,n:0,won:0,open:0});
+ const row=(o,b)=>`<tr${b?' style="font-weight:600"':""}><td>${o.href?`<a href="${o.href}">${o.label}</a>`:o.label}</td><td class="num">${usd(o.equity)}</td><td class="num ${sg(o.equity/o.start-1)}">${pct(o.equity/o.start-1)}</td><td class="num">${usd(o.start+o.real)}</td><td class="num ${sg(o.real)}">${usd(o.real)}</td><td class="num ${sg(o.real)}">${pct(o.real/o.start)}</td><td class="num">${o.won} / ${o.n}</td><td class="num">${o.open}</td></tr>`;
+ $("alltbl").innerHTML=`<tr><th>Strategie</th><th class="num">Equity</th><th class="num">Rendite</th><th class="num">Vermögen realisiert</th><th class="num">PnL realisiert</th><th class="num">Rendite realisiert</th><th class="num">Gewonnen / aufgelöst</th><th class="num">Offen</th></tr>`+
+  [...O].sort((a,b)=>b.real/b.start-a.real/a.start).map(o=>row(o)).join("")+row(Object.assign(tot,{label:"Gesamt"}),true);
+ $("allcard").style.display=""}
 $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
 
 // ---------- equity line
 (function(){
  const box=$("eq"),W=1100,H=260,m={l:56,r:12,t:10,b:26};const c=D.curve;if(c.length<2){box.textContent="Zu wenig Daten.";return}
  const svg=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img","aria-label":"Equity-Verlauf"},box);
- const t0=c[0].t,t1=c[c.length-1].t,ys=c.map(p=>p.e).concat([D.start]);let y0=Math.min(...ys),y1=Math.max(...ys);const pad=(y1-y0)*0.08||5;y0-=pad;y1+=pad;
+ const t0=c[0].t,t1=c[c.length-1].t,ys=c.map(p=>p.e).concat(c.map(p=>p.r??p.e),[D.start]);let y0=Math.min(...ys),y1=Math.max(...ys);const pad=(y1-y0)*0.08||5;y0-=pad;y1+=pad;
  const X=t=>m.l+(t-t0)/(t1-t0||1)*(W-m.l-m.r),Y=v=>m.t+(1-(v-y0)/(y1-y0))*(H-m.t-m.b);
  for(const v of ticks(y0,y1)){el("line",{x1:m.l,x2:W-m.r,y1:Y(v),y2:Y(v),stroke:"var(--grid)"},svg);el("text",{x:m.l-8,y:Y(v)+4,"text-anchor":"end"},svg).textContent="$"+fmt(v,0)}
  const nx=6;for(let i=0;i<=nx;i++){const t=t0+(t1-t0)*i/nx;el("text",{x:X(t),y:H-6,"text-anchor":i==0?"start":i==nx?"end":"middle"},svg).textContent=dt(t)}
  el("line",{x1:m.l,x2:W-m.r,y1:Y(D.start),y2:Y(D.start),stroke:"var(--muted)","stroke-dasharray":"4 4"},svg);
  el("path",{d:c.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.e).toFixed(1)).join(""),fill:"none",stroke:"var(--s1)","stroke-width":2,"stroke-linejoin":"round"},svg);
+ el("path",{d:c.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.r??p.e).toFixed(1)).join(""),fill:"none",stroke:"var(--s3)","stroke-width":2,"stroke-dasharray":"6 4","stroke-linejoin":"round"},svg);
  const cross=el("line",{y1:m.t,y2:H-m.b,stroke:"var(--muted)",visibility:"hidden"},svg),dot=el("circle",{r:4.5,fill:"var(--s1)",stroke:"var(--surface)","stroke-width":2,visibility:"hidden"},svg);
  const hit=el("rect",{x:m.l,y:m.t,width:W-m.l-m.r,height:H-m.t-m.b,fill:"transparent"},svg);
  hit.addEventListener("mousemove",e=>{const r=svg.getBoundingClientRect(),tx=t0+((e.clientX-r.left)*W/r.width-m.l)/(W-m.l-m.r)*(t1-t0);let b=c[0];for(const p of c)if(Math.abs(p.t-tx)<Math.abs(b.t-tx))b=p;
   cross.setAttribute("x1",X(b.t));cross.setAttribute("x2",X(b.t));dot.setAttribute("cx",X(b.t));dot.setAttribute("cy",Y(b.e));cross.setAttribute("visibility","visible");dot.setAttribute("visibility","visible");
-  showTip(e,`<b>${dt(b.t)}</b><br>Equity ${usd(b.e)}<br>davon gebunden ${usd(b.l)}`)});
+  showTip(e,`<b>${dt(b.t)}</b><br>Equity ${usd(b.e)}<br>Vermögen realisiert ${usd(b.r??b.e)}<br>davon gebunden ${usd(b.l)}`)});
  hit.addEventListener("mouseleave",()=>{hideTip();cross.setAttribute("visibility","hidden");dot.setAttribute("visibility","hidden")});
 })();
 
 const NAMES={ladder_buy_all:"Logische Arbitrage",underdog_buy:"Underdog-Sport",favorite_buy:"Favorit-Kleinmarkt",weather_no_buy:"Wetter-NO",binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO",
- endgame_buy:"Endspiel-Ernte",longshot_buy:"Longshot: NO kaufen",weather_buy:"Wetter-Modell"};
+ endgame_buy:"Endspiel-Ernte",longshot_buy:"Longshot: NO kaufen",weather_buy:"Wetter-Modell",fussball_dog_buy:"Fußball-Außenseiter",
+ wetter_no_breit_buy:"Wetter-NO breit",finanz_dog_buy:"Finanz-Außenseiter",mlb_spread_buy:"MLB-Spread"};
 // ---------- grouped bars: expected vs realized
 (function(){
  const S=Object.entries(D.strat);const box=$("pnl");if(!S.length){box.textContent="Noch keine Trades.";return}

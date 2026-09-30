@@ -179,3 +179,57 @@ def test_weather_with_game_start_time_is_not_sport(tmp_path):
     # all buckets of one city and day are one event for the bootstrap
     assert game_key(wx["question"]) == game_key("Will the highest temperature in Paris be 26°C or higher on September 3?")
     assert game_key(wx["question"]) != game_key("Will the highest temperature in Paris be 24°C on September 4?")
+
+
+def test_categories_v2_whole_words_finance_and_social(tmp_path):
+    import sqlite3
+    from arb.study import SCHEMA, fix_categories, market_type, sport_kind
+    gs = {"gameStartTime": "x"}
+    # whole words only: "rain" in Ukraine / Rainbow Six, "eth" in Elizabeth
+    assert categorize(dict(gs, question="Hungary vs. Ukraine: O/U 2.5")) == "Sport"
+    assert categorize({"question": "Rainbow Six Siege: FaZe Clan vs LOS (BO3) - Playoffs"}) == "Sport"
+    assert categorize(dict(gs, question="ITF Granby: Elizabeth Mandlik vs Anna Kalinskaya")) == "Sport"
+    assert categorize({"question": "Will it rain in NYC on July 4?"}) == "Wetter"
+    # finance and tweet counts carry a gameStartTime but are no sport
+    assert categorize(dict(gs, question="WTI Crude Oil (WTI) closes above $94 on September 30?")) == "Finanz"
+    assert categorize(dict(gs, question="Will Google (GOOGL) close above $340 end of September?")) == "Finanz"
+    assert categorize({"question": "S&P 500 (SPX) Up or Down on September 24?"}) == "Finanz"
+    assert categorize({"question": "Bitcoin Up or Down - September 3, 4PM ET"}) == "Krypto"
+    assert categorize(dict(gs, question="Will Elon Musk post 40-64 tweets from September 28 to September 30?")) == "Social"
+    # brackets alone are no ticker
+    assert categorize(dict(gs, question="ITF MEN: M15 Champaign, IL (USA), hard: A Farzam vs M Arseneault")) == "Sport"
+    assert sport_kind("Counter-Strike: Leo Team vs mellren - Map 4 Winner") == "Esports"
+    assert sport_kind("W35 Kyoto: Kisa Yoshioka vs Jiangxue Han") == "Tennis"
+    assert sport_kind("Spread: New York Yankees (-1.5)") == "US"
+    assert sport_kind("AS Roma vs. FC Barcelona: O/U 1.5") == "Fussball"
+    assert market_type("AS Roma vs. FC Barcelona: O/U 1.5") == "Ueber/Unter"
+    assert market_type("Will AS Roma vs. FC Barcelona end in a draw?") == "Remis"
+    assert market_type("Will FC Barcelona win on 2026-09-30?") == "Sieg"
+    assert market_type("Exact Score: AS Roma 2 - 3 FC Barcelona?") == "Exact Score"
+    assert market_type("Will Robinhood (HOOD) beat quarterly earnings?") == "Quartalszahlen"
+    # stored rows are re-filed once per categories version
+    db = sqlite3.connect(str(tmp_path / "s.sqlite"))
+    db.executescript(SCHEMA)
+    for cid, q, cat, sp in (("a", "WTI Crude Oil (WTI) closes above $94 on September 30?", "Sport", 1),
+                            ("b", "Rainbow Six Siege: M80 vs Wildcard Gaming (BO3)", "Wetter", 0),
+                            ("c", "Lakers vs. Celtics", "Sport", 1)):
+        db.execute("INSERT INTO markets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (cid, q, cat, 0, sp, 100, 0, 0, 0, None, None, 0.5, 0.5, 5, 0))
+    assert fix_categories(db) == 2
+    assert dict(db.execute("SELECT condition_id, category FROM markets")) == {"a": "Finanz", "b": "Sport", "c": "Sport"}
+    assert fix_categories(db) == 0
+
+
+def test_backtest_rules_with_types_and_no_side():
+    from arb.backtest import RULES, run_rule
+    rule = {r["key"]: r for r in RULES}
+    rows = []
+    for i in range(40):  # O/U underdogs at 0.10 that win 1 in 4, plain "who wins" underdogs that never win
+        rows.append((f"Team{i} FC vs. Club{i}: O/U 2.5", "Sport", int(i % 4 == 0), i, 5000, None, None, 0.10, None))
+        rows.append((f"Will Team{i} FC win on 2026-09-{i % 28 + 1:02d}?", "Sport", 0, i, 5000, None, None, 0.10, None))
+    r = run_rule(rows, rule["fussball_dog_6h"], n_boot=50)
+    assert r["n"] == 40 and r["hit"] == 0.25  # only the O/U side, the win markets are filtered out
+    wx = [(f"Will the highest temperature in City{i} be 20°C on July {i % 28 + 1}?", "Wetter", 0, i, 800,
+           None, None, 0.30, None) for i in range(40)]
+    r = run_rule(wx, rule["wetter_no_breit_6h"], n_boot=50)
+    assert r["n"] == 40 and abs(r["price"] - 0.70) < 1e-9 and r["hit"] == 1.0  # NO side at 0.70 only, never the YES

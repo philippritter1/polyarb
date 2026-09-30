@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -35,45 +36,116 @@ CREATE TABLE IF NOT EXISTS markets(
 CREATE TABLE IF NOT EXISTS skipped(condition_id TEXT PRIMARY KEY, reason TEXT, ts REAL);
 """
 
-# checked BEFORE the sport signals: Polymarket gives weather and crypto markets a gameStartTime too
+# checked BEFORE the sport signals: Polymarket gives weather, crypto, finance and "tweet count" markets a
+# gameStartTime too. Words match whole words only ("rain" must not hit Ukraine or Rainbow Six, "eth" not Elizabeth).
 NON_SPORT = [
-    ("Wetter", ("temperature", "rain", "snow", "hurricane", "weather")),
-    ("Krypto", ("up or down", "bitcoin", "btc", "ethereum", "eth ", "solana", "xrp", "crypto", "doge")),
+    ("Wetter", ("temperature", "rain", "rainfall", "snow", "snowfall", "hurricane", "weather", "precipitation")),
+    ("Krypto", ("bitcoin", "btc", "ethereum", "eth", "solana", "xrp", "crypto", "doge", "dogecoin", "bnb")),
 ]
+SOCIAL_RE = re.compile(r"\bpost\b.*\b(tweets?|posts|truth social)\b|\btweets?\b", re.I)
+# a ticker in brackets plus a price verb ("Google (GOOGL) close above", "S&P 500 (SPX) Up or Down"),
+# commodities and indices; the brackets alone would also match "(USA)" in tennis or "(BO3)" in esports
+FINANCE_RE = re.compile(
+    r"\([A-Za-z]{1,6}\)[^?]*\b(close[sd]?|closes|finish(es)?|hit|up or down|opens?|beat|earnings|revenue|"
+    r"operating margin|market cap)\b|\b(crude oil|natural gas|s&p 500|nasdaq|dow jones|treasury yield)\b|"
+    r"\b(gold|silver) \((xauusd|xagusd)\)", re.I)
 CATEGORY_WORDS = [
-    *NON_SPORT,
     ("Krypto", ("token", "fdv")),
     ("Politik", ("election", "president", "senate", "prime minister", "parliament", "trump", "vote", "governor",
                  "minister", "party", "nominee")),
-    ("Wirtschaft", ("fed ", "interest rate", "inflation", "cpi", "gdp", "unemployment", "recession", "stock",
-                    "close above", "s&p", "nasdaq", "earnings")),
-    ("Tech/KI", (" ai ", "openai", "google", "apple", "nvidia", "model", "gpt", "llm", "tesla")),
-    ("Kultur", ("oscar", "grammy", "movie", "album", "box office", "song", "tweet", "youtube", "mrbeast")),
+    ("Wirtschaft", ("fed", "interest rate", "interest rates", "inflation", "cpi", "gdp", "unemployment",
+                    "recession", "stock", "earnings")),
+    ("Tech/KI", ("ai", "openai", "google", "apple", "nvidia", "model", "gpt", "llm", "tesla")),
+    ("Kultur", ("oscar", "grammy", "movie", "album", "box office", "song", "youtube", "mrbeast")),
 ]
+_WORDS_RE: Dict[tuple, re.Pattern] = {}
+
+
+def _has(q: str, words: tuple) -> bool:
+    rx = _WORDS_RE.get(words)
+    if rx is None:
+        rx = _WORDS_RE[words] = re.compile(r"(?<![\w])(" + "|".join(re.escape(w) for w in words) + r")(?![\w])")
+    return bool(rx.search(q))
 
 
 def categorize(m: dict) -> str:
-    q = f" {(m.get('question') or '').lower()} "
+    q = (m.get("question") or "").lower()
+    if SOCIAL_RE.search(q):
+        return "Social"
     for name, words in NON_SPORT:
-        if any(w in q for w in words):
+        if _has(q, words):
             return name
+    if FINANCE_RE.search(q):
+        return "Finanz"
+    if "up or down" in q:
+        return "Krypto"
     if m.get("gameStartTime") or m.get("sportsMarketType"):
         return "Sport"
-    if any(w in q for w in (" vs. ", " vs ", " win on ", "o/u", "spread:", "exact score", "moneyline")):
+    if any(w in f" {q} " for w in (" vs. ", " vs ", " win on ", "o/u", "spread:", "exact score", "moneyline")):
         return "Sport"
     for name, words in CATEGORY_WORDS:
-        if any(w in q for w in words):
+        if _has(q, words):
             return name
     return "Sonstiges"
 
 
+ESPORTS_RE = re.compile(r"^(valorant|dota 2|lol|league of legends|counter-strike|cs2|rainbow six|overwatch|"
+                        r"call of duty|rocket league|mobile legends|honor of kings|starcraft)\b|\bmap \d|"
+                        r"game \d winner|total kills|first blood", re.I)
+TENNIS_RE = re.compile(r"^(itf|atp|wta|m\d\d|w\d\d|us open|wimbledon|roland|australian open)\b|challenger|"
+                       r"qualification atp|main draw|set \d winner", re.I)
+US_RE = re.compile(r"run scored|inning|strikeouts|yankees|dodgers|padres|red sox|mets|cubs|guardians|mariners|"
+                   r"phillies|brewers|orioles|marlins|royals|nationals|blue jays|astros|braves|pirates|rockies|"
+                   r"angels|white sox|rays|cardinals|diamondbacks|\bnfl\b|\bnba\b|\bwnba\b|\bnhl\b|"
+                   r"touchdown|yards|rebounds", re.I)
+
+
+def sport_kind(question: str) -> str:
+    """Rough sub-kind of a sport market (~95 % right on the study data): Esports, Tennis, US (mostly MLB)
+    or Fussball (football and the rest)."""
+    q = question or ""
+    if ESPORTS_RE.search(q):
+        return "Esports"
+    if TENNIS_RE.search(q):
+        return "Tennis"
+    if US_RE.search(q):
+        return "US"
+    return "Fussball"
+
+
+MARKET_TYPES = [("Exact Score", "exact score"), ("Remis", "end in a draw"), ("Halbzeit", "leading at halftime"),
+                ("Beide treffen", "both teams"), ("Ueber/Unter", "o/u|over/under"), ("Spread", "spread|handicap"),
+                ("Sieg", r"win on \d"), ("Satz/Map/Game", r"set \d|map \d|game \d"), ("Run 1. Inning", "run scored"),
+                ("Quartalszahlen", "beat quarterly earnings|earnings|revenue|operating margin")]
+
+
+def market_type(question: str) -> str:
+    """Kind of bet: sport underdogs won on totals/spreads/draws but lost on plain "who wins" markets."""
+    q = (question or "").lower()
+    for name, rx in MARKET_TYPES:
+        if re.search(rx, q):
+            return name
+    return "Match-Sieger" if re.search(r"\bvs\.?\b", q) else "Andere"
+
+
+CATEGORIES_VERSION = 2
+
+
 def fix_categories(db: sqlite3.Connection) -> int:
-    """Rows collected before 30.09. filed weather/crypto markets with a gameStartTime under "Sport"."""
+    """Re-file stored rows with the current categorize() (v2, 01.10.: whole words, Finanz and Social).
+    Runs once per CATEGORIES_VERSION. Without the stored gameStartTime the old `sports` flag stands in."""
+    db.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value REAL)")
+    row = db.execute("SELECT value FROM meta WHERE key='categories_version'").fetchone()
+    if row and row[0] >= CATEGORIES_VERSION:
+        return 0
     n = 0
-    for name, words in NON_SPORT:
-        like = " OR ".join("lower(question) LIKE ?" for _ in words)
-        n += db.execute(f"UPDATE markets SET category = ?, sports = 0 WHERE category != ? AND ({like})",
-                        (name, name, *[f"%{w}%" for w in words])).rowcount
+    for cid, q, cat, sports in db.execute("SELECT condition_id, question, category, sports FROM markets").fetchall():
+        new = categorize({"question": q, "gameStartTime": "x" if sports or cat == "Sport" else None})
+        if new != cat:
+            db.execute("UPDATE markets SET category = ?, sports = ? WHERE condition_id = ?",
+                       (new, int(new == "Sport"), cid))
+            n += 1
+    db.execute("INSERT OR REPLACE INTO meta VALUES('categories_version', ?)", (CATEGORIES_VERSION,))
     db.commit()
     return n
 

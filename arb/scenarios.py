@@ -292,11 +292,21 @@ class PriceBandStrategy(Strategy):
       weather_no weather buckets priced 3-10 % in markets under 5k $ won ~1 %: their NO side at
                  90-97 % won ~99 %, +2.5-3 % per bet after fee and 2 cents, in both halves
     Buys at the real ask and skips wide spreads.
+
+    Optional filters (study 01.10., confirmed or refuted on 11,624 markets the rules were not found on):
+      kinds       sport sub-kinds to keep (Fussball, Esports, Tennis, US) – sport underdogs lost in esports
+      types       bet types to keep (Ueber/Unter, Spread, Remis, Halbzeit, Sieg, Match-Sieger, ...) –
+                  underdogs won on totals/spreads/draws but lost on plain "who wins" markets
+      exclude_types  bet types to skip (e.g. Quartalszahlen for finance)
+      outcome     only this side, e.g. "No" (weather: every YES bucket was overpriced)
     """
 
     def candidates(self, now: float) -> List[Signal]:
-        from .study import categorize
+        from .study import categorize, market_type, sport_kind
         c = self.cfg
+        kinds, types = c.get("kinds"), c.get("types")
+        exclude_types = set(c.get("exclude_types") or ())
+        want_outcome = str(c.get("outcome") or "").lower()
         lo, hi = float(c.get("min_price", 0.03)), float(c.get("max_price", 0.10))
         h_min, h_max = float(c.get("min_hours_to_end", 0.5)) * 3600, float(c.get("max_hours_to_end", 8)) * 3600
         v_min, v_max = float(c.get("min_volume", 0)), float(c.get("max_volume") or 1e18)
@@ -312,6 +322,12 @@ class PriceBandStrategy(Strategy):
                 continue
             if not m.get("acceptingOrders", True) or categorize(m) != category:
                 continue
+            q = m.get("question") or ""
+            if kinds and sport_kind(q) not in kinds:
+                continue
+            mtype = market_type(q)
+            if (types and mtype not in types) or mtype in exclude_types:
+                continue
             vol = float(m.get("volumeNum") or m.get("volume") or 0)
             if not v_min <= vol < v_max:
                 continue
@@ -323,15 +339,21 @@ class PriceBandStrategy(Strategy):
             group = f"event:{evs[0].get('id')}" if evs[0].get("id") else str(m.get("conditionId") or m.get("id"))
             for i in (0, 1):
                 p = float(prices[i])
+                if want_outcome and str(outs[i]).lower() != want_outcome:
+                    continue
                 if lo - 0.01 <= p <= hi:
                     out.append(Signal(str(toks[i]), group, m.get("question", ""), str(outs[i]),
                                       fair=min(0.99, p + float(c.get("assumed_edge", 0.03))), max_price=hi,
-                                      fee=self.fees.resolve(m, "sports" if category == "Sport" else category.lower()),
+                                      fee=self.fees.resolve(m, FEE_CATEGORY.get(category, category.lower())),
                                       end_ts=end, delay_s=_delay(m),
-                                      reason=f"{c.get('side', 'side')} {p:.3f} vol {vol:,.0f}", min_ask=lo,
+                                      reason=f"{c.get('side', 'side')} {p:.3f} {mtype} vol {vol:,.0f}", min_ask=lo,
                                       max_spread=float(c.get("max_spread", 0.03))))
         return out
 
+
+FEE_CATEGORY = {"Sport": "sports", "Wetter": "weather", "Krypto": "crypto", "Finanz": "finance",
+                "Social": "mentions", "Politik": "politics", "Wirtschaft": "economics", "Kultur": "culture",
+                "Tech/KI": "tech"}
 
 STRATEGIES = {"endgame": EndgameStrategy, "longshot": LongshotStrategy, "weather": WeatherStrategy,
               "underdog": PriceBandStrategy, "favorite": PriceBandStrategy, "band": PriceBandStrategy}

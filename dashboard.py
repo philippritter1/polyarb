@@ -107,7 +107,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
-                  "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
+                  "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -222,6 +222,31 @@ def _summary(db_path: str, start: float) -> float:
     return (row[0] / start - 1) if row and start else 0.0
 
 
+def _cached_stress(study_db: str, stress_test) -> list:
+    """The stress test takes about a minute; the study changes every 30 min, the dashboard every 10."""
+    import hashlib
+    import json
+    from arb import backtest
+    p = Path(study_db)
+    if not p.exists():
+        return []
+    src = Path(backtest.__file__).read_bytes() + Path(backtest.__file__).with_name("study.py").read_bytes()
+    key = f"{p.stat().st_mtime_ns}|{p.stat().st_size}|{hashlib.sha1(src).hexdigest()}"
+    cache = p.with_name("stress-cache.json")
+    try:
+        c = json.loads(cache.read_text("utf-8"))
+        if c.get("key") == key:
+            return c["stress"]
+    except (OSError, ValueError, KeyError):
+        pass
+    stress = stress_test(study_db, n_boot=500)
+    try:
+        cache.write_text(json.dumps({"key": key, "stress": stress}), "utf-8")
+    except OSError:
+        pass
+    return stress
+
+
 def build_all(cfg: dict, out: str) -> list:
     """Arbitrage page at `out`, every enabled scenario at <dir>/<name>/, the market study at <dir>/study/
     and the export section at <dir>/export/ – all linked by one tab bar."""
@@ -251,7 +276,7 @@ def build_all(cfg: dict, out: str) -> list:
     from arb.odds import compare
     from arb.study import calibration
     study_db = str(data_dir / "study.sqlite")
-    stress = stress_test(study_db, n_boot=500)
+    stress = _cached_stress(study_db, stress_test)
     books = compare(study_db)
     (root / "study").mkdir(parents=True, exist_ok=True)
     _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study"), stress, books), "utf-8")

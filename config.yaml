@@ -142,6 +142,98 @@ scenarios:
     max_event_usd: 100           # pro Stadt und Tag (höchstens ein Bucket gewinnt)
     max_new_per_step: 10
     max_open_positions: 200
+  # --- 01.10.: vier neue Regeln aus der Studie (123.771 Märkte, danach Test auf 11.624 neuen Märkten).
+  # Festgeschrieben – nicht nachjustieren, sondern nach 4-6 Wochen nur die Live-Zahlen bewerten.
+  fussball_dog:
+    enabled: true
+    title: Fußball-Außenseiter
+    strategy: band               # Studie: +14,5 % nach Kosten; neue Daten (Anfang Juli, WM-Zeit) -18 % -> ungeklärt
+    category: Sport
+    kinds: [Fussball]            # kein Esports/Tennis/US
+    types: [Ueber/Unter, Spread, Remis, Halbzeit]   # "Wer gewinnt?"-Außenseiter verloren -16 bis -50 %
+    side: Außenseiter
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.03
+    max_price: 0.25
+    min_volume: 1000
+    min_hours_to_end: 0.5
+    max_hours_to_end: 8
+    max_spread: 0.03
+    max_slippage: 0.01
+    assumed_edge: 0.03
+    min_liquidity: 500
+    max_position_usd: 10
+    max_event_usd: 30            # pro Spiel
+    max_new_per_step: 6
+    max_open_positions: 150
+  wetter_no_breit:
+    enabled: true
+    title: Wetter-NO breit
+    strategy: band               # Studie: JA-Buckets sind durchweg zu teuer; NO 55-97 % unter 5k $: +8,4 %, neue Daten +5,8 %
+    category: Wetter
+    outcome: "No"                # nur die NO-Seite
+    side: NO
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.55
+    max_price: 0.97
+    max_volume: 5000             # Volumen beim Kauf; über 5k $ war es negativ
+    min_hours_to_end: 2
+    max_hours_to_end: 12         # getestet 6 h vorher
+    max_spread: 0.02
+    max_slippage: 0.01
+    assumed_edge: 0.05
+    min_liquidity: 100
+    max_position_usd: 25
+    max_event_usd: 100           # pro Stadt und Tag: höchstens ein Bucket tritt ein
+    max_new_per_step: 10
+    max_open_positions: 200
+  finanz_dog:
+    enabled: true
+    title: Finanz-Außenseiter
+    strategy: band               # Studie: Favoriten bei 75-90 % zu teuer, Außenseiter 10-25 % +36 %; nur 62 Handelstage, neu kaum Daten
+    category: Finanz             # Schlusskurse, Hoch/Tief, Up or Down von Aktien, Indizes, Öl, Gold
+    exclude_types: [Quartalszahlen]
+    side: Außenseiter
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.10
+    max_price: 0.25
+    min_volume: 1000
+    min_hours_to_end: 1
+    max_hours_to_end: 24
+    max_spread: 0.03
+    max_slippage: 0.01
+    assumed_edge: 0.04
+    min_liquidity: 300
+    max_position_usd: 10
+    max_event_usd: 30            # pro Leiter (z. B. alle WTI-Schwellen eines Tages)
+    max_new_per_step: 6
+    max_open_positions: 80
+  mlb_spread:
+    enabled: true
+    title: MLB-Spread-Außenseiter
+    strategy: band               # Studie: +25 % (n=133); in den neuen Daten keine Fälle -> ungetestet
+    category: Sport
+    kinds: [US]
+    types: [Spread]
+    side: Außenseiter
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.10
+    max_price: 0.25
+    min_volume: 1000
+    min_hours_to_end: 0.5
+    max_hours_to_end: 12
+    max_spread: 0.03
+    max_slippage: 0.01
+    assumed_edge: 0.04
+    min_liquidity: 300
+    max_position_usd: 10
+    max_event_usd: 20
+    max_new_per_step: 6
+    max_open_positions: 80
   favorite:
     enabled: false               # abgeschaltet 30.09.: beruhte auf vermischten Sport/Wetter-Daten; echter Sport: -4,6 %
     title: Favorit-Kleinmarkt

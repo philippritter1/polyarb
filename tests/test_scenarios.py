@@ -442,3 +442,44 @@ def test_weather_no_band_buys_the_no_side_of_cheap_buckets(tmp_path):
                            FakeClient(markets=[wx, game], books=books), SimClock(NOW))
     under.step()
     assert list(under.pf.positions) == ["LY"]
+
+
+def test_band_filters_kind_type_and_outcome(tmp_path):
+    kw = dict(gameStartTime="2026-09-21T16:00:00Z", end="2026-09-21T18:00:00Z", volumeNum=5000)
+    ou = _market("f1", "AS Roma vs. FC Barcelona: O/U 3.5", ["0.20", "0.80"], ["OV", "UN"], **kw)
+    win = _market("f2", "Will AS Roma win on 2026-09-21?", ["0.20", "0.80"], ["RW", "RN"], **kw)
+    esp = _market("e1", "Counter-Strike: Leo Team vs mellren - Map 4 Winner", ["0.20", "0.80"], ["LT", "ML"], **kw)
+    books = {t: ob(t, [(p - 0.01, 500)], [(p, 500)]) for t, p in
+             (("OV", 0.20), ("UN", 0.80), ("RW", 0.20), ("RN", 0.80), ("LT", 0.20), ("ML", 0.80))}
+    cfg = _cfg(tmp_path, "fussball_dog", strategy="band", category="Sport", kinds=["Fussball"],
+               types=["Ueber/Unter", "Spread", "Remis", "Halbzeit"], min_price=0.03, max_price=0.25,
+               min_volume=1000, max_position_usd=10)
+    eng = ScenarioEngine("fussball_dog", cfg, FakeClient(markets=[ou, win, esp], books=books), SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["OV"]  # not the "who wins" market, not esports
+    assert eng.store.db.execute("SELECT strategy FROM executions").fetchone()[0] == "fussball_dog_buy"
+    # weather: only the NO side, even when the YES side is in the band too
+    wkw = dict(end="2026-09-21T20:00:00Z", volumeNum=1800)
+    a = _market("w1", "Will the highest temperature in Paris be 24°C on September 21?", ["0.40", "0.60"],
+                ["Y24", "N24"], **wkw)
+    b = _market("w2", "Will the highest temperature in Paris be 25°C on September 21?", ["0.60", "0.40"],
+                ["Y25", "N25"], **wkw)
+    wbooks = {t: ob(t, [(p - 0.01, 500)], [(p, 500)]) for t, p in
+              (("Y24", 0.40), ("N24", 0.60), ("Y25", 0.60), ("N25", 0.40))}
+    wcfg = _cfg(tmp_path / "w", "wetter_no_breit", strategy="band", category="Wetter", outcome="No",
+                min_price=0.55, max_price=0.97, max_volume=5000, max_hours_to_end=12, max_spread=0.02,
+                max_position_usd=25)
+    weng = ScenarioEngine("wetter_no_breit", wcfg, FakeClient(markets=[a, b], books=wbooks), SimClock(NOW))
+    weng.step()
+    assert list(weng.pf.positions) == ["N24"]
+    # finance: quarterly earnings are skipped
+    fkw = dict(gameStartTime="2026-09-21T16:00:00Z", end="2026-09-21T20:00:00Z", volumeNum=5000)
+    px = _market("p1", "WTI Crude Oil (WTI) closes above $94 on September 21?", ["0.15", "0.85"], ["WY", "WN"], **fkw)
+    er = _market("p2", "Will Robinhood (HOOD) beat quarterly earnings?", ["0.15", "0.85"], ["HY", "HN"], **fkw)
+    fbooks = {t: ob(t, [(p - 0.01, 500)], [(p, 500)]) for t, p in
+              (("WY", 0.15), ("WN", 0.85), ("HY", 0.15), ("HN", 0.85))}
+    fcfg = _cfg(tmp_path / "f", "finanz_dog", strategy="band", category="Finanz", exclude_types=["Quartalszahlen"],
+                min_price=0.10, max_price=0.25, min_volume=1000, max_hours_to_end=24, max_position_usd=10)
+    feng = ScenarioEngine("finanz_dog", fcfg, FakeClient(markets=[px, er], books=fbooks), SimClock(NOW))
+    feng.step()
+    assert list(feng.pf.positions) == ["WY"]

@@ -18,6 +18,15 @@ from typing import Dict, List, Optional
 
 RULES = [
     dict(key="underdog_6h", name="Underdog-Sport (6 h vorher, 3–10 %)", cp="p_6h", lo=0.03, hi=0.10, cat="Sport"),
+    # found 01.10. on 123,771 markets; A and B were then tested on 11,624 new ones (B held, A did not in early July)
+    dict(key="fussball_dog_6h", name="Fußball-Außenseiter O/U, Spread, Remis, Halbzeit (6 h, 3–25 %)", cp="p_6h",
+         lo=0.03, hi=0.25, cat="Sport", kinds=("Fussball",), types=("Ueber/Unter", "Spread", "Remis", "Halbzeit")),
+    dict(key="wetter_no_breit_6h", name="Wetter-NO 55–97 % bis 5k $ (6 h vorher)", cp="p_6h", lo=0.55, hi=0.97,
+         cat="Wetter", vol=(0, 5e3), outcome="no"),
+    dict(key="finanz_dog_6h", name="Finanz-Außenseiter ohne Quartalszahlen (6 h, 10–25 %)", cp="p_6h", lo=0.10,
+         hi=0.25, cat="Finanz", exclude_types=("Quartalszahlen",)),
+    dict(key="mlb_spread_6h", name="MLB-Spread-Außenseiter (6 h, 10–25 %)", cp="p_6h", lo=0.10, hi=0.25, cat="Sport",
+         kinds=("US",), types=("Spread",)),
     dict(key="weather_no_6h", name="Wetter-NO bis 5k $ (6 h vorher, 90–97 %)", cp="p_6h", lo=0.90, hi=0.97,
          cat="Wetter", vol=(0, 5e3)),
     dict(key="weather_no_1d", name="Wetter-NO bis 5k $ (1 Tag vorher, 90–97 %)", cp="p_1d", lo=0.90, hi=0.97,
@@ -38,15 +47,28 @@ def game_key(question: str) -> str:
     return re.split(r":| - | O/U| Spread| \(", question or "")[0].strip().lower()
 
 
+def _keep(q: str, rule: dict) -> bool:
+    from .study import market_type, sport_kind
+    if rule.get("kinds") and sport_kind(q) not in rule["kinds"]:
+        return False
+    if rule.get("types") or rule.get("exclude_types"):
+        t = market_type(q)
+        if (rule.get("types") and t not in rule["types"]) or t in (rule.get("exclude_types") or ()):
+            return False
+    return True
+
+
 def _bets(rows, cp_idx: int, lo: float, hi: float, cat: Optional[str], slip: float, fee_rate: float,
-          vol: Optional[tuple] = None) -> List[dict]:
+          vol: Optional[tuple] = None, rule: Optional[dict] = None) -> List[dict]:
     out = []
+    rule = rule or {}
     v_lo, v_hi = (vol[0] or 0, vol[1] or float("inf")) if vol else (0, float("inf"))
     for q, c, outcome, t, volume, *prices in rows:
         p = prices[cp_idx]
-        if p is None or (cat and c != cat) or not v_lo <= (volume or 0) < v_hi:
+        if p is None or (cat and c != cat) or not v_lo <= (volume or 0) < v_hi or not _keep(q, rule):
             continue
-        for price, won in ((p, outcome), (1 - p, 1 - outcome)):
+        sides = ((1 - p, 1 - outcome),) if rule.get("outcome") == "no" else ((p, outcome), (1 - p, 1 - outcome))
+        for price, won in sides:
             if lo <= price < hi:
                 buy = min(price + slip, 0.99)
                 out.append(dict(g=game_key(q), t=t or 0, cost=buy + fee_rate * buy * (1 - buy), pay=won, price=price))
@@ -61,10 +83,12 @@ def _roi(bets: List[dict]) -> float:
 def run_rule(rows, rule: dict, fee_rate: float = 0.05, stress_slip: float = 0.02, stake: float = 10.0,
              n_boot: int = 1000, seed: int = 1) -> Optional[dict]:
     cp_idx = ["p_7d", "p_1d", "p_6h", "p_1h"].index(rule["cp"])
-    base = _bets(rows, cp_idx, rule["lo"], rule["hi"], rule["cat"], 0.0, fee_rate, rule.get("vol"))
+    # filter once: category, sub-kind and bet type do not depend on the cost level
+    rows = [r for r in rows if (not rule["cat"] or r[1] == rule["cat"]) and _keep(r[0], rule)]
+    base = _bets(rows, cp_idx, rule["lo"], rule["hi"], rule["cat"], 0.0, fee_rate, rule.get("vol"), rule)
     if len(base) < 20:
         return dict(rule, n=len(base))
-    stressed = _bets(rows, cp_idx, rule["lo"], rule["hi"], rule["cat"], stress_slip, fee_rate, rule.get("vol"))
+    stressed = _bets(rows, cp_idx, rule["lo"], rule["hi"], rule["cat"], stress_slip, fee_rate, rule.get("vol"), rule)
     rnd = random.Random(seed)
     games: Dict[str, list] = {}
     for b in stressed:
@@ -88,7 +112,7 @@ def run_rule(rows, rule: dict, fee_rate: float = 0.05, stress_slip: float = 0.02
     dds.sort()
     return dict(rule, n=len(base), games=len(keys), hit=sum(b["pay"] for b in base) / len(base),
                 price=sum(b["price"] for b in base) / len(base),
-                roi={f"{s:.2f}": _roi(_bets(rows, cp_idx, rule["lo"], rule["hi"], rule["cat"], s, fee_rate, rule.get("vol"))) for s in SLIPS},
+                roi={f"{s:.2f}": _roi(_bets(rows, cp_idx, rule["lo"], rule["hi"], rule["cat"], s, fee_rate, rule.get("vol"), rule)) for s in SLIPS},
                 boot_p5=boot[int(0.05 * n_boot)], boot_p95=boot[int(0.95 * n_boot)],
                 p_loss=sum(r < 0 for r in boot) / n_boot,
                 roi_first=_roi(by_time[:half]), roi_second=_roi(by_time[half:]),

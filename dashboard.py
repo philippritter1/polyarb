@@ -248,11 +248,13 @@ def build_all(cfg: dict, out: str) -> list:
              for p in pages]
 
     from arb.backtest import stress_test
+    from arb.odds import compare
     from arb.study import calibration
     study_db = str(data_dir / "study.sqlite")
     stress = stress_test(study_db, n_boot=500)
+    books = compare(study_db)
     (root / "study").mkdir(parents=True, exist_ok=True)
-    _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study"), stress), "utf-8")
+    _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study"), stress, books), "utf-8")
     built.append(str(root / "study" / "index.html"))
 
     exp = root / "export"
@@ -261,6 +263,7 @@ def build_all(cfg: dict, out: str) -> list:
     _write(exp / "studie-maerkte.csv", markets, "utf-8-sig")
     _write(exp / "studie-kalibrierung.csv", calib, "utf-8-sig")
     _write(exp / "studie-stresstest.csv", stress_csv(stress), "utf-8-sig")
+    _write(exp / "studie-buchmacher.csv", books_csv(study_db), "utf-8-sig")
     files = []  # (group, label, path relative to export/, file on disk, name inside the zip)
     for p in pages:
         folder = p["out"].parent
@@ -273,7 +276,9 @@ def build_all(cfg: dict, out: str) -> list:
               ("Studie", "Kalibrierung nach Zeitpunkt und Preisbereich", "studie-kalibrierung.csv",
                exp / "studie-kalibrierung.csv", "studie/kalibrierung.csv"),
               ("Studie", "Stresstest der Strategie-Regeln (Kosten, Glück, Zeit, Drawdown)", "studie-stresstest.csv",
-               exp / "studie-stresstest.csv", "studie/stresstest.csv")]
+               exp / "studie-stresstest.csv", "studie/stresstest.csv"),
+              ("Studie", "Fußball: Polymarket-Preise neben Pinnacle-Quoten (je Markt)", "studie-buchmacher.csv",
+               exp / "studie-buchmacher.csv", "studie/buchmacher.csv")]
     tmp = exp / "polyarb-export.zip.tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for *_, disk, arc in files:
@@ -376,7 +381,47 @@ def _stress_card(stress: list) -> str:
             + "".join(trs) + '</table></div></div>')
 
 
-def study_page(cal: dict, nav: list, stress: list | None = None) -> str:
+def books_csv(study_db: str) -> str:
+    rows = []
+    if Path(study_db).exists():
+        db = sqlite3.connect(study_db)
+        try:
+            for r in _q(db, """SELECT o.day, o.league, o.home, o.away, o.result, l.role, m.question, m.outcome,
+                                      m.p_6h, m.p_1h, l.p_book, o.source, l.score
+                               FROM odds_link l JOIN markets m ON m.condition_id = l.condition_id
+                               JOIN odds o ON o.key = l.odds_key ORDER BY o.day"""):
+                rows.append([r[0], r[1], r[2], r[3], r[4], {"home": "Heimsieg", "away": "Auswärtssieg"}.get(r[5], "Remis"),
+                             r[6], "YES" if r[7] else "NO", r[8], r[9], r[10], r[11], r[12]])
+        except sqlite3.OperationalError:
+            pass
+        db.close()
+    return _csv(["Tag", "Liga", "Heim", "Auswärts", "Ergebnis (H/D/A)", "Markt", "Polymarket-Frage", "Ausgang",
+                 "Polymarket 6 h vorher", "Polymarket 1 h vorher", "Buchmacher (ohne Marge)", "Quelle",
+                 "Namens-Übereinstimmung"], rows)
+
+
+def _books_card(b: dict | None) -> str:
+    if not b:
+        return ""
+    if not b.get("n"):
+        return ('<div class="card"><h2>Polymarket gegen Buchmacher (Fußball)</h2><p class="note">Noch keine '
+                'zugeordneten Spiele. Die Quoten von football-data.co.uk (inkl. Pinnacle-Schlussquoten) werden mit dem '
+                'nächsten Studien-Lauf geladen und den Polymarket-Märkten „Will X win on …?“ zugeordnet.</p></div>')
+    better = "Pinnacle" if b["brier_book"] < b["brier_pm"] else "Polymarket"
+    trs = "".join(f'<tr><td>{g["label"]}</td><td class="num">{g["n"]}</td><td class="num">{_de(g["price"] * 100)} %</td>'
+                  f'<td class="num">{_de(g["rate"] * 100)} %</td><td class="num {"pos" if g["roi"] > 0 else "neg"}">'
+                  f'{"+" if g["roi"] > 0 else ""}{_de(g["roi"] * 100, 0)} %</td></tr>' for g in b["groups"])
+    return (f'<div class="card"><h2>Polymarket gegen Buchmacher (Fußball)</h2><p class="note">{b["n"]} Polymarket-Märkte '
+            f'aus {b["leagues"]} Ligen, zugeordnet zu Spielen mit Pinnacle-Schlussquoten (Marge herausgerechnet). '
+            f'<b>Genauigkeit</b> (Brier-Score, kleiner = besser): Polymarket 1 h vorher {_de(b["brier_pm"], 4)} · '
+            f'Buchmacher {_de(b["brier_book"], 4)} → genauer: <b>{better}</b>. <b>Sharp-Line-Test:</b> Wenn beide '
+            f'abweichen, die Seite auf Polymarket kaufen, die der Buchmacher höher einschätzt (inkl. Fee und '
+            f'+{_de(b["slip"] * 100, 0)} Cent Aufschlag).</p><div class="tblwrap"><table><tr><th>Abweichung</th>'
+            f'<th class="num">Wetten</th><th class="num">Ø Preis</th><th class="num">gewonnen</th><th class="num">ROI</th>'
+            f'</tr>{trs}</table></div></div>')
+
+
+def study_page(cal: dict, nav: list, stress: list | None = None, books: dict | None = None) -> str:
     from arb.study import CHECKPOINT_NAMES
     if not cal.get("n"):
         body = ('<p class="sub">Noch keine Daten. Der Sammler läuft alle 30 Minuten auf dem Server und holt '
@@ -393,6 +438,7 @@ def study_page(cal: dict, nav: list, stress: list | None = None) -> str:
             'Linie = Preis sagt den Ausgang richtig voraus. <span style="color:var(--s1)">●</span> 1 Tag vorher, '
             '<span style="color:var(--s2)">●</span> 1 h vorher.</p>' + _calib_svg(cal["rows"]) + '</div>']
     body.insert(2, _stress_card(stress or []))
+    body.insert(3, _books_card(books))
     cats = cal.get("cats") or []
     rows = "".join(f'<tr><td>{html.escape(c["cat"])}</td><td>{c["group"]}</td><td class="num">{c["n"]}</td>'
                    f'<td class="num">{_de(c["price"] * 100)} %</td><td class="num">{_de(c["rate"] * 100)} %</td>'

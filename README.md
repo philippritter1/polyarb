@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 60 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
+python -m pytest -q                # 64 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -82,6 +82,8 @@ Lokal: `python run.py scenario weather` startet ein Szenario, `python run.py das
 
 **Stresstest** (im Tab „Studie“, `arb/backtest.py`): prüft die Regeln hinter Underdog, Endspiel-Ernte und Longshot-NO auf den Studiendaten gegen vier Arten, sich selbst zu täuschen: Kosten (Fee plus 0–5 Cent Aufschlag auf den historischen Kurs), Glück (Bootstrap über ganze Spiele, P(Verlust)), Zeit (erste gegen zweite Hälfte) und Schmerz (Drawdown und Verlustserie bei festen Einsätzen). Aktualisiert sich mit jedem Dashboard-Build.
 
+**Polymarket gegen Buchmacher** (im Tab „Studie“, `arb/odds.py`): Jeder Studien-Lauf lädt höchstens alle 6 h die kostenlosen Quoten-CSVs von football-data.co.uk (europäische Ligen plus Brasilien, Argentinien, Japan, Mexiko, USA, Skandinavien u. a.), rechnet die Buchmacher-Marge heraus (bevorzugt Pinnacle-Schlussquoten) und ordnet die Spiele den Polymarket-Märkten „Will X win on …?“ und „Will A vs. B end in a draw?“ zu (Namens-Normalisierung, Aliasse, Frauen- und Reserveteams ausgeschlossen). Die Karte zeigt, wer genauer ist (Brier-Score) und was es gebracht hätte, bei Abweichungen die Seite zu kaufen, die der Buchmacher höher einschätzt. Kein API-Schlüssel nötig.
+
 **Export** (Tab „Export“): alle Daten zum Herunterladen, im Format für deutsches Excel. Pro Szenario Trades und Equity-Verlauf, dazu die Studie (alle Märkte, Kalibrierung) und eine ZIP-Datei mit allem. Wird mit dem Dashboard alle 10 Minuten neu erzeugt.
 
 Jeder Studien-Lauf holt zuerst die zuletzt geschlossenen Märkte (7 Tage, auch spät aufgelöste) und setzt dann das Nachladen älterer Tage dort fort, wo der letzte Lauf aufgehört hat (Lesezeichen in `data/study.sqlite`). Ist die Historie komplett, dauert ein Lauf nur noch wenige Minuten.
@@ -100,6 +102,7 @@ arb/stream.py     WebSocket-Client und lokaler Orderbuch-Store
 arb/scenarios.py  Szenario-Engine (Budget, Positionen, Auflösung) + Strategien endgame / longshot / weather
 arb/ladder.py     Logik-Leitern in Events erkennen (Schwellen ↑/↓, Stichtage „by …“)
 arb/backtest.py   Stresstest von Preisbereich-Regeln auf den Studiendaten
+arb/odds.py       Buchmacher-Quoten (football-data.co.uk) laden, entmargen, Polymarket-Märkten zuordnen, vergleichen
 arb/study.py      Markt-Studie: aufgelöste Märkte + Preisverlauf sammeln, Kalibrierung berechnen
 arb/weather.py    Temperatur-Märkte parsen, Bucket-Wahrscheinlichkeiten aus Ensemble-Prognosen
 arb/storage.py    SQLite (scans, opportunities, executions, equity, settlements)

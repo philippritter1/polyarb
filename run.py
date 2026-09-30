@@ -66,6 +66,11 @@ def main():
         db = os.path.join(os.path.dirname(cfg["storage"]["db_path"]) or ".", "study.sqlite")
         print(Study(client, db).collect(days_back=args.days, max_new=args.max_new,
                                         weather_min_volume=args.weather_min_volume))
+        from arb.odds import sync
+        try:  # bookmaker comparison (football-data.co.uk, no key) – never fail the study run
+            print(sync(db, days_back=args.days))
+        except Exception as e:  # noqa
+            logging.getLogger().warning("odds sync failed: %s", e)
         return
 
     if args.cmd == "scenario":

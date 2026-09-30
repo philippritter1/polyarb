@@ -282,14 +282,17 @@ class WeatherStrategy(Strategy):
         return out
 
 
-class UnderdogStrategy(Strategy):
-    """Sport underdogs priced min_price..max_price a few hours before the scheduled end.
+class SportBandStrategy(Strategy):
+    """Sport sides priced min_price..max_price a few hours before the scheduled end, in markets whose
+    volume *at the time of the trade* lies in min_volume..max_volume.
 
-    Derived from the market study (25.-29.09., 3,000 resolved markets): sport sides priced 3-10 %
-    six hours / one hour before close won ~12 % of the time, clearly more than their price said,
-    and the effect held in both halves of the sample. The historical prices are traded prices,
-    not asks, so this paper run buys at the real ask and skips wide spreads – the edge was gone
-    at ~5 cents above the historical price. Many small flat stakes: most bets lose.
+    From the market study (69,510 markets, 01.08.-30.09.): over all sport markets a 3-10 % side wins
+    about as often as priced, but split by volume the picture flips – in markets under 5k $ the
+    underdog won 2 % instead of 6 %, in markets from 5k $ 9 % instead of 6 %, also in August data the
+    split was never fitted on. The study only knows the FINAL volume, which an upset itself drives
+    up, so these runs filter on the volume at purchase – that is the open question they answer.
+      underdog: 3-10 % from 5k $     favorite: 90-97 % from 1k to 5k $ (the mirror image)
+    Buys at the real ask and skips wide spreads.
     """
 
     def candidates(self, now: float) -> List[Signal]:
@@ -297,6 +300,7 @@ class UnderdogStrategy(Strategy):
         c = self.cfg
         lo, hi = float(c.get("min_price", 0.03)), float(c.get("max_price", 0.10))
         h_min, h_max = float(c.get("min_hours_to_end", 0.5)) * 3600, float(c.get("max_hours_to_end", 8)) * 3600
+        v_min, v_max = float(c.get("min_volume", 0)), float(c.get("max_volume") or 1e18)
         markets = self.client.paged("/markets", {
             "active": "true", "closed": "false", "liquidity_num_min": c.get("min_liquidity", 500),
             "end_date_min": _iso(now + h_min), "end_date_max": _iso(now + h_max)},
@@ -308,6 +312,9 @@ class UnderdogStrategy(Strategy):
                 continue
             if not m.get("acceptingOrders", True) or categorize(m) != "Sport":
                 continue
+            vol = float(m.get("volumeNum") or m.get("volume") or 0)
+            if not v_min <= vol < v_max:
+                continue
             toks, prices = _parse_json_list(m.get("clobTokenIds")), _parse_json_list(m.get("outcomePrices"))
             outs = _parse_json_list(m.get("outcomes")) or ["Yes", "No"]
             if len(toks) != 2 or len(prices) != 2:
@@ -318,15 +325,15 @@ class UnderdogStrategy(Strategy):
                 p = float(prices[i])
                 if lo - 0.01 <= p <= hi:
                     out.append(Signal(str(toks[i]), group, m.get("question", ""), str(outs[i]),
-                                      fair=min(0.95, p + float(c.get("assumed_edge", 0.05))), max_price=hi,
+                                      fair=min(0.99, p + float(c.get("assumed_edge", 0.03))), max_price=hi,
                                       fee=self.fees.resolve(m, "sports"), end_ts=end, delay_s=_delay(m),
-                                      reason=f"underdog {p:.3f}", min_ask=lo,
+                                      reason=f"{c.get('side', 'side')} {p:.3f} vol {vol:,.0f}", min_ask=lo,
                                       max_spread=float(c.get("max_spread", 0.03))))
         return out
 
 
 STRATEGIES = {"endgame": EndgameStrategy, "longshot": LongshotStrategy, "weather": WeatherStrategy,
-              "underdog": UnderdogStrategy}
+              "underdog": SportBandStrategy, "favorite": SportBandStrategy}
 
 
 def prepare_scenario_dir(data_dir: str, name: str, capital: float, reset: str = "") -> None:

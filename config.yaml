@@ -102,23 +102,47 @@ scenarios:
   underdog:
     enabled: true
     title: Underdog-Sport
-    strategy: underdog           # aus der Markt-Studie abgeleitet (Sport-Außenseiter 3-10 % wenige h vor Ende)
+    strategy: underdog           # Studie 01.08.-30.09.: Außenseiter 3-10 % nur in Märkten ab 5k $ Volumen unterbewertet
+    reset: 2                     # v2: nur Märkte mit >= 5k $ Volumen ZUM KAUFZEITPUNKT (v1 ab 500 $: 2 von 61 gewonnen)
+    side: underdog
     capital_usd: 2500
     interval_min: 10
     min_price: 0.03              # Außenseiter-Seite kostet mindestens ...
     max_price: 0.10              # ... und höchstens so viel (echter Ask)
+    min_volume: 5000             # Volumen des Markts beim Kauf (die Studie kennt nur das Endvolumen)
     min_hours_to_end: 0.5
     max_hours_to_end: 8
     max_spread: 0.03             # breiter als 3 Cent zwischen Bid und Ask -> auslassen (Vorteil kippt bei ~5 Cent)
     max_slippage: 0.01
-    assumed_edge: 0.05           # nur für die Spalte "Erwartet" (Studie: ~+5 Punkte)
+    assumed_edge: 0.03           # nur für die Spalte "Erwartet" (Studie: ~+3 Punkte)
     min_liquidity: 500
     max_position_usd: 10         # viele kleine, gleich große Wetten: die meisten verlieren
     max_event_usd: 30            # pro Spiel
     max_new_per_step: 6
     max_open_positions: 150
-  endgame:
+  favorite:
     enabled: true
+    title: Favorit-Kleinmarkt
+    strategy: favorite           # Spiegelbild: in Märkten unter 5k $ gewannen Favoriten ~98 % statt ~94 %
+    side: favorite
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.90
+    max_price: 0.97
+    min_volume: 1000             # Volumen beim Kauf zwischen 1k ...
+    max_volume: 5000             # ... und 5k $
+    min_hours_to_end: 0.5
+    max_hours_to_end: 8
+    max_spread: 0.02             # der mögliche Vorteil ist nur wenige Cent: enger Spread ist Pflicht
+    max_slippage: 0.01
+    assumed_edge: 0.03
+    min_liquidity: 200
+    max_position_usd: 25         # verliert selten, dann aber den ganzen Einsatz
+    max_event_usd: 50
+    max_new_per_step: 6
+    max_open_positions: 100
+  endgame:
+    enabled: false               # abgeschaltet 30.09.: Studie über 2 Monate ohne Edge (97,2 % -> 97,5 %, nach Kosten negativ)
     title: Endspiel-Ernte
     strategy: endgame
     reset: 2                     # v2: Fixes nach dem 29.09. (Mindestpreis, nur beendete Spiele, Streuung)
@@ -135,7 +159,7 @@ scenarios:
     max_new_per_step: 2          # höchstens 2 neue Positionen pro Durchlauf
     max_open_positions: 25
   longshot:
-    enabled: true
+    enabled: false               # abgeschaltet 30.09.: Studie über 2 Monate ohne Edge (95,2 % -> 96,0 %, nach Kosten negativ)
     title: Longshot-NO
     strategy: longshot
     capital_usd: 2500

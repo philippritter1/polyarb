@@ -53,7 +53,7 @@ STATE = Path(os.environ.get("NOTIFY_STATE", T["state"]))
 NAME = f"Polyarb {T['label']}" if T["label"] else "Polyarb"
 STRATEGY_NAMES = {"binary_buy_all": "YES+NO kaufen", "binary_sell_all": "Split & verkaufen",
                   "negrisk_buy_all": "Korb", "negrisk_no_buy_all": "alle NO", "ladder_buy_all": "Leiter",
-                  "underdog_buy": "Underdog", "endgame_buy": "Endspiel", "longshot_buy": "Longshot-NO",
+                  "underdog_buy": "Underdog", "favorite_buy": "Favorit", "endgame_buy": "Endspiel", "longshot_buy": "Longshot-NO",
                   "weather_buy": "Wetter"}
 
 

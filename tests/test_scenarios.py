@@ -403,3 +403,22 @@ def test_notifications_follow_the_underdog_scenario(tmp_path):
     rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "100000"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
     assert "Aufgelöst: 1 (1 gewonnen, 0 verloren)" in rep and "YES+NO" not in rep
+
+
+def test_sport_band_filters_on_volume_at_purchase(tmp_path):
+    kw = dict(gameStartTime="2026-09-21T16:00:00Z", end="2026-09-21T18:00:00Z")
+    big = _market("s1", "Lakers vs. Celtics", ["0.94", "0.06"], ["L1", "C1"], volumeNum=12000, **kw)
+    small = _market("s2", "Knicks vs. Bulls", ["0.94", "0.06"], ["K2", "B2"], volumeNum=2500, **kw)
+    books = {"C1": ob("C1", [(0.05, 500)], [(0.06, 500)]), "B2": ob("B2", [(0.05, 500)], [(0.06, 500)]),
+             "L1": ob("L1", [(0.93, 500)], [(0.94, 500)]), "K2": ob("K2", [(0.93, 500)], [(0.94, 500)])}
+    under = ScenarioEngine("underdog", _cfg(tmp_path / "u", "underdog", min_volume=5000, max_position_usd=10),
+                           FakeClient(markets=[big, small], books=books), SimClock(NOW))
+    under.step()
+    assert list(under.pf.positions) == ["C1"]  # only the underdog of the 12k market
+    fav = ScenarioEngine("favorite", _cfg(tmp_path / "f", "favorite", min_price=0.90, max_price=0.97,
+                                          min_volume=1000, max_volume=5000, max_spread=0.02,
+                                          max_position_usd=25), FakeClient(markets=[big, small], books=books),
+                         SimClock(NOW))
+    fav.step()
+    assert list(fav.pf.positions) == ["K2"]  # only the favourite of the 2.5k market
+    assert fav.store.db.execute("SELECT strategy FROM executions").fetchone()[0] == "favorite_buy"

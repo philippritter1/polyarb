@@ -157,6 +157,25 @@ def test_stress_test_rules():
     assert under["games"] == 200 and 0 <= under["p_loss"] <= 1 and under["dd_p95"] > 0
     fav = run_rule(rows, rule["endgame_1h"], n_boot=200)  # the same markets seen from the 95 % side
     assert fav["roi"]["0.00"] < 0
-    # volume windows: 8k $ markets count for "from 5k", not for the 1-5k favourite rule
-    assert run_rule(rows, rule["underdog_5k"], n_boot=50)["n"] == 200
-    assert run_rule(rows, rule["favorite_small"], n_boot=50)["n"] == 0
+    # category and volume windows: sport rows never count for the weather rule
+    assert run_rule(rows, rule["weather_no_6h"], n_boot=50)["n"] == 0
+
+
+def test_weather_with_game_start_time_is_not_sport(tmp_path):
+    import sqlite3
+    from arb.study import SCHEMA, fix_categories
+    from arb.backtest import game_key
+    wx = {"question": "Will the highest temperature in Paris be 24°C on September 3?", "gameStartTime": "2026-09-03"}
+    assert categorize(wx) == "Wetter"
+    assert categorize({"question": "Bitcoin Up or Down - September 3, 4PM ET", "gameStartTime": "x"}) == "Krypto"
+    assert categorize({"question": "Lakers vs. Celtics", "gameStartTime": "x"}) == "Sport"
+    db = sqlite3.connect(str(tmp_path / "s.sqlite"))
+    db.executescript(SCHEMA)
+    for cid, q in (("a", wx["question"]), ("b", "Lakers vs. Celtics")):
+        db.execute("INSERT INTO markets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (cid, q, "Sport", 0, 1, 100, 0, 0, 0, None, None, 0.5, 0.5, 5, 0))
+    assert fix_categories(db) == 1
+    assert dict(db.execute("SELECT condition_id, category FROM markets")) == {"a": "Wetter", "b": "Sport"}
+    # all buckets of one city and day are one event for the bootstrap
+    assert game_key(wx["question"]) == game_key("Will the highest temperature in Paris be 26°C or higher on September 3?")
+    assert game_key(wx["question"]) != game_key("Will the highest temperature in Paris be 24°C on September 4?")

@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 RULES = [
-    dict(key="underdog_5k", name="Underdog-Sport ab 5k $ (6 h vorher, 3–10 %)", cp="p_6h", lo=0.03, hi=0.10,
-         cat="Sport", vol=(5e3, None)),
-    dict(key="favorite_small", name="Favorit-Kleinmarkt 1–5k $ (6 h vorher, 90–97 %)", cp="p_6h", lo=0.90, hi=0.97,
-         cat="Sport", vol=(1e3, 5e3)),
-    dict(key="underdog_6h", name="Underdog-Sport alle (6 h vorher, 3–10 %)", cp="p_6h", lo=0.03, hi=0.10, cat="Sport"),
+    dict(key="underdog_6h", name="Underdog-Sport (6 h vorher, 3–10 %)", cp="p_6h", lo=0.03, hi=0.10, cat="Sport"),
+    dict(key="weather_no_6h", name="Wetter-NO bis 5k $ (6 h vorher, 90–97 %)", cp="p_6h", lo=0.90, hi=0.97,
+         cat="Wetter", vol=(0, 5e3)),
+    dict(key="weather_no_1d", name="Wetter-NO bis 5k $ (1 Tag vorher, 90–97 %)", cp="p_1d", lo=0.90, hi=0.97,
+         cat="Wetter", vol=(0, 5e3)),
     dict(key="endgame_1h", name="Endspiel-Ernte (1 h vorher, 95–99 %)", cp="p_1h", lo=0.95, hi=0.99, cat=None),
     dict(key="longshot_1d", name="Longshot-NO (1 Tag vorher, 92–98 %)", cp="p_1d", lo=0.92, hi=0.98, cat=None),
 ]
@@ -30,7 +30,11 @@ SLIPS = (0.0, 0.01, 0.02, 0.03, 0.04, 0.05)
 
 
 def game_key(question: str) -> str:
-    """Cluster markets of one match ('Army vs. Temple: O/U 50.5' -> 'army vs. temple')."""
+    """Cluster markets of one match ('Army vs. Temple: O/U 50.5' -> 'army vs. temple') and all buckets of one
+    city and day ('Will the highest temperature in Paris be 24°C on September 3?' -> 'highest|paris|september 3')."""
+    w = re.search(r"(highest|lowest) temperature in (.+?) (?:be|on) .*?\bon ([a-z]+ \d+)", (question or "").lower())
+    if w:
+        return "|".join(w.groups())
     return re.split(r":| - | O/U| Spread| \(", question or "")[0].strip().lower()
 
 

@@ -422,3 +422,23 @@ def test_sport_band_filters_on_volume_at_purchase(tmp_path):
     fav.step()
     assert list(fav.pf.positions) == ["K2"]  # only the favourite of the 2.5k market
     assert fav.store.db.execute("SELECT strategy FROM executions").fetchone()[0] == "favorite_buy"
+
+
+def test_weather_no_band_buys_the_no_side_of_cheap_buckets(tmp_path):
+    kw = dict(gameStartTime="2026-09-21T00:00:00Z", end="2026-09-22T04:00:00Z", volumeNum=1800)
+    wx = _market("w1", "Will the highest temperature in Paris be 24°C on September 21?", ["0.06", "0.94"],
+                 ["Y24", "N24"], **kw)
+    game = _market("g1", "Lakers vs. Celtics", ["0.06", "0.94"], ["LY", "LN"], **kw)
+    books = {"N24": ob("N24", [(0.94, 500)], [(0.95, 500)]), "Y24": ob("Y24", [(0.05, 500)], [(0.06, 500)]),
+             "LN": ob("LN", [(0.94, 500)], [(0.95, 500)]), "LY": ob("LY", [(0.05, 500)], [(0.06, 500)])}
+    cfg = _cfg(tmp_path, "weather_no", strategy="band", category="Wetter", min_price=0.90, max_price=0.97,
+               max_volume=5000, max_hours_to_end=30, max_spread=0.02, max_position_usd=25)
+    eng = ScenarioEngine("weather_no", cfg, FakeClient(markets=[wx, game], books=books), SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["N24"]  # the weather NO, not the sport favourite
+    # and the underdog scenario no longer buys temperature buckets
+    under = ScenarioEngine("underdog", _cfg(tmp_path / "u", "underdog", min_volume=1000, max_position_usd=10,
+                                          max_hours_to_end=40),
+                           FakeClient(markets=[wx, game], books=books), SimClock(NOW))
+    under.step()
+    assert list(under.pf.positions) == ["LY"]

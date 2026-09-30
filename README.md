@@ -13,7 +13,7 @@ python run.py scan                 # 1 Live-Scan: Wie nah sind die Märkte an Ar
 python run.py paper --hours 24     # Paper Trading gegen den echten Markt (läuft im Vordergrund)
 python run.py dashboard            # dashboard.html aus data/polyarb.sqlite erzeugen
 python run.py mock --hours 72 --db data/mock.sqlite   # Offline-Pipeline-Test mit synthetischem Markt
-python -m pytest -q                # 64 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
+python -m pytest -q                # 66 Tests (Arb-Mathe, Sizing, Fills, Legging, Settlement, WebSocket-Feed, Phantom-Schutz, CSV-Export, Leg-Reparatur, Order-Verzögerung, Szenarien, Studie, Export); braucht requirements-dev.txt
 ```
 
 Für Dauerbetrieb: `nohup python run.py paper > bot.log 2>&1 &`, oder als systemd-Service bzw. per tmux auf einem kleinen VPS. Das Dashboard kannst du jederzeit neu erzeugen, auch während der Bot läuft.
@@ -64,8 +64,9 @@ Neben der Arbitrage laufen weitere Strategien als eigene **Paper-Szenarien**. Je
 | Szenario | Idee | Risiko |
 |---|---|---|
 | `ladder` Logische Arbitrage | Märkte eines Events, die auseinander folgen („über 110k“ ⇒ „über 100k“, „bis Oktober“ ⇒ „bis Dezember“). Ist die engere Aussage teurer, YES auf die breite und NO auf die enge kaufen: zahlt immer ≥ 1 $, im Zwischenfall 2 $. Läuft mit der Arbitrage-Engine (Legs, Reparatur, REST-Fills) | Auflösungsregeln der beiden Märkte weichen ab; Kapital bis zur Auflösung gebunden |
-| `underdog` Underdog-Sport | Sport-Außenseiter zu 3–10 %, 0,5–8 h vor dem Ende, nur in Märkten mit **≥ 5.000 $ Volumen zum Kaufzeitpunkt**. Studie 01.08.–30.09.: in solchen Märkten gewannen Außenseiter 9,4 % statt 6,1 % (auch im nie angepassten August), in kleinen nur 2 %. Kauft zum echten Ask bei ≤ 3 Cent Spread, 10 $ pro Wette | Die Studie kennt nur das Endvolumen, das eine Überraschung selbst hochtreibt: ob der Effekt mit dem Volumen *beim Kauf* hält, ist genau die offene Frage. Die meisten Wetten verlieren |
-| `favorite` Favorit-Kleinmarkt | Spiegelbild: Sport-Favoriten zu 90–97 % in Märkten mit 1.000–5.000 $ Volumen beim Kauf, ≤ 2 Cent Spread, 25 $ pro Wette | Studie: +2 % vor Kosten, mit 2 Cent Aufschlag ±0 %. Schwache These, läuft als Vergleich |
+| `underdog` Underdog-Sport | Echte Sport-Außenseiter zu 3–10 %, 0,5–8 h vor dem Ende, ab 1.000 $ Volumen. Studie 01.08.–30.09.: gewannen 10,0 % statt 6,3 %, +15 % pro Wette mit 2 Cent Aufschlag, in beiden Zeithälften positiv. Kauft zum echten Ask bei ≤ 3 Cent Spread, 10 $ pro Wette | Die meisten Wetten verlieren (lange Verlustserien). Die Studie kennt nur gehandelte Kurse, nicht den echten Ask |
+| `weather_no` Wetter-NO | NO auf Temperatur-Buckets, deren YES 3–10 % kostet, in Märkten unter 5.000 $ Volumen, 1–30 h vor dem Ende. Studie: diese Buckets gewannen nur ~1 %, NO bringt +2,9 % pro Wette mit 2 Cent Aufschlag, in beiden Zeithälften gleich. ≤ 2 Cent Spread, 25 $ pro Wette, 100 $ pro Stadt und Tag | Kleiner Vorteil pro Wette, lebt von engen Spreads in kleinen Märkten. Ein Teil des Effekts kann daher kommen, dass der Tag schon läuft |
+| `favorite` Favorit-Kleinmarkt (abgeschaltet) | Sport-Favoriten 90–97 % in kleinen Märkten | Beruhte auf vermischten Daten (Wetter-Märkte als Sport eingeordnet); im echten Sport −4,6 % |
 | `endgame` Endspiel-Ernte (abgeschaltet) | Favorit für 0,95–0,99 kurz vor oder nach dem geplanten Ende | Studie über 2 Monate: kein Edge (97,2 % → 97,5 %), nach Kosten negativ |
 | `longshot` Longshot-NO (abgeschaltet) | NO auf Außenseiter mit YES-Preis 2–8 % in Multi-Outcome-Events | Studie über 2 Monate: kein Edge (95,2 % → 96,0 %), nach Kosten negativ |
 | `weather` Wetter-Modell | Temperatur-Buckets mit Ensemble-Prognosen (Open-Meteo: GFS, ECMWF, ICON) bewerten, kaufen, wenn das Modell 8–30 Prozentpunkte über dem Preis liegt. Nur Tage, die in der Stadt noch nicht begonnen haben | echte Prognosefehler; Station vs. Modellgitter |

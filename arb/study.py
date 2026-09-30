@@ -35,9 +35,14 @@ CREATE TABLE IF NOT EXISTS markets(
 CREATE TABLE IF NOT EXISTS skipped(condition_id TEXT PRIMARY KEY, reason TEXT, ts REAL);
 """
 
-CATEGORY_WORDS = [
+# checked BEFORE the sport signals: Polymarket gives weather and crypto markets a gameStartTime too
+NON_SPORT = [
     ("Wetter", ("temperature", "rain", "snow", "hurricane", "weather")),
-    ("Krypto", ("bitcoin", "btc", "ethereum", "eth ", "solana", "xrp", "crypto", "doge", "token", "fdv")),
+    ("Krypto", ("up or down", "bitcoin", "btc", "ethereum", "eth ", "solana", "xrp", "crypto", "doge")),
+]
+CATEGORY_WORDS = [
+    *NON_SPORT,
+    ("Krypto", ("token", "fdv")),
     ("Politik", ("election", "president", "senate", "prime minister", "parliament", "trump", "vote", "governor",
                  "minister", "party", "nominee")),
     ("Wirtschaft", ("fed ", "interest rate", "inflation", "cpi", "gdp", "unemployment", "recession", "stock",
@@ -48,15 +53,29 @@ CATEGORY_WORDS = [
 
 
 def categorize(m: dict) -> str:
+    q = f" {(m.get('question') or '').lower()} "
+    for name, words in NON_SPORT:
+        if any(w in q for w in words):
+            return name
     if m.get("gameStartTime") or m.get("sportsMarketType"):
         return "Sport"
-    q = f" {(m.get('question') or '').lower()} "
     if any(w in q for w in (" vs. ", " vs ", " win on ", "o/u", "spread:", "exact score", "moneyline")):
         return "Sport"
     for name, words in CATEGORY_WORDS:
         if any(w in q for w in words):
             return name
     return "Sonstiges"
+
+
+def fix_categories(db: sqlite3.Connection) -> int:
+    """Rows collected before 30.09. filed weather/crypto markets with a gameStartTime under "Sport"."""
+    n = 0
+    for name, words in NON_SPORT:
+        like = " OR ".join("lower(question) LIKE ?" for _ in words)
+        n += db.execute(f"UPDATE markets SET category = ?, sports = 0 WHERE category != ? AND ({like})",
+                        (name, name, *[f"%{w}%" for w in words])).rowcount
+    db.commit()
+    return n
 
 
 def outcome_yes(m: dict) -> Optional[int]:
@@ -105,6 +124,7 @@ class Study:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
+        fix_categories(self.db)
 
     def _known(self) -> set:
         return {r[0] for r in self.db.execute("SELECT condition_id FROM markets UNION SELECT condition_id FROM skipped")}

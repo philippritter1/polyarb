@@ -102,45 +102,51 @@ scenarios:
   underdog:
     enabled: true
     title: Underdog-Sport
-    strategy: underdog           # Studie 01.08.-30.09.: Außenseiter 3-10 % nur in Märkten ab 5k $ Volumen unterbewertet
-    reset: 2                     # v2: nur Märkte mit >= 5k $ Volumen ZUM KAUFZEITPUNKT (v1 ab 500 $: 2 von 61 gewonnen)
+    strategy: underdog           # Studie 01.08.-30.09. (Kategorien korrigiert): echte Sport-Außenseiter 3-10 % gewannen ~10 % statt ~6 %
+    reset: 3                     # v3: nur echte Sportmärkte (v2 hat auch Temperatur-Buckets gekauft)
+    category: Sport
     side: underdog
     capital_usd: 2500
     interval_min: 10
     min_price: 0.03              # Außenseiter-Seite kostet mindestens ...
     max_price: 0.10              # ... und höchstens so viel (echter Ask)
-    min_volume: 5000             # Volumen des Markts beim Kauf (die Studie kennt nur das Endvolumen)
+    min_volume: 1000             # Volumen beim Kauf (Liquidität)
     min_hours_to_end: 0.5
     max_hours_to_end: 8
-    max_spread: 0.03             # breiter als 3 Cent zwischen Bid und Ask -> auslassen (Vorteil kippt bei ~5 Cent)
+    max_spread: 0.03             # breiter als 3 Cent zwischen Bid und Ask -> auslassen
     max_slippage: 0.01
-    assumed_edge: 0.03           # nur für die Spalte "Erwartet" (Studie: ~+3 Punkte)
+    assumed_edge: 0.03           # nur für die Spalte "Erwartet"
     min_liquidity: 500
     max_position_usd: 10         # viele kleine, gleich große Wetten: die meisten verlieren
     max_event_usd: 30            # pro Spiel
     max_new_per_step: 6
     max_open_positions: 150
-  favorite:
+  weather_no:
     enabled: true
-    title: Favorit-Kleinmarkt
-    strategy: favorite           # Spiegelbild: in Märkten unter 5k $ gewannen Favoriten ~98 % statt ~94 %
-    side: favorite
+    title: Wetter-NO
+    strategy: band               # Studie: Temperatur-Buckets zu 3-10 % in Märkten unter 5k $ gewannen nur ~1 %
+    category: Wetter
+    side: NO
     capital_usd: 2500
     interval_min: 10
-    min_price: 0.90
-    max_price: 0.97
-    min_volume: 1000             # Volumen beim Kauf zwischen 1k ...
-    max_volume: 5000             # ... und 5k $
-    min_hours_to_end: 0.5
-    max_hours_to_end: 8
-    max_spread: 0.02             # der mögliche Vorteil ist nur wenige Cent: enger Spread ist Pflicht
+    min_price: 0.90              # NO-Seite kostet mindestens ...
+    max_price: 0.97              # ... und höchstens so viel
+    max_volume: 5000             # nur kleine Märkte (Volumen beim Kauf)
+    min_hours_to_end: 1
+    max_hours_to_end: 30         # Studie: 1 Tag und 6 h vorher gleich stark
+    max_spread: 0.02             # der Vorteil sind wenige Cent: enger Spread ist Pflicht
     max_slippage: 0.01
-    assumed_edge: 0.03
-    min_liquidity: 200
+    assumed_edge: 0.04
+    min_liquidity: 100
     max_position_usd: 25         # verliert selten, dann aber den ganzen Einsatz
-    max_event_usd: 50
-    max_new_per_step: 6
-    max_open_positions: 100
+    max_event_usd: 100           # pro Stadt und Tag (höchstens ein Bucket gewinnt)
+    max_new_per_step: 10
+    max_open_positions: 200
+  favorite:
+    enabled: false               # abgeschaltet 30.09.: beruhte auf vermischten Sport/Wetter-Daten; echter Sport: -4,6 %
+    title: Favorit-Kleinmarkt
+    strategy: favorite
+    capital_usd: 2500
   endgame:
     enabled: false               # abgeschaltet 30.09.: Studie über 2 Monate ohne Edge (97,2 % -> 97,5 %, nach Kosten negativ)
     title: Endspiel-Ernte

@@ -177,7 +177,7 @@ Die Server-Zeitzone ist Europe/Vienna (setzt `install.sh`).
 | **Update (4h)** | Equity, PnL, Chancen, Trades, Capture der letzten 4 h |
 | **Tagesbericht** | dasselbe für die letzten 24 h |
 
-Optionale Schalter in `/etc/polyarb.env`: `NOTIFY_TRADES=0` schaltet die Trade-Alerts ab, `NOTIFY_MISSED=0` meldet nur Runden mit mindestens einem gefüllten Trade. Beim ersten Watchdog-Lauf werden alte Trades nicht nachgemeldet.
+Optionale Schalter in `/etc/polyarb.env`: `NOTIFY_TRADES=1` bzw. `NOTIFY_PAYOUTS=1` schalten die einzelnen Trade- bzw. Auszahlungsnachrichten wieder ein (Standard seit 01.10.: aus), `NOTIFY_MISSED=0` meldet dann nur Runden mit mindestens einem gefüllten Trade. Beim ersten Watchdog-Lauf werden alte Trades nicht nachgemeldet.
 
 Von Hand auf dem Server schickt das sofort einen Bericht über die letzten 12 h:
 

@@ -554,3 +554,25 @@ def test_band_scan_stats_and_topic_tags(tmp_path):
     scan = json.loads(Path(eng.state_path.replace(".json", ".scan.json")).read_text())
     assert scan["Liste voll"] == 1 and scan["Tag finance"] == 1 and scan["andere Kategorie"] == 1
     assert scan["Seite im Preisband"] == 1 and scan["neu gekauft"] == 1
+
+
+def test_capacity_counts_what_the_books_offered(tmp_path):
+    from dashboard import capacity_rows
+    kw = dict(end="2026-09-21T20:00:00Z", volumeNum=1800)
+    ms = [_market(f"w{i}", f"Will the highest temperature in City{i} be 24°C on September 21?", ["0.20", "0.80"],
+                  [f"Y{i}", f"N{i}"], **kw) for i in range(6)]
+    books = {}
+    for i in range(6):  # 500 shares at 0.80 and 1000 more at 0.83 (beyond the 1-cent buy limit)
+        books[f"N{i}"] = ob(f"N{i}", [(0.79, 500)], [(0.80, 500), (0.83, 1000)])
+        books[f"Y{i}"] = ob(f"Y{i}", [(0.19, 500)], [(0.20, 500)])
+    cfg = _cfg(tmp_path, "wetter_no_breit", strategy="band", category="Wetter", outcome="No", min_price=0.55,
+               max_price=0.97, max_volume=5000, max_hours_to_end=12, max_spread=0.02, max_position_usd=25,
+               max_day_usd=60, max_new_per_step=10, max_slippage=0.01)
+    eng = ScenarioEngine("wetter_no_breit", cfg, FakeClient(markets=ms, books=books), SimClock(NOW))
+    eng.step()
+    eng.step()  # a second scan of the same markets does not count them twice
+    assert len(eng.pf.positions) == 3
+    day = capacity_rows(str(tmp_path / "scenario-wetter_no_breit.sqlite"))[0]
+    assert day["day"] == "2026-09-21" and day["n"] == 6  # also the three the day limit stopped
+    assert math.isclose(day["slip"], 6 * 400) and math.isclose(day["c2"], 6 * 400)
+    assert math.isclose(day["band"], 6 * (400 + 830)) and 55 < day["bought"] <= 60 + 1e-6

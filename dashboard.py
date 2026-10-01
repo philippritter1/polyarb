@@ -17,6 +17,24 @@ def _q(db, sql, args=()):
     return db.execute(sql, args).fetchall()
 
 
+def capacity_rows(db_path: str) -> list:
+    """Per market day (UTC date of the end): opportunities, what was bought, and what the order books
+    offered – up to the buy limit (ask + slippage), up to ask + 2 cents, up to the rule's price limit."""
+    if not Path(db_path).exists():
+        return []
+    db = sqlite3.connect(db_path)
+    try:
+        rows = db.execute("""SELECT date(c.end_ts, 'unixepoch') d, COUNT(*), SUM(c.depth_slip), SUM(c.depth_2c),
+                                    SUM(c.depth_band),
+                                    COALESCE(SUM((SELECT SUM(e.locked) FROM executions e
+                                                  WHERE e.basket_id LIKE '%:' || c.token AND e.matched_qty > 0)), 0)
+                             FROM capacity c WHERE c.end_ts IS NOT NULL GROUP BY d ORDER BY d DESC LIMIT 60""").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    db.close()
+    return [dict(day=r[0], n=r[1], slip=r[2] or 0, c2=r[3] or 0, band=r[4] or 0, bought=r[5] or 0) for r in rows]
+
+
 def collect(db_path: str, start_capital: float) -> dict:
     from arb.storage import Store
     Store(db_path).db.close()  # ensure schema exists
@@ -204,7 +222,14 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     data = collect(db_path, float(start_capital))
     if source == "auto":
         source = "mock" if "mock" in Path(db_path).name else "paper"
-    data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {},
+    cap = capacity_rows(db_path) if kind not in ("arb", "ladder") else []
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    if cap:
+        _write(Path(out).with_name("kapazitaet.csv"), _csv(
+            ["Markttag (UTC)", "Gelegenheiten", "gekauft $", "im Buch bis Kaufgrenze $", "bis Ask + 2 ct $",
+             "bis Preisgrenze der Regel $"], [[c["day"], c["n"], c["bought"], c["slip"], c["c2"], c["band"]] for c in cap]),
+            "utf-8-sig")
+    data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -345,6 +370,9 @@ def build_all(cfg: dict, out: str) -> list:
         rel = "../" + (p["key"] + "/" if p["key"] else "")
         files += [(p["label"], "Alle Trades und Auszahlungen", rel + "trades.csv", folder / "trades.csv", f"{slug}/trades.csv"),
                   (p["label"], "Equity-Verlauf (alle 5 Min.)", rel + "equity.csv", folder / "equity.csv", f"{slug}/equity.csv")]
+        if (folder / "kapazitaet.csv").exists():
+            files.append((p["label"], "Kapazität je Markttag: Gelegenheiten, gekauft, Geld im Orderbuch", rel + "kapazitaet.csv",
+                          folder / "kapazitaet.csv", f"{slug}/kapazitaet.csv"))
         if (folder / "scan.csv").exists():
             files.append((p["label"], "Letzter Scan: wo Märkte am Filter hängen bleiben", rel + "scan.csv",
                           folder / "scan.csv", f"{slug}/scan.csv"))
@@ -771,6 +799,7 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <div id="halt"></div>
 <div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
 <div class="kpis" id="kpis"></div>
+<div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
 <div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i>Vermögen realisiert (Start + realisierter PnL)</span></div><div id="eq"></div></div>
 <div class="grid2">
  <div class="card"><h2>Erwarteter vs. realisierter Gewinn je Strategie</h2><p class="note" id="pnlnote">Die Lücke ist, was Latenz, Konkurrenz und Leg-Failures kosten.</p>
@@ -815,6 +844,11 @@ const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Pos
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
 if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[6]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[7][2]="Preis unter der Strategie-Grenze"}
+if(D.capacity&&D.capacity.length){const C=D.capacity,avg=f=>C.reduce((a,c)=>a+c[f],0)/C.length;
+ $("captbl").innerHTML=`<tr><th>Markttag</th><th class="num">Gelegenheiten</th><th class="num">gekauft</th><th class="num">im Buch bis Kaufgrenze</th><th class="num">bis Ask + 2 ct</th><th class="num">bis Regelgrenze</th></tr>`+
+  C.map(c=>`<tr><td>${c.day}</td><td class="num">${c.n}</td><td class="num">${usd(c.bought)}</td><td class="num">${usd(c.slip)}</td><td class="num">${usd(c.c2)}</td><td class="num">${usd(c.band)}</td></tr>`).join("")+
+  `<tr style="font-weight:600"><td>Ø pro Tag</td><td class="num">${fmt(avg("n"),0)}</td><td class="num">${usd(avg("bought"))}</td><td class="num">${usd(avg("slip"))}</td><td class="num">${usd(avg("c2"))}</td><td class="num">${usd(avg("band"))}</td></tr>`;
+ $("capcard").style.display=""}
 if(D.overview&&D.overview.length>1){const O=D.overview,sg=v=>v>0.00005?"pos":v<-0.00005?"neg":"";
  const tot=O.reduce((a,o)=>({start:a.start+o.start,equity:a.equity+o.equity,real:a.real+o.real,n:a.n+o.n,won:a.won+o.won,open:a.open+o.open}),{start:0,equity:0,real:0,n:0,won:0,open:0});
  const row=(o,b)=>`<tr${b?' style="font-weight:600"':""}><td>${o.href?`<a href="${o.href}">${o.label}</a>`:o.label}</td><td class="num">${usd(o.equity)}</td><td class="num ${sg(o.equity/o.start-1)}">${pct(o.equity/o.start-1)}</td><td class="num">${usd(o.start+o.real)}</td><td class="num ${sg(o.real)}">${usd(o.real)}</td><td class="num ${sg(o.real)}">${pct(o.real/o.start)}</td><td class="num">${o.won} / ${o.n}</td><td class="num">${o.open}</td></tr>`;

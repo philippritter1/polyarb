@@ -448,6 +448,8 @@ class ScenarioEngine:
         data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
         prepare_scenario_dir(data_dir, name, self.start_capital, str(self.sc.get("reset", "")))
         self.store = Store(os.path.join(data_dir, f"scenario-{name}.sqlite"))
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS capacity(token TEXT PRIMARY KEY, title TEXT, end_ts REAL,
+            first_ts REAL, last_ts REAL, n INT, best_ask REAL, depth_slip REAL, depth_2c REAL, depth_band REAL)""")
         self.state_path = os.path.join(data_dir, f"scenario-{name}.json")
         self.pf = ScenarioPortfolio.load(self.state_path, self.start_capital)
         ex = cfg["execution"]
@@ -493,6 +495,7 @@ class ScenarioEngine:
                         reverse=True)
         opened = 0
         n_opps = 0
+        full = False
         for s in ranked:
             ob = books[s.token_id]
             if ob.best_ask > s.max_price + 1e-9:
@@ -504,10 +507,13 @@ class ScenarioEngine:
                 self.guarded += 1  # "too good to be true": the market knows something the strategy doesn't
                 continue
             # never walk far up a thin book: at most max_slippage above the best ask
+            band_max = s.max_price
             s.max_price = min(s.max_price, round(ob.best_ask + self.max_slippage, 4))
             n_opps += 1
-            if len(self.pf.positions) >= n_open or opened >= n_new:
-                break
+            self._capacity(s, ob, band_max, now)  # also when a limit stops the trade: what the market offered
+            full = full or len(self.pf.positions) >= n_open or opened >= n_new
+            if full:
+                continue
             before = len(self.pf.positions)
             self._trade(s, ob, now)
             opened += len(self.pf.positions) > before
@@ -529,6 +535,20 @@ class ScenarioEngine:
         skipped = getattr(self.strategy, "skipped", None)
         log.info("%s: %d signals, %d below max price, %d open, equity %.2f, guarded %d%s", self.name, len(signals),
                  n_opps, len(pf.positions), pf.equity, self.guarded, f", skipped {skipped}" if skipped else "")
+
+    def _capacity(self, s: Signal, ob: OrderBook, band_max: float, now: float) -> None:
+        """Dollars on the ask side up to the scenario's buy limit (ask + max_slippage), up to ask + 2 cents and
+        up to the rule's price limit – once per token, the largest seen. Sums per day = what the strategy
+        could really put to work, independent of its own budget."""
+        def depth(limit: float) -> float:
+            return sum(lv.price * lv.size for lv in ob.asks if lv.price <= limit + 1e-9)
+        self.store.db.execute(
+            """INSERT INTO capacity VALUES(?,?,?,?,?,1,?,?,?,?)
+               ON CONFLICT(token) DO UPDATE SET last_ts=excluded.last_ts, n=n+1,
+                 depth_slip=MAX(depth_slip, excluded.depth_slip), depth_2c=MAX(depth_2c, excluded.depth_2c),
+                 depth_band=MAX(depth_band, excluded.depth_band)""",
+            (s.token_id, s.title[:200], s.end_ts, now, now, ob.best_ask, depth(s.max_price),
+             depth(ob.best_ask + 0.02), depth(band_max)))
 
     def _trade(self, s: Signal, ob: OrderBook, now: float) -> None:
         budget, binding = self._budget(s, ob.best_ask)

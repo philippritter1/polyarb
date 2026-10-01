@@ -292,6 +292,10 @@ class KalshiStudy:
             if volume_of(m) < min_volume:
                 stats["low_volume"] += 1
                 continue
+            opened, closed = _ts(m.get("open_time")), _ts(m.get("close_time"))
+            if opened and closed and closed - opened < 2 * 3600:  # 15-minute gold/oil markets: no "1 h before"
+                stats["too_short"] = stats.get("too_short", 0) + 1
+                continue
             kcat = cats.get(series_of(m)) or str(m.get("category") or "")
             cat = CATEGORY_MAP.get(kcat.lower(), "Sonstiges")
             if series_of(m).startswith("KXMVE"):

@@ -7,6 +7,6 @@ Type=oneshot
 User=polyarb
 WorkingDirectory=/opt/polyarb
 EnvironmentFile=/etc/polyarb.env
-ExecStart=/opt/polyarb/.venv/bin/python run.py study --days 120 --max-new 3000
+ExecStart=/opt/polyarb/.venv/bin/python run.py study --days 240 --max-new 3000
 TimeoutStartSec=4h
 Nice=10

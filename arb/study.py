@@ -129,6 +129,7 @@ def market_type(question: str) -> str:
 
 
 CATEGORIES_VERSION = 2
+LISTING_VERSION = 2
 
 
 def fix_categories(db: sqlite3.Connection) -> int:
@@ -197,6 +198,12 @@ class Study:
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
         fix_categories(self.db)
+        if (self._meta("listing_version") or 0) < LISTING_VERSION:
+            # v2 (02.10.): 12-hour windows instead of 2 days (a window lists at most 2,000 markets, so busy
+            # days were cut off) – walk the whole history once more; known markets cost no price request
+            self.db.execute("DELETE FROM meta WHERE key='backfill_until'")
+            self._meta("listing_version", LISTING_VERSION)
+            self.db.commit()
 
     def _known(self) -> set:
         return {r[0] for r in self.db.execute("SELECT condition_id FROM markets UNION SELECT condition_id FROM skipped")}
@@ -237,7 +244,7 @@ class Study:
         row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return row[0] if row else None
 
-    def collect(self, days_back: float = 120, max_new: int = 3000, window_days: float = 2,
+    def collect(self, days_back: float = 240, max_new: int = 3000, window_days: float = 0.5,
                 min_volume: float = 1000, weather_min_volume: float = 50, recent_days: float = 7,
                 now: Optional[float] = None) -> Dict[str, int]:
         """One run: first the last `recent_days` (markets that just closed, or resolved late after a
@@ -280,6 +287,10 @@ class Study:
                 self.db.commit()
                 return False
             known.add(cid)
+            if categorize(m) == "Krypto":  # no edge there (study 01.10.), and every market costs a price request
+                self.db.execute("INSERT OR REPLACE INTO skipped VALUES(?,?,?)", (cid, "Krypto (nicht gesammelt)", now))
+                stats["skipped"] += 1
+                continue
             row = self._row(m, cid, now)
             if isinstance(row, str):
                 self.db.execute("INSERT OR REPLACE INTO skipped VALUES(?,?,?)", (cid, row, now))

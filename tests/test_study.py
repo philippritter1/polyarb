@@ -98,7 +98,7 @@ def test_weather_buckets_below_main_volume_floor(tmp_path):
                                     outcomePrices=json.dumps(["1", "0"] if i == 1 else ["0", "1"]))
                                for i, v in enumerate([300, 120, 20])]),
                  dict(id=2, title="Will it snow in Paris?", markets=[])]
-    stats = Study(cl, str(tmp_path / "s.sqlite")).collect(days_back=4, now=END + 3600)
+    stats = Study(cl, str(tmp_path / "s.sqlite")).collect(days_back=4, window_days=2, now=END + 3600)
     assert stats["weather"] == 2 and stats["new"] == 2  # the 20 $ bucket stays below the floor
     cats = calibration(str(tmp_path / "s.sqlite"))
     assert cats["n"] == 2
@@ -233,3 +233,26 @@ def test_backtest_rules_with_types_and_no_side():
            None, None, 0.30, None) for i in range(40)]
     r = run_rule(wx, rule["wetter_no_breit_6h"], n_boot=50)
     assert r["n"] == 40 and abs(r["price"] - 0.70) < 1e-9 and r["hit"] == 1.0  # NO side at 0.70 only, never the YES
+
+
+def test_crypto_is_not_collected_and_listing_v2_rewalks(tmp_path):
+    from arb.study import LISTING_VERSION
+    db = str(tmp_path / "s.sqlite")
+    st = Study(StudyClient(n=0), db)
+    st._meta("backfill_until", 123.0)
+    st.db.execute("UPDATE meta SET value=1 WHERE key='listing_version'")
+    st.db.commit()
+    st2 = Study(StudyClient(n=0), db)  # older listing version: the history is walked again
+    assert st2._meta("backfill_until") is None and st2._meta("listing_version") == LISTING_VERSION
+    m = dict(conditionId="c1", question="Bitcoin Up or Down - September 21, 4PM ET", clobTokenIds=json.dumps(["Y", "N"]),
+             outcomePrices=json.dumps(["1", "0"]), endDate="2026-09-21T13:33:20Z", volumeNum=50000)
+    stats = {"new": 0, "skipped": 0, "seen": 0, "weather": 0, "windows": 0}
+
+    class One(StudyClient):
+        def paged(self, path, params, max_items=1000):
+            return [m] if path == "/markets" else []
+
+    st2.client = One(n=0)
+    st2._window(0, 1, set(), stats, 10, 1000, 0, END)
+    assert stats["skipped"] == 1 and stats["new"] == 0
+    assert st2.db.execute("SELECT reason FROM skipped").fetchone()[0] == "Krypto (nicht gesammelt)"

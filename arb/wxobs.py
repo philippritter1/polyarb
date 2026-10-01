@@ -47,7 +47,7 @@ STATIONINFO_URL = "https://aviationweather.gov/api/data/stationinfo"
 TZ_URL = "https://api.open-meteo.com/v1/forecast"
 RETRY_REASONS = ("Station/Zeitzone fehlt", "keine Messwerte", "Token fehlt", "kein Preisverlauf")
 RETRY_AFTER = 6 * 3600
-VERSION = 2  # v2 (02.10.): station from any link format, time zone from the station, failures are retried
+VERSION = 3  # v2: any link format, time zone from the station, retries; v3: lower-case ?site= (weather.gov)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS wx_city(city TEXT PRIMARY KEY, station TEXT, tz TEXT, source TEXT, reason TEXT, ts REAL,
@@ -85,6 +85,10 @@ def station_from(text: str) -> Optional[str]:
     ...?station=KLGA. Prefers Wunderground links; the last ICAO-like path part wins."""
     urls = URL_RE.findall(text or "")
     urls.sort(key=lambda u: "wunderground" not in u.lower())
+    for u in urls:  # a station parameter: weather.gov/wrh/timeseries?site=eham (lower case there)
+        q = re.search(r"[?&](?:site|station|stid|ids|icao)=([A-Za-z][A-Za-z0-9]{3})(?![A-Za-z0-9])", u)
+        if q:
+            return q.group(1).upper()
     for u in urls:
         path = re.sub(r"^https?://[^/]+", "", u)
         parts = [x for x in re.split(r"[/?=&#.,;:]", path) if ICAO_RE.fullmatch(x)]

@@ -107,3 +107,23 @@ def test_analysis_without_and_with_data(tmp_path):
     a = analysis(db)
     assert a["n"] == 2 and a["cats"]["Wetter"]["n"] == 2 and a["last_run"]
     assert {r["key"] for r in a["rules"]} >= {"k_wetter_no_breit", "k_sport_dog"}
+
+
+def test_gap_reasons_and_millisecond_candles(tmp_path):
+    from arb.kalshi import _gap_reason, candle_ts
+    cs = _candles(CLOSE - 20 * 3600, 20, 19, 21)  # trading stopped 20 h before the close
+    assert at(cs, CLOSE - 3600, 3 * 3600) is None
+    assert _gap_reason(cs, CLOSE) == "no prices: letzte Kerze 12-48 h vor Schluss"
+    ms = [dict(c, end_period_ts=c["end_period_ts"] * 1000) for c in _candles(CLOSE, 20, 19, 21)]
+    assert candle_ts(ms[0]) < 2e9 and at(ms, CLOSE - 3600, 1800)["ask_yes"] == 0.21
+    empty = [{"end_period_ts": c["end_period_ts"]} for c in cs]
+    assert _gap_reason(empty, CLOSE) == "no prices: Kerzen ohne Preisfelder"
+    # skipped candle problems of an older version are listed again
+    db = str(tmp_path / "k.sqlite")
+    st = KalshiStudy(KalshiClient(), db)
+    st.db.execute("INSERT INTO kalshi_skipped VALUES('X', 'no prices', 0)")
+    st.db.execute("INSERT INTO kalshi_skipped VALUES('Y', 'result ''scalar''', 0)")
+    st.db.execute("UPDATE kalshi_meta SET value='1' WHERE key='version'")
+    st.db.commit()
+    st2 = KalshiStudy(KalshiClient(), db)
+    assert [r[0] for r in st2.db.execute("SELECT ticker FROM kalshi_skipped")] == ["Y"]

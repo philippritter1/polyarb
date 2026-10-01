@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 DAY = 86400.0
 CHECKPOINTS = {"1d": DAY, "6h": 6 * 3600, "1h": 3600}
+VERSION = 2  # v2 (02.10.): millisecond candle times, detailed reasons; skipped candle problems are retried
 FEE_RATE = 0.07  # Kalshi taker fee: 7 % * p * (1 - p) per contract (rounded up to the cent per order)
 
 # Kalshi series categories -> the German categories of the Polymarket study
@@ -98,17 +99,34 @@ def candle_prices(candle: dict) -> dict:
     return dict(p=p, ask_yes=ask, ask_no=(1 - bid) if bid is not None else None)
 
 
+def candle_ts(c: dict) -> float:
+    """End of the candle's period in seconds (milliseconds are converted)."""
+    t = float(c.get("end_period_ts") or c.get("ts") or 0)
+    return t / 1000 if t > 1e12 else t
+
+
 def at(candles: List[dict], ts: float, max_age: float) -> Optional[dict]:
     best = None
     for c in candles:
-        t = float(c.get("end_period_ts") or 0)
-        if t <= ts:
+        if candle_ts(c) <= ts:
             best = c
         else:
             break
-    if best is None or ts - float(best.get("end_period_ts") or 0) > max_age:
+    if best is None or ts - candle_ts(best) > max_age:
         return None
     return candle_prices(best)
+
+
+def _gap_reason(cs: List[dict], ref: float) -> str:
+    """Why candles gave no price at the checkpoints – grouped, so the reasons stay countable."""
+    last, first = candle_ts(cs[-1]), candle_ts(cs[0])
+    if not any(candle_prices(c)["p"] is not None for c in cs):
+        return "no prices: Kerzen ohne Preisfelder"
+    if first > ref - 3600:
+        return "no prices: Kerzen erst in der letzten Stunde"
+    gap = (ref - last) / 3600
+    return "no prices: letzte Kerze " + ("< 3 h" if gap < 3 else "3-12 h" if gap < 12 else "12-48 h" if gap < 48
+                                         else "> 48 h") + " vor Schluss"
 
 
 def result_yes(m: dict) -> Optional[int]:
@@ -139,6 +157,12 @@ class KalshiStudy:
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
         self._series: Optional[Dict[str, str]] = None
+        row = self.db.execute("SELECT value FROM kalshi_meta WHERE key='version'").fetchone()
+        if not row or int(row[0]) < VERSION:  # candle problems of older versions: list and try those markets again
+            self.db.execute("DELETE FROM kalshi_skipped WHERE reason LIKE 'no candles%' OR reason LIKE 'no prices%'")
+            self.db.execute("DELETE FROM kalshi_meta WHERE key='backfill_until'")
+            self.db.execute("INSERT OR REPLACE INTO kalshi_meta VALUES('version', ?)", (str(VERSION),))
+            self.db.commit()
         self.diag: Dict[str, object] = {"errors": [], "requests": 0}
 
     # ------------------------------------------------------------------ API
@@ -178,7 +202,12 @@ class KalshiStudy:
             data = self._get(path, params)
             cs = (data or {}).get("candlesticks") or []
             if cs:
-                return sorted(cs, key=lambda c: c.get("end_period_ts") or 0)
+                if "candle_sample" not in self.diag:  # one raw answer for the export
+                    import json
+                    self.diag["candle_sample"] = json.dumps({"keys": sorted(data), "n": len(cs), "first": cs[0],
+                                                             "last": cs[-1], "path": path.split("/candlesticks")[0][-60:]},
+                                                            default=str)[:1500]
+                return sorted(cs, key=candle_ts)
         return []
 
     # ------------------------------------------------------------------ meta
@@ -277,10 +306,18 @@ class KalshiStudy:
             return "no close time"
         cs = self.candles(m, ref - 30 * 3600, ref)
         if not cs:
+            if "no_candles_sample" not in self.diag:
+                self.diag["no_candles_sample"] = {"ticker": m.get("ticker"), "series": series_of(m),
+                                                  "close_time": m.get("close_time"), "ref": ref,
+                                                  "expected_expiration_time": m.get("expected_expiration_time")}
             return "no candles"
         pts = {k: at(cs, ref - dt, max_age=max(dt / 2, 3 * 3600)) for k, dt in CHECKPOINTS.items()}
         if all(v is None for v in pts.values()):
-            return "no prices"
+            if "no_prices_sample" not in self.diag:
+                self.diag["no_prices_sample"] = {"ticker": m.get("ticker"), "ref": ref, "n": len(cs),
+                                                 "first_ts": candle_ts(cs[0]), "last_ts": candle_ts(cs[-1]),
+                                                 "close_time": m.get("close_time")}
+            return _gap_reason(cs, ref)
         g = lambda k, f: (pts[k] or {}).get(f)  # noqa: E731
         return (m["ticker"], m.get("event_ticker"), series_of(m), (m.get("title") or "")[:300],
                 (m.get("yes_sub_title") or m.get("subtitle") or "")[:200], cat, kcat,

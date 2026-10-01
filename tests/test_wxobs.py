@@ -82,6 +82,9 @@ def test_helpers():
     assert station_from("https://www.wunderground.com/history/daily/tw/taipei/RCSS.") == "RCSS"
     assert station_from("see https://weather.gov/wrh/timeseries?site=KAUS and https://www.wunderground.com/history/daily/us/tx/austin/KAUS") == "KAUS"
     assert station_from("recorded at Toronto Pearson (CYYZ) by Environment Canada") == "CYYZ"
+    assert station_from("https://www.weather.gov/wrh/timeseries?site=eham https://www.weather.gov/wrh/timeseries?site=eham") == "EHAM"
+    assert station_from("https://www.weather.gov/wrh/timeseries?site=LTFM") == "LTFM"
+    assert station_from("https://www.weather.gov.hk/en/cis/climat.htm") is None
     assert to_unit(71.96, "f") == 72 and to_unit(75.2, "c") == 24 and to_unit(76.1, "c") == 25
     r = [(1, 64.4), (2, 59.0), (3, 57.2)]  # 18, 15, 14 °C
     assert dead_time(r, "min", 15, 15, "c", 0) == 3 and dead_time(r, "min", 15, 15, "c", 1) is None

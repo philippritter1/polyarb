@@ -1,0 +1,12 @@
+[Unit]
+Description=Polyarb Kalshi-Studie (aufgelöste Kalshi-Märkte + stündliche Bid/Ask)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=polyarb
+WorkingDirectory=/opt/polyarb
+EnvironmentFile=/etc/polyarb.env
+ExecStart=/opt/polyarb/.venv/bin/python run.py kalshi --days 90 --max-new 2000
+TimeoutStartSec=4h
+Nice=10

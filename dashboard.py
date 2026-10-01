@@ -274,7 +274,7 @@ def build_all(cfg: dict, out: str) -> list:
                               kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
-    extra = [("study", "Studie"), ("export", "Export")]
+    extra = [("study", "Studie"), ("kalshi", "Kalshi"), ("export", "Export")]
 
     def nav_for(active: str) -> list:
         up = "../" if active else ""  # every page except the arbitrage one lives one folder down
@@ -298,8 +298,16 @@ def build_all(cfg: dict, out: str) -> list:
     _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study"), stress, books), "utf-8")
     built.append(str(root / "study" / "index.html"))
 
+    from arb.kalshi import analysis as kalshi_analysis, csv_rows as kalshi_csv_rows
+    kalshi_db = str(data_dir / "kalshi.sqlite")
+    kal = kalshi_analysis(kalshi_db)
+    (root / "kalshi").mkdir(parents=True, exist_ok=True)
+    _write(root / "kalshi" / "index.html", kalshi_page(kal, nav_for("kalshi")), "utf-8")
+    built.append(str(root / "kalshi" / "index.html"))
+
     exp = root / "export"
     exp.mkdir(parents=True, exist_ok=True)
+    _write(exp / "kalshi-maerkte.csv", _csv(*kalshi_csv_rows(kalshi_db)), "utf-8-sig")
     markets, calib = study_csvs(study_db)
     _write(exp / "studie-maerkte.csv", markets, "utf-8-sig")
     _write(exp / "studie-kalibrierung.csv", calib, "utf-8-sig")
@@ -319,7 +327,9 @@ def build_all(cfg: dict, out: str) -> list:
               ("Studie", "Stresstest der Strategie-Regeln (Kosten, Glück, Zeit, Drawdown)", "studie-stresstest.csv",
                exp / "studie-stresstest.csv", "studie/stresstest.csv"),
               ("Studie", "Fußball: Polymarket-Preise neben Pinnacle-Quoten (je Markt)", "studie-buchmacher.csv",
-               exp / "studie-buchmacher.csv", "studie/buchmacher.csv")]
+               exp / "studie-buchmacher.csv", "studie/buchmacher.csv"),
+              ("Kalshi", "Aufgelöste Kalshi-Märkte mit Preis und echtem Ask vor Schluss", "kalshi-maerkte.csv",
+               exp / "kalshi-maerkte.csv", "kalshi/maerkte.csv")]
     tmp = exp / "polyarb-export.zip.tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for *_, disk, arc in files:
@@ -503,6 +513,55 @@ def study_page(cal: dict, nav: list, stress: list | None = None, books: dict | N
                     '<th class="num">n</th><th class="num">Ø Preis</th><th class="num">tatsächlich gewonnen</th>'
                     f'<th class="num">95-%-Bereich</th><th class="num">Diff. (Pkt.)</th></tr>{trs}</table></div></div>')
     return _page("Markt-Studie: Wie gut sagen Preise den Ausgang voraus?", nav, "".join(body))
+
+
+def kalshi_page(k: dict, nav: list) -> str:
+    title = "Kalshi-Studie: Gelten die Polymarket-Regeln auch dort?"
+    run = ""
+    if k.get("last_run"):
+        ts, new, skipped, seen = (k["last_run"].split("|") + ["0"] * 4)[:4]
+        run = (f'Letzter Lauf {datetime.fromtimestamp(float(ts)).strftime("%d.%m. %H:%M")}: {seen} Märkte gesehen, '
+               f'{new} neu, {skipped} übersprungen.')
+    skipped = ", ".join(f"{html.escape(str(r))}: {n}" for r, n in k.get("skipped") or [])
+    status = (f'<p class="note">{run}{" Übersprungen nach Grund – " + skipped if skipped else ""}</p>')
+    if not k.get("n"):
+        return _page(title, nav, '<p class="sub">Noch keine Daten. Der Sammler läuft alle 30 Minuten auf dem Server '
+                     '(Kalshi-Marktdaten sind öffentlich, kein Konto nötig).</p>' + status)
+    span = (datetime.fromtimestamp(k["span"][0]).strftime("%d.%m.%Y") + " – " +
+            datetime.fromtimestamp(k["span"][1]).strftime("%d.%m.%Y"))
+    body = [f'<p class="sub">{k["n"]:,} aufgelöste Kalshi-Märkte · {span}</p>'.replace(",", "."), status,
+            '<div class="warnbox"><b>Der Unterschied zur Polymarket-Studie:</b> Kalshi liefert je Stunde das beste '
+            'Angebot (Ask). Gerechnet wird deshalb zum <b>echten Kaufpreis</b> plus Kalshi-Gebühr (7 % · p · (1−p)), '
+            'nicht zum letzten Handelspreis. Wo eine Stunde kein Ask hatte, gilt Preis + 2 Cent. Krypto wird nicht '
+            'gesammelt (Tausende Stundenmärkte, auf Polymarket ohne Edge). Volumen zählt Kontrakte (je 1 $).</div>']
+    def res_cells(r):
+        if not r:
+            return '<td class="num" colspan="8">zu wenige Wetten</td>'
+        cls = "pos" if r["p95"] > 0 and r["p_loss"] <= 0.1 else "neg" if r["p_loss"] >= 0.9 else ""
+        return (f'<td class="num">{r["n"]}</td><td class="num">{r["events"]}</td>'
+                f'<td class="num">{_de(r["price"] * 100)} % / {_de(r["buy"] * 100)} %</td>'
+                f'<td class="num">{_de(r["hit"] * 100)} %</td><td class="num {cls}">{_de(r["roi"] * 100)} %</td>'
+                f'<td class="num">{_de(r["roi_1ct"] * 100)} %</td><td class="num">{_de(r["p_loss"] * 100, 0)} %</td>'
+                f'<td class="num">{_de(r["first"] * 100)} / {_de(r["second"] * 100)} %</td>')
+    head = ('<th class="num">Wetten</th><th class="num">Events</th><th class="num">Ø Preis / Ø Kauf</th>'
+            '<th class="num">gewonnen</th><th class="num">Rendite</th><th class="num">+1 Cent</th>'
+            '<th class="num">P(Verlust)</th><th class="num">1. / 2. Hälfte</th>')
+    rules = "".join(f'<tr><td>{html.escape(r["name"])}</td>{res_cells(r["res"])}</tr>' for r in k["rules"])
+    body.append('<div class="card"><h2>Die Polymarket-Regeln auf Kalshi</h2><p class="note">Festgeschrieben wie auf '
+                'Polymarket, nicht für Kalshi nachjustiert. Rendite nach Gebühr zum echten Ask; P(Verlust) per '
+                'Bootstrap über Events. Grün nur, wenn klar positiv.</p><div class="tblwrap"><table><tr><th>Regel</th>'
+                f'{head}</tr>{rules}</table></div></div>')
+    cats = "".join(f'<tr><td>{html.escape(c)}</td><td class="num">{v["n"]:,}</td><td class="num">{v["vol"]:,.0f}</td></tr>'
+                   .replace(",", ".") for c, v in sorted(k["cats"].items(), key=lambda x: -x[1]["n"]))
+    body.append('<div class="card"><h2>Gesammelt nach Kategorie</h2><div class="tblwrap"><table><tr><th>Kategorie</th>'
+                f'<th class="num">Märkte</th><th class="num">Volumen (Kontrakte)</th></tr>{cats}</table></div></div>')
+    grid = "".join(f'<tr><td>{html.escape(g["cat"])}</td><td>{g["band"]}</td>{res_cells(g["res"])}</tr>' for g in k["grid"])
+    body.append('<div class="card"><h2>Edge-Karte (6 h vorher, beide Seiten)</h2><p class="note">Jede Seite, die 6 h vor '
+                'Schluss in diesem Preisbereich lag, gekauft zum echten Ask. Viele Zellen = viele Tests: einzelne '
+                'grüne Felder können Zufall sein. Ernst zu nehmen ist, was auch in beiden Hälften positiv ist.</p>'
+                f'<div class="tblwrap"><table><tr><th>Kategorie</th><th>Preis</th>{head}</tr>'
+                f'{grid or "<tr><td colspan=10>Noch zu wenige Daten.</td></tr>"}</table></div></div>')
+    return _page(title, nav, "".join(body))
 
 
 def _edge_cls(r: dict) -> str:

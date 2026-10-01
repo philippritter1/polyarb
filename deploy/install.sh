@@ -39,8 +39,8 @@ if [ ! -f /etc/caddy/.polyarb ]; then
   systemctl restart caddy
 fi
 systemctl daemon-reload
-systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
-systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer
+systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer
+systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer
 # seit 01.10.: nur noch der 4-h-Bericht (08 Uhr gehört jetzt dazu), kein eigener Tagesbericht
 systemctl disable --now polyarb-daily.timer || true
 systemctl restart polyarb-report.timer  # neuer Zeitplan

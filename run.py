@@ -5,6 +5,7 @@
   python run.py paper --hours 24     # live paper trading against real order books
   python run.py mock  --hours 6      # offline simulation with a synthetic market (pipeline test)
   python run.py dashboard            # build dashboard.html from the SQLite log
+  python run.py kalshi               # Kalshi study: settled markets with hourly bid/ask (data/kalshi.sqlite)
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from arb.config import load_config
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["scan", "paper", "mock", "dashboard", "scenario", "study"])
+    ap.add_argument("cmd", choices=["scan", "paper", "mock", "dashboard", "scenario", "study", "kalshi"])
     ap.add_argument("--days", type=float, default=120, help="study: how far back to collect resolved markets")
     ap.add_argument("--max-new", type=int, default=3000, help="study: max new markets per run")
     ap.add_argument("--weather-min-volume", type=float, default=50, help="study: volume floor for temperature buckets")
@@ -71,6 +72,13 @@ def main():
             print(sync(db, days_back=args.days))
         except Exception as e:  # noqa
             logging.getLogger().warning("odds sync failed: %s", e)
+        return
+
+    if args.cmd == "kalshi":
+        import os
+        from arb.kalshi import KalshiStudy
+        db = os.path.join(os.path.dirname(cfg["storage"]["db_path"]) or ".", "kalshi.sqlite")
+        print(KalshiStudy(client, db).collect(days_back=args.days, max_new=args.max_new))
         return
 
     if args.cmd == "scenario":

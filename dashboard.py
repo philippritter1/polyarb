@@ -50,7 +50,9 @@ def collect(db_path: str, start_capital: float) -> dict:
             by_strat[s]["realized"] += pnl or 0
 
     # scenarios: did positions win as often as the entry price / the strategy's model said?
-    cal = _q(db, """SELECT s.payout > 0, e.capital / e.matched_qty, e.expected_payout / e.matched_qty, s.pnl
+    # locked = what was really paid (the capital column held the planned size for partial fills before 02.10.)
+    cal = _q(db, """SELECT s.payout > 0, COALESCE(NULLIF(e.locked, 0), e.capital) / e.matched_qty,
+                           e.expected_payout / e.matched_qty, s.pnl
                     FROM settlements s JOIN executions e ON s.ref = e.basket_id
                     WHERE s.kind = 'position' AND e.matched_qty > 0""")
     calib = dict(n=len(cal), wins=sum(1 for r in cal if r[0]),
@@ -315,6 +317,10 @@ def build_all(cfg: dict, out: str) -> list:
     exp.mkdir(parents=True, exist_ok=True)
     _write(exp / "kalshi-maerkte.csv", _csv(*kalshi_csv_rows(kalshi_db)), "utf-8-sig")
     _write(exp / "wetter-messwerte.csv", _csv(*wx_csv_rows(wx_db)), "utf-8-sig")
+    from arb.kalshi import diag_rows as kalshi_diag_rows
+    from arb.wxobs import station_rows as wx_station_rows
+    _write(exp / "kalshi-diagnose.csv", _csv(*kalshi_diag_rows(kalshi_db)), "utf-8-sig")
+    _write(exp / "wetter-stationen.csv", _csv(*wx_station_rows(wx_db)), "utf-8-sig")
     markets, calib = study_csvs(study_db)
     _write(exp / "studie-maerkte.csv", markets, "utf-8-sig")
     _write(exp / "studie-kalibrierung.csv", calib, "utf-8-sig")
@@ -338,7 +344,11 @@ def build_all(cfg: dict, out: str) -> list:
               ("Kalshi", "Aufgelöste Kalshi-Märkte mit Preis und echtem Ask vor Schluss", "kalshi-maerkte.csv",
                exp / "kalshi-maerkte.csv", "kalshi/maerkte.csv"),
               ("Wetter-Messwerte", "Temperatur-Buckets: ab wann laut Station unmöglich, und Preis danach",
-               "wetter-messwerte.csv", exp / "wetter-messwerte.csv", "wetter-messwerte/maerkte.csv")]
+               "wetter-messwerte.csv", exp / "wetter-messwerte.csv", "wetter-messwerte/maerkte.csv"),
+              ("Wetter-Messwerte", "Stationen je Stadt und was die Marktbeschreibung verlinkt", "wetter-stationen.csv",
+               exp / "wetter-stationen.csv", "wetter-messwerte/stationen.csv"),
+              ("Kalshi", "Diagnose des letzten Laufs (Anfragen, Fehler, Felder der API)", "kalshi-diagnose.csv",
+               exp / "kalshi-diagnose.csv", "kalshi/diagnose.csv")]
     tmp = exp / "polyarb-export.zip.tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for *_, disk, arc in files:

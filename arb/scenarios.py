@@ -525,6 +525,9 @@ class ScenarioEngine:
         note = f"ask={ob.best_ask:.3f} max={s.max_price:.3f} fair={s.fair:.3f} {s.reason}" + (
             f" delay={delay:g}s" if delay else "")
         fills = [Fill(s.token_id, "BUY", got, notional / got if got else 0.0, fee)]
+        if got > 1e-9 and status == "partial":  # log what was really spent, not the planned size
+            import dataclasses
+            opp = dataclasses.replace(opp, capital_usd=cost, net_profit_usd=got * s.fair - cost)
         res = ExecutionResult(opp, status, got, fills, locked_capital=cost, expected_payout=got * s.fair, note=note)
         self.store.execution(self.clock.now(), res, (self.latency_s + delay) * 1000)
         if got <= 1e-9:

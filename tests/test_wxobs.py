@@ -39,9 +39,12 @@ class Client:
 
     def get_json(self, url, params):
         self.calls.append(url)
-        if "geocoding" in url:
-            assert params["name"] == "London"
-            return {"results": [{"timezone": "Europe/London"}]}
+        if "stationinfo" in url:
+            assert params["ids"] == "EGLC"
+            return [{"icaoId": "EGLC", "lat": 51.5, "lon": 0.05}]
+        if "open-meteo.com/v1/forecast" in url:
+            assert params["latitude"] == 51.5 and params["timezone"] == "auto"
+            return {"timezone": "Europe/London"}
         if url.endswith("/markets"):
             return [{"conditionId": c, "description": DESC, "clobTokenIds": f'["Y{c}", "N{c}"]'}
                     for c in params["condition_ids"]]
@@ -75,6 +78,10 @@ def test_helpers():
     assert station_from(DESC) == "EGLC"
     assert station_from("see https://www.wunderground.com/history/daily/us/ny/new-york-city/KLGA") == "KLGA"
     assert station_from("Hong Kong Observatory https://www.hko.gov.hk/") is None
+    assert station_from("here: https://www.wunderground.com/history/daily/KMIA/date/2026-9-23.") == "KMIA"
+    assert station_from("https://www.wunderground.com/history/daily/tw/taipei/RCSS.") == "RCSS"
+    assert station_from("see https://weather.gov/wrh/timeseries?site=KAUS and https://www.wunderground.com/history/daily/us/tx/austin/KAUS") == "KAUS"
+    assert station_from("recorded at Toronto Pearson (CYYZ) by Environment Canada") == "CYYZ"
     assert to_unit(71.96, "f") == 72 and to_unit(75.2, "c") == 24 and to_unit(76.1, "c") == 25
     r = [(1, 64.4), (2, 59.0), (3, 57.2)]  # 18, 15, 14 °C
     assert dead_time(r, "min", 15, 15, "c", 0) == 3 and dead_time(r, "min", 15, 15, "c", 1) is None
@@ -123,5 +130,11 @@ def test_city_without_station_is_skipped(tmp_path):
     st = WxObsStudy(NoStation(), str(tmp_path / "wx.sqlite"), _study(tmp_path), fetch_text=lambda u, p: "")
     st.collect(now=CLOSE)
     row = st.db.execute("SELECT station, source, reason FROM wx_city").fetchone()
-    assert row == (None, "www.hko.gov.hk", "keine Wunderground-Station")
+    assert row == (None, "www.hko.gov.hk", "keine Station im Beschreibungstext")
     assert analysis(str(tmp_path / "wx.sqlite"))["priced"] == 0
+    # failures are not final: after RETRY_AFTER the city and its markets are tried again
+    from arb.wxobs import RETRY_AFTER
+    st.client = Client()
+    stats = st.collect(now=CLOSE + RETRY_AFTER + 60)
+    assert stats["processed"] == 4  # a-d again (e stays "Frage nicht lesbar")
+    assert st.db.execute("SELECT station, reason FROM wx_city").fetchone() == ("EGLC", None)

@@ -41,10 +41,17 @@ MARGINS = (0, 1, 2)
 DELAYS = (15, 60)  # minutes after the reading: METAR publication plus our reaction
 FEE_RATE = 0.05
 QUESTION_RE = re.compile(r"will the (highest|lowest) temperature in (.+?) be (.+?) on ([a-z]+) (\d{1,2})(?:,? (\d{4}))?\s*\??$", re.I)
-STATION_RE = re.compile(r"wunderground\.com/history/(?:daily|hourly)/[^\s\"')]*?/([A-Z0-9]{4})(?=[/?\s\"').,]|$)")
+URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
+ICAO_RE = re.compile(r"[A-Z][A-Z0-9]{3}")
+STATIONINFO_URL = "https://aviationweather.gov/api/data/stationinfo"
+TZ_URL = "https://api.open-meteo.com/v1/forecast"
+RETRY_REASONS = ("Station/Zeitzone fehlt", "keine Messwerte", "Token fehlt", "kein Preisverlauf")
+RETRY_AFTER = 6 * 3600
+VERSION = 2  # v2 (02.10.): station from any link format, time zone from the station, failures are retried
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS wx_city(city TEXT PRIMARY KEY, station TEXT, tz TEXT, source TEXT, reason TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS wx_city(city TEXT PRIMARY KEY, station TEXT, tz TEXT, source TEXT, reason TEXT, ts REAL,
+  note TEXT);
 CREATE TABLE IF NOT EXISTS wx_obs(station TEXT, ts REAL, tmpf REAL, PRIMARY KEY(station, ts));
 CREATE TABLE IF NOT EXISTS wx_obs_day(station TEXT, day TEXT, PRIMARY KEY(station, day));
 CREATE TABLE IF NOT EXISTS wx_markets(
@@ -73,8 +80,18 @@ def parse_question(q: str, year: int) -> Optional[Tuple[str, str, Tuple[float, f
 
 
 def station_from(text: str) -> Optional[str]:
-    m = STATION_RE.search(text or "")
-    return m.group(1).upper() if m else None
+    """ICAO code of the resolution station from the links in a market description, whatever the link
+    format: .../history/daily/us/ny/new-york-city/KLGA, .../history/daily/KLGA/date/2026-9-23,
+    ...?station=KLGA. Prefers Wunderground links; the last ICAO-like path part wins."""
+    urls = URL_RE.findall(text or "")
+    urls.sort(key=lambda u: "wunderground" not in u.lower())
+    for u in urls:
+        path = re.sub(r"^https?://[^/]+", "", u)
+        parts = [x for x in re.split(r"[/?=&#.,;:]", path) if ICAO_RE.fullmatch(x)]
+        if parts:
+            return parts[-1]
+    m = re.search(r"\(([A-Z][A-Z0-9]{3})\)", text or "")  # "... Airport Station (KLGA) ..."
+    return m.group(1) if m else None
 
 
 def to_unit(tmpf: float, unit: str) -> int:
@@ -113,7 +130,16 @@ class WxObsStudy:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
+        if "note" not in [r[1] for r in self.db.execute("PRAGMA table_info(wx_city)")]:
+            self.db.execute("ALTER TABLE wx_city ADD COLUMN note TEXT")
+        row = self.db.execute("SELECT value FROM wx_meta WHERE key='version'").fetchone()
+        if not row or int(row[0]) < VERSION:  # v1 cached failed cities (and their markets) for good
+            self.db.execute("DELETE FROM wx_city WHERE reason IS NOT NULL")
+            self.db.execute(f"DELETE FROM wx_markets WHERE reason IN ({','.join('?' * len(RETRY_REASONS))})", RETRY_REASONS)
+            self.db.execute("INSERT OR REPLACE INTO wx_meta VALUES('version', ?)", (str(VERSION),))
+            self.db.commit()
         self.fetch_text = fetch_text or _fetch_text
+        self._now = time.time()  # the run's clock (tests pass their own)
 
     # ------------------------------------------------------------------ helpers
     def _json(self, url: str, params: dict):
@@ -132,22 +158,36 @@ class WxObsStudy:
                 out[str(m.get("conditionId"))] = m
         return out
 
+    def _tz(self, station: str, city: str) -> Optional[str]:
+        """Time zone at the station's coordinates (a city name can be ambiguous: Panama City), else by name."""
+        info = self._json(STATIONINFO_URL, {"ids": station, "format": "json"})
+        info = info[0] if isinstance(info, list) and info else info if isinstance(info, dict) else {}
+        lat, lon = info.get("lat"), info.get("lon")
+        if lat is not None and lon is not None:
+            tz = (self._json(TZ_URL, {"latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": 1,
+                                      "daily": "temperature_2m_max"}) or {}).get("timezone")
+            if tz and tz != "GMT":
+                return tz
+        geo = self._json(GEOCODE_URL, {"name": re.sub(r"\s*\(.*?\)", "", city), "count": 1, "language": "en"}) or {}
+        res = geo.get("results") or []
+        return res[0].get("timezone") if res else None
+
     def _city(self, city: str, cid: str) -> Optional[Tuple[str, str]]:
-        row = self.db.execute("SELECT station, tz FROM wx_city WHERE city=?", (city,)).fetchone()
-        if row:
-            return (row[0], row[1]) if row[0] and row[1] else None
+        row = self.db.execute("SELECT station, tz, reason, ts FROM wx_city WHERE city=?", (city,)).fetchone()
+        if row and (not row[2] or self._now - (row[3] or 0) < RETRY_AFTER):
+            return (row[0], row[1]) if row[0] and row[1] and not row[2] else None
         m = self._gamma([cid]).get(cid) or {}
         text = f"{m.get('description') or ''} {m.get('resolutionSource') or ''}"
         station = station_from(text)
         src = re.search(r"https?://([^/\s]+)", text)
-        geo = (self._json(GEOCODE_URL, {"name": re.sub(r"\s*\(.*?\)", "", city), "count": 1, "language": "en"}) or {})
-        res = geo.get("results") or []
-        tz = res[0].get("timezone") if res else None
-        reason = None if station and tz else ("keine Wunderground-Station" if not station else "Zeitzone unbekannt")
+        tz = self._tz(station, city) if station else None
+        reason = None if station and tz else ("keine Station im Beschreibungstext" if not station else "Zeitzone unbekannt")
         if not m:
             reason = "Markt nicht gefunden"
-        self.db.execute("INSERT OR REPLACE INTO wx_city VALUES(?,?,?,?,?,?)",
-                        (city, station, tz, src.group(1) if src else None, reason, time.time()))
+        urls = URL_RE.findall(text)
+        note = (" ".join(urls) or text)[:400]  # what the description pointed at – for the station table
+        self.db.execute("INSERT OR REPLACE INTO wx_city VALUES(?,?,?,?,?,?,?)",
+                        (city, station, tz, src.group(1) if src else None, reason, self._now, note))
         self.db.commit()
         return (station, tz) if not reason else None
 
@@ -205,6 +245,7 @@ class WxObsStudy:
     # ------------------------------------------------------------------ run
     def collect(self, max_markets: int = 3000, min_price: float = 0.02, now: Optional[float] = None) -> Dict[str, int]:
         now = time.time() if now is None else now
+        self._now = now
         if not Path(self.study_db).exists():
             return {"error": "keine Studie"}
         sdb = sqlite3.connect(self.study_db)
@@ -213,7 +254,10 @@ class WxObsStudy:
                                   FROM markets WHERE category='Wetter' ORDER BY COALESCE(close_ts, end_ts) DESC""").fetchall()
         finally:
             sdb.close()
-        done = {r[0] for r in self.db.execute("SELECT condition_id FROM wx_markets")}
+        # done = stored, except failures that may work now (a city whose station was found later)
+        done = {r[0] for r in self.db.execute(
+            f"SELECT condition_id FROM wx_markets WHERE reason IS NULL OR reason NOT IN ({','.join('?' * len(RETRY_REASONS))})"
+            " OR ts > ?", (*RETRY_REASONS, now - RETRY_AFTER))}
         stats = {"processed": 0, "candidates": 0, "dead": 0, "priced": 0, "skipped": 0}
         todo = []
         for cid, q, end, close, out, *ps in rows:
@@ -293,7 +337,7 @@ class WxObsStudy:
 
     def _store(self, base: list, deads: list, prices: list, reason: Optional[str]) -> None:
         self.db.execute(f"INSERT OR REPLACE INTO wx_markets VALUES({','.join('?' * 23)})",
-                        (*base, *deads, *prices, reason, time.time()))
+                        (*base, *deads, *prices, reason, self._now))
 
 
 def _fetch_text(url: str, params: dict) -> str:
@@ -366,6 +410,19 @@ def analysis(db_path: str, slip: float = 0.01) -> dict:
         c["yes"] += yes
     out["cities"] = sorted(({**c, "yes": c["yes"] / c["n"]} for c in by.values()), key=lambda c: (-c["errors"], -c["n"]))
     return out
+
+
+def station_rows(db_path: str) -> tuple:
+    header = ["Stadt", "Station", "Zeitzone", "Quelle", "Status", "Geprüft", "Links in der Beschreibung"]
+    if not Path(db_path).exists():
+        return header, []
+    db = sqlite3.connect(db_path)
+    try:
+        rows = db.execute("SELECT city, station, tz, source, COALESCE(reason, 'ok'), ts, note FROM wx_city ORDER BY city").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    db.close()
+    return header, [[*r[:5], datetime.fromtimestamp(r[5]).strftime("%Y-%m-%d %H:%M") if r[5] else "", r[6] or ""] for r in rows]
 
 
 def csv_rows(db_path: str) -> tuple:

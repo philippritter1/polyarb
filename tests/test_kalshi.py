@@ -26,7 +26,7 @@ class KalshiClient:
                  title="Highest temperature in NYC on Sep 23?", yes_sub_title="78° to 79°", result="no",
                  volume=3200, close_time=CLOSE),
             dict(ticker="KXHIGHCHI-26SEP23-B70", event_ticker="KXHIGHCHI-26SEP23", market_type="binary",
-                 title="Highest temperature in Chicago on Sep 23?", result="yes", volume=900, close_time=iso),
+                 title="Highest temperature in Chicago on Sep 23?", result="yes", volume_fp="900.00", close_time=iso),
             dict(ticker="KXMLB-26SEP23-NYY", event_ticker="KXMLB-26SEP23", market_type="binary",
                  title="Yankees win?", result="", volume=50000, close_time=CLOSE),          # not settled yet
             dict(ticker="KXBTC-26SEP23-B100", event_ticker="KXBTC-26SEP23", market_type="binary",
@@ -75,6 +75,9 @@ def test_collect_reads_cents_dollars_and_historical(tmp_path):
     assert not any("KXBTC" in c for c in st.client.calls)
     header, out = csv_rows(db)
     assert len(out) == 2 and header[0] == "Ticker" and out[0][9] in ("YES", "NO")
+    from arb.kalshi import diag_rows
+    d = dict(diag_rows(db)[1])
+    assert "ticker" in d["market_keys"] and "übersprungen: result ''" in d  # Chicago (volume_fp only) was collected above
 
 
 def test_at_respects_max_age():

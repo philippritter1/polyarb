@@ -126,7 +126,7 @@ scenarios:
     title: Wetter-NO
     strategy: band               # Studie: Temperatur-Buckets zu 3-10 % in Märkten unter 5k $ gewannen nur ~1 %
     category: Wetter
-    side: NO
+    side: "NO"                   # in Anführungszeichen: YAML liest NO sonst als "nein"
     capital_usd: 2500
     interval_min: 10
     min_price: 0.90              # NO-Seite kostet mindestens ...
@@ -173,7 +173,7 @@ scenarios:
     strategy: band               # Studie: JA-Buckets sind durchweg zu teuer; NO 55-97 % unter 5k $: +8,4 %, neue Daten +5,8 %
     category: Wetter
     outcome: "No"                # nur die NO-Seite
-    side: NO
+    side: "NO"                   # in Anführungszeichen: YAML liest NO sonst als "nein"
     capital_usd: 2500
     interval_min: 10
     min_price: 0.55

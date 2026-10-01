@@ -116,6 +116,18 @@ def result_yes(m: dict) -> Optional[int]:
     return 1 if r == "yes" else 0 if r == "no" else None
 
 
+def volume_of(m: dict) -> float:
+    """Traded contracts; newer API versions send counts as fixed-point strings (`volume_fp`)."""
+    for k in ("volume", "volume_fp", "volume_contracts"):
+        v = m.get(k)
+        if v not in (None, ""):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
 def series_of(m: dict) -> str:
     return str(m.get("series_ticker") or str(m.get("event_ticker") or m.get("ticker") or "").split("-")[0])
 
@@ -127,13 +139,18 @@ class KalshiStudy:
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
         self._series: Optional[Dict[str, str]] = None
+        self.diag: Dict[str, object] = {"errors": [], "requests": 0}
 
     # ------------------------------------------------------------------ API
     def _get(self, path: str, params: dict) -> Optional[dict]:
+        self.diag["requests"] = int(self.diag["requests"]) + 1
         try:
             return self.client.get_json(f"{self.base}{path}", params)
         except Exception as e:  # noqa – 4xx (PaginationEnd) or repeated failures: the caller records why
             log.debug("kalshi %s: %s", path, e)
+            errs = self.diag["errors"]
+            if len(errs) < 8:
+                errs.append(f"{path.split('/markets/')[0][:60]}: {str(e)[:160]}")
             return None
 
     def _paged(self, path: str, key: str, params: dict, max_items: int) -> List[dict]:
@@ -181,7 +198,7 @@ class KalshiStudy:
         would crowd out everything else, and the Polymarket study found nothing there."""
         now = time.time() if now is None else now
         known = {r[0] for r in self.db.execute("SELECT ticker FROM kalshi_markets UNION SELECT ticker FROM kalshi_skipped")}
-        stats = {"new": 0, "skipped": 0, "seen": 0, "windows": 0}
+        stats = {"new": 0, "skipped": 0, "seen": 0, "windows": 0, "low_volume": 0, "crypto": 0}
         oldest = now - days_back * DAY
         t_hi = now
         while t_hi > now - recent_days * DAY and stats["new"] < max_new:
@@ -197,6 +214,8 @@ class KalshiStudy:
         bookmark = self._meta("backfill_until")
         stats["backfill_days_left"] = round(max(0.0, ((float(bookmark) if bookmark else now) - oldest) / DAY), 1)
         self._meta("last_run", f"{now:.0f}|{stats['new']}|{stats['skipped']}|{stats['seen']}")
+        import json
+        self._meta("diag", json.dumps(dict(self.diag, stats=stats, ts=now), default=str))
         self.db.commit()
         log.info("kalshi: %s", stats)
         return stats
@@ -206,18 +225,28 @@ class KalshiStudy:
         markets = self._paged("/markets", "markets", {"status": "settled", "min_close_ts": int(t_lo),
                                                       "max_close_ts": int(t_hi), "limit": 1000}, 50000)
         cats = self.series_categories() if markets else {}
+        if markets and "market_keys" not in self.diag:  # what the live API really sends (shown in the export)
+            m0 = markets[0]
+            self.diag["market_keys"] = ",".join(sorted(m0))[:600]
+            self.diag["market_sample"] = {k: m0.get(k) for k in ("ticker", "status", "result", "volume", "volume_fp",
+                                                                 "close_time", "last_price", "last_price_dollars")}
+            self.diag["series"] = len(cats)
         todo = []
         for m in markets:
             stats["seen"] += 1
             t = str(m.get("ticker") or "")
-            if not t or t in known or float(m.get("volume") or 0) < min_volume:
+            if not t or t in known:
+                continue
+            if volume_of(m) < min_volume:
+                stats["low_volume"] += 1
                 continue
             kcat = cats.get(series_of(m)) or str(m.get("category") or "")
             cat = CATEGORY_MAP.get(kcat.lower(), "Sonstiges")
             if cat in skip_categories:
+                stats["crypto"] += 1
                 continue
             todo.append((m, kcat, cat))
-        todo.sort(key=lambda x: -float(x[0].get("volume") or 0))  # the most traded first
+        todo.sort(key=lambda x: -volume_of(x[0]))  # the most traded first
         for m, kcat, cat in todo:
             if stats["new"] >= max_new:
                 self.db.commit()
@@ -255,7 +284,7 @@ class KalshiStudy:
         g = lambda k, f: (pts[k] or {}).get(f)  # noqa: E731
         return (m["ticker"], m.get("event_ticker"), series_of(m), (m.get("title") or "")[:300],
                 (m.get("yes_sub_title") or m.get("subtitle") or "")[:200], cat, kcat,
-                float(m.get("volume") or 0), ref, out,
+                volume_of(m), ref, out,
                 g("1d", "p"), g("6h", "p"), g("1h", "p"),
                 g("1d", "ask_yes"), g("1d", "ask_no"), g("6h", "ask_yes"), g("6h", "ask_no"),
                 g("1h", "ask_yes"), g("1h", "ask_no"), now)
@@ -361,6 +390,25 @@ def analysis(db_path: str) -> dict:
             if res and res["n"] >= 50:
                 out["grid"].append(dict(cat=cat, band=f"{lo * 100:.0f}–{hi * 100:.0f} %", res=res))
     return out
+
+
+def diag_rows(db_path: str) -> tuple:
+    """Last run as key/value rows for the export: counts, API errors, the fields the API sent."""
+    import json
+    header = ["Schlüssel", "Wert"]
+    if not Path(db_path).exists():
+        return header, [["Status", "noch kein Lauf"]]
+    db = sqlite3.connect(db_path)
+    try:
+        r = db.execute("SELECT value FROM kalshi_meta WHERE key='diag'").fetchone()
+        skipped = db.execute("SELECT reason, COUNT(*) FROM kalshi_skipped GROUP BY 1 ORDER BY 2 DESC").fetchall()
+    except sqlite3.OperationalError:
+        r, skipped = None, []
+    db.close()
+    d = json.loads(r[0]) if r else {}
+    rows = [[k, json.dumps(v, default=str) if isinstance(v, (dict, list)) else v] for k, v in d.items()]
+    rows += [[f"übersprungen: {reason}", n] for reason, n in skipped]
+    return header, rows or [["Status", "noch kein Lauf"]]
 
 
 def csv_rows(db_path: str) -> tuple:

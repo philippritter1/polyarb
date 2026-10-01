@@ -494,3 +494,28 @@ def test_band_filters_kind_type_and_outcome(tmp_path):
     feng = ScenarioEngine("finanz_dog", fcfg, FakeClient(markets=[px, er], books=fbooks), SimClock(NOW))
     feng.step()
     assert list(feng.pf.positions) == ["WY"]
+
+
+def test_partial_fill_logs_what_was_really_spent(tmp_path):
+    kw = dict(gameStartTime="2026-09-21T16:00:00Z", end="2026-09-21T18:00:00Z")
+    m = _market("s1", "Lakers vs. Celtics", ["0.94", "0.06"], ["L1", "C1"], **kw)
+    books = {"C1": ob("C1", [(0.05, 500)], [(0.06, 500)]), "L1": ob("L1", [(0.93, 500)], [(0.94, 500)])}
+
+    class Thinning(FakeClient):  # the book loses depth between sizing and the order
+        n = 0
+
+        def books(self, tids):
+            out = super().books(tids)
+            if "C1" in out and "C1" in tids and len(tids) == 1:
+                Thinning.n += 1
+                if Thinning.n > 1:
+                    out["C1"] = ob("C1", [(0.05, 500)], [(0.06, 40)])
+            return out
+
+    eng = ScenarioEngine("underdog", _cfg(tmp_path, "underdog", max_position_usd=10, confirm_with_rest=False),
+                         Thinning(markets=[m], books=books), SimClock(NOW))
+    eng.step()
+    status, capital, locked, qty = eng.store.db.execute(
+        "SELECT status, capital, locked, matched_qty FROM executions").fetchone()
+    assert status == "partial" and qty < 100
+    assert math.isclose(capital, locked) and math.isclose(capital, eng.pf.positions["C1"].cost)

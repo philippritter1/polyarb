@@ -418,7 +418,9 @@ def station_rows(db_path: str) -> tuple:
         return header, []
     db = sqlite3.connect(db_path)
     try:
-        rows = db.execute("SELECT city, station, tz, source, COALESCE(reason, 'ok'), ts, note FROM wx_city ORDER BY city").fetchall()
+        cols = [r[1] for r in db.execute("PRAGMA table_info(wx_city)")]
+        note = "note" if "note" in cols else "'(erst ab dem nächsten Lauf)'"  # DB still from the first version
+        rows = db.execute(f"SELECT city, station, tz, source, COALESCE(reason, 'ok'), ts, {note} FROM wx_city ORDER BY city").fetchall()
     except sqlite3.OperationalError:
         rows = []
     db.close()

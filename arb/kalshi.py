@@ -408,7 +408,9 @@ def diag_rows(db_path: str) -> tuple:
     d = json.loads(r[0]) if r else {}
     rows = [[k, json.dumps(v, default=str) if isinstance(v, (dict, list)) else v] for k, v in d.items()]
     rows += [[f"übersprungen: {reason}", n] for reason, n in skipped]
-    return header, rows or [["Status", "noch kein Lauf"]]
+    if not r:  # the database exists, but the last run was an older version without diagnostics
+        rows.insert(0, ["Status", "Datenbank vorhanden, Diagnose erst ab dem nächsten Lauf"])
+    return header, rows
 
 
 def csv_rows(db_path: str) -> tuple:

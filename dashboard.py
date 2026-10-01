@@ -274,7 +274,7 @@ def build_all(cfg: dict, out: str) -> list:
                               kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
-    extra = [("study", "Studie"), ("kalshi", "Kalshi"), ("export", "Export")]
+    extra = [("study", "Studie"), ("wxobs", "Wetter-Messwerte"), ("kalshi", "Kalshi"), ("export", "Export")]
 
     def nav_for(active: str) -> list:
         up = "../" if active else ""  # every page except the arbitrage one lives one folder down
@@ -305,9 +305,16 @@ def build_all(cfg: dict, out: str) -> list:
     _write(root / "kalshi" / "index.html", kalshi_page(kal, nav_for("kalshi")), "utf-8")
     built.append(str(root / "kalshi" / "index.html"))
 
+    from arb.wxobs import analysis as wx_analysis, csv_rows as wx_csv_rows
+    wx_db = str(data_dir / "wxobs.sqlite")
+    (root / "wxobs").mkdir(parents=True, exist_ok=True)
+    _write(root / "wxobs" / "index.html", wxobs_page(wx_analysis(wx_db), nav_for("wxobs")), "utf-8")
+    built.append(str(root / "wxobs" / "index.html"))
+
     exp = root / "export"
     exp.mkdir(parents=True, exist_ok=True)
     _write(exp / "kalshi-maerkte.csv", _csv(*kalshi_csv_rows(kalshi_db)), "utf-8-sig")
+    _write(exp / "wetter-messwerte.csv", _csv(*wx_csv_rows(wx_db)), "utf-8-sig")
     markets, calib = study_csvs(study_db)
     _write(exp / "studie-maerkte.csv", markets, "utf-8-sig")
     _write(exp / "studie-kalibrierung.csv", calib, "utf-8-sig")
@@ -329,7 +336,9 @@ def build_all(cfg: dict, out: str) -> list:
               ("Studie", "Fußball: Polymarket-Preise neben Pinnacle-Quoten (je Markt)", "studie-buchmacher.csv",
                exp / "studie-buchmacher.csv", "studie/buchmacher.csv"),
               ("Kalshi", "Aufgelöste Kalshi-Märkte mit Preis und echtem Ask vor Schluss", "kalshi-maerkte.csv",
-               exp / "kalshi-maerkte.csv", "kalshi/maerkte.csv")]
+               exp / "kalshi-maerkte.csv", "kalshi/maerkte.csv"),
+              ("Wetter-Messwerte", "Temperatur-Buckets: ab wann laut Station unmöglich, und Preis danach",
+               "wetter-messwerte.csv", exp / "wetter-messwerte.csv", "wetter-messwerte/maerkte.csv")]
     tmp = exp / "polyarb-export.zip.tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for *_, disk, arc in files:
@@ -513,6 +522,69 @@ def study_page(cal: dict, nav: list, stress: list | None = None, books: dict | N
                     '<th class="num">n</th><th class="num">Ø Preis</th><th class="num">tatsächlich gewonnen</th>'
                     f'<th class="num">95-%-Bereich</th><th class="num">Diff. (Pkt.)</th></tr>{trs}</table></div></div>')
     return _page("Markt-Studie: Wie gut sagen Preise den Ausgang voraus?", nav, "".join(body))
+
+
+def wxobs_page(w: dict, nav: list) -> str:
+    title = "Wetter-Messwerte: Was kostet ein Bucket, den die Station schon ausgeschlossen hat?"
+    run = ""
+    if w.get("last_run"):
+        ts, proc, cand, priced = (w["last_run"].split("|") + ["0"] * 4)[:4]
+        run = (f'Letzter Lauf {datetime.fromtimestamp(float(ts)).strftime("%d.%m. %H:%M")}: {proc} Märkte geprüft, '
+               f'{cand} Kandidaten, {priced} mit Preisverlauf. ')
+    reasons = ", ".join(f"{html.escape(str(r))}: {n:,}".replace(",", ".") for r, n in w.get("reasons") or [])
+    total = f'{w.get("n", 0):,}'.replace(",", ".")
+    status = f'<p class="note">{run}Insgesamt {total} Märkte geprüft' + \
+             (f" – ohne Handel: {reasons}" if reasons else "") + ".</p>"
+    intro = ('<div class="warnbox"><b>Idee:</b> Das Tagesmaximum kann nur steigen. Hat die Wetterstation schon 25 °C '
+             'gemeldet, können „24 °C“ und darunter nicht mehr gewinnen – kosten aber oft noch ein paar Cent. Deren '
+             'NO-Seite ist dann fast sicher. <b>Entscheidend ist die Fehlerquote</b>: Fälle, in denen ein laut Station '
+             'unmöglicher Bucket trotzdem gewann (Rundung, andere Station, Korrekturen). <b>Rand</b> = so viele Grad '
+             'muss die Messung über der Bucket-Grenze liegen. Gekauft wird NO zu 1 − YES-Preis + 1 Cent plus Gebühr, '
+             '15 bzw. 60 Minuten nach der Messung.</div>')
+    if not w.get("priced"):
+        st = _wx_stations(w)
+        return _page(title, nav, intro + '<p class="sub">Noch keine Ergebnisse. Die Studie läuft alle 30 Minuten auf '
+                     'dem Server und arbeitet die Wetter-Märkte der Polymarket-Studie ab.</p>' + status + st)
+    trs = ""
+    for r in w["results"]:
+        if not r.get("n"):
+            trs += f'<tr><td>{r["margin"]}°</td><td>{r["delay"]} min</td><td class="num" colspan="8">keine Fälle</td></tr>'
+            continue
+        cls = "pos" if r["roi"] > 0 and r["errors"] == 0 else "neg" if r["roi"] < 0 else ""
+        ecls = "neg" if r["errors"] else "pos"
+        k = lambda v: f"{v:,}".replace(",", ".")  # noqa: E731 – thousands separator only
+        trs += (f'<tr><td>{r["margin"]}°</td><td>{r["delay"]} min</td><td class="num">{k(r["n"])}</td>'
+                f'<td class="num {ecls}">{r["errors"]} ({_de(r["errors"] / r["n"] * 100, 2)} %)</td>'
+                f'<td class="num">{_de(r["yes"] * 100)} ct</td><td class="num">{k(r["ge2"])} / {k(r["ge5"])} / {k(r["ge10"])}</td>'
+                f'<td class="num {cls}">{_de(r["roi"] * 100, 2)} %</td><td class="num">{_de(r["hours"], 1)} h</td></tr>')
+    body = [intro, status,
+            '<div class="card"><h2>Ergebnis</h2><p class="note">Jede Zeile: alle Buckets, die laut Station unmöglich '
+            'waren und danach noch mindestens 0,5 Cent kosteten. Rendite je Kauf (nicht pro Jahr) – das Geld ist bis '
+            'zur Auflösung gebunden (Median-Haltedauer in der letzten Spalte).</p><div class="tblwrap"><table><tr>'
+            '<th>Rand</th><th>Reaktion</th><th class="num">Käufe</th><th class="num">Fehler</th>'
+            '<th class="num">Ø YES-Preis</th><th class="num">≥ 2 / 5 / 10 ct</th><th class="num">Rendite je Kauf</th>'
+            f'<th class="num">Haltedauer</th></tr>{trs}</table></div></div>']
+    crs = "".join(f'<tr><td>{html.escape(c["city"])}</td><td>{html.escape(c["station"] or "")}</td><td class="num">{c["n"]}</td>'
+                  f'<td class="num {"neg" if c["errors"] else ""}">{c["errors"]}</td><td class="num">{_de(c["yes"] * 100)} ct</td></tr>'
+                  for c in w["cities"])
+    body.append('<div class="card"><h2>Nach Stadt (Rand 1°, 15 min)</h2><p class="note">Fehler gehäuft in einer Stadt = '
+                'dort passt die Station oder die Rundung nicht. Solche Städte würde ein Live-Szenario auslassen.</p>'
+                '<div class="tblwrap"><table><tr><th>Stadt</th><th>Station</th><th class="num">Käufe</th>'
+                f'<th class="num">Fehler</th><th class="num">Ø YES-Preis</th></tr>{crs}</table></div></div>')
+    body.append(_wx_stations(w))
+    return _page(title, nav, "".join(body))
+
+
+def _wx_stations(w: dict) -> str:
+    rows = w.get("stations") or []
+    if not rows:
+        return ""
+    trs = "".join(f'<tr><td>{html.escape(c or "")}</td><td>{html.escape(st or "–")}</td><td>{html.escape(tz or "–")}</td>'
+                  f'<td>{html.escape(src or "–")}</td><td class="{"neg" if why else ""}">{html.escape(why or "ok")}</td></tr>'
+                  for c, st, tz, src, why in rows)
+    return ('<div class="card"><h2>Stationen</h2><p class="note">Aus dem Wunderground-Link in der Marktbeschreibung. '
+            'Städte ohne Station (z. B. andere Quelle) werden ausgelassen.</p><div class="tblwrap"><table><tr><th>Stadt</th>'
+            f'<th>Station</th><th>Zeitzone</th><th>Quelle</th><th>Status</th></tr>{trs}</table></div></div>')
 
 
 def kalshi_page(k: dict, nav: list) -> str:

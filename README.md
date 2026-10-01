@@ -157,6 +157,7 @@ Was dann läuft (siehe `deploy/systemd/`):
 - `polyarb-scenario@<name>`: je ein Prozess pro aktiviertem Szenario aus `config.yaml`
 - `polyarb-dash.timer`: aktualisiert das Dashboard (alle Tabs) alle 10 Minuten, inklusive `trades.csv` mit allen Ausführungen und späteren Auszahlungen (Button „CSV-Export aller Trades“, Format für deutsches Excel)
 - `polyarb-watch.timer`: alle 5 Minuten Watchdog und Trade-Alerts (siehe unten)
+- `polyarb-wxobs.timer`: Wetter-Messwert-Studie alle 30 Minuten (`run.py wxobs`): für jeden Temperatur-Bucket der Studie, ab wann ihn die Wetterstation (ICAO-Code aus dem Wunderground-Link der Marktbeschreibung, Messwerte aus dem METAR-Archiv der Iowa State University) schon unmöglich gemacht hat, und was er danach noch kostete. Tab „Wetter-Messwerte“ mit Fehlerquote je Sicherheitsrand und Stadt
 - `polyarb-kalshi.timer`: Kalshi-Studie alle 30 Minuten (`run.py kalshi`): aufgelöste Kalshi-Märkte mit Preis **und echtem Ask** 1 Tag / 6 h / 1 h vor Schluss in `data/kalshi.sqlite`, ausgewertet im Tab „Kalshi“ (Polymarket-Regeln zum echten Kaufpreis plus Kalshi-Gebühr, Edge-Karte nach Kategorie). Öffentliche Daten, kein Konto nötig; Krypto wird nicht gesammelt
 - `polyarb-report.timer`: ein Bericht über **alle Strategien** um 00, 04, 08, 12, 16 und 20 Uhr – realisierter Gewinn/Verlust gesamt und in den letzten 4 h, je Strategie mit gewonnenen/verlorenen Auflösungen
 - `polyarb-daily.timer`: seit 01.10. abgeschaltet (08 Uhr gehört zum 4-h-Bericht)

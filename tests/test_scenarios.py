@@ -173,7 +173,7 @@ def test_dashboard_tabs_and_calibration(tmp_path):
     root = out.read_text(encoding="utf-8")
     page = (tmp_path / "www" / "endgame" / "index.html").read_text(encoding="utf-8")
     data = json.loads(page.split("const D=", 1)[1].split(";\n", 1)[0])
-    assert [n["href"] for n in data["nav"]] == ["../", "../endgame/", "../study/", "../kalshi/", "../export/"]
+    assert [n["href"] for n in data["nav"]] == ["../", "../endgame/", "../study/", "../wxobs/", "../kalshi/", "../export/"]
     assert data["nav"][1]["active"] and data["nav"][2]["ret"] is None
     assert data["calib"]["n"] == 1 and data["calib"]["wins"] == 1 and data["kind"] == "endgame"
     assert '"href": "endgame/"' in root

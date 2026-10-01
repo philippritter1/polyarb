@@ -1,0 +1,8 @@
+[Unit]
+Description=Polyarb Wetter-Messwert-Studie alle 30 Minuten
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=30min
+Persistent=true
+[Install]
+WantedBy=timers.target

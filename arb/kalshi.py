@@ -31,6 +31,7 @@ DAY = 86400.0
 CHECKPOINTS = {"1d": DAY, "6h": 6 * 3600, "1h": 3600}
 VERSION = 3  # v2: millisecond candle times, detailed reasons, retries; v3: no parlays ("Exotics")
 FEE_RATE = 0.07  # Kalshi taker fee: 7 % * p * (1 - p) per contract (rounded up to the cent per order)
+MAX_LISTED = 20000  # markets listed per window at most (20 pages)
 
 # Kalshi series categories -> the German categories of the Polymarket study
 CATEGORY_MAP = {
@@ -221,40 +222,60 @@ class KalshiStudy:
         return row[0] if row else None
 
     # ------------------------------------------------------------------ collect
-    def collect(self, days_back: float = 90, max_new: int = 2000, window_days: float = 1,
+    def collect(self, days_back: float = 90, max_new: int = 2000, window_days: float = 0.25,
                 min_volume: float = 100, recent_days: float = 3,
-                skip_categories: tuple = ("Krypto", "Kombiwetten"), now: Optional[float] = None) -> Dict[str, int]:
+                skip_categories: tuple = ("Krypto", "Kombiwetten"), now: Optional[float] = None,
+                max_runtime_s: float = 1200) -> Dict[str, int]:
         """Like the Polymarket study: the last `recent_days` first, then the backfill continues where
         the previous run stopped. Crypto is skipped by default: thousands of hourly price ranges a day
         would crowd out everything else, and the Polymarket study found nothing there."""
         now = time.time() if now is None else now
+        started = time.monotonic()
+        out_of_time = lambda: time.monotonic() - started > max_runtime_s  # noqa: E731 – the timer starts the next run
         known = {r[0] for r in self.db.execute("SELECT ticker FROM kalshi_markets UNION SELECT ticker FROM kalshi_skipped")}
-        stats = {"new": 0, "skipped": 0, "seen": 0, "windows": 0, "low_volume": 0, "category_skipped": 0}
+        stats = {"new": 0, "skipped": 0, "seen": 0, "windows": 0, "low_volume": 0, "category_skipped": 0,
+                 "capped_windows": 0, "out_of_time": False}
         oldest = now - days_back * DAY
         t_hi = now
-        while t_hi > now - recent_days * DAY and stats["new"] < max_new:
+        while t_hi > now - recent_days * DAY and stats["new"] < max_new and not out_of_time():
             self._window(t_hi - window_days * DAY, t_hi, known, stats, max_new, min_volume, skip_categories, now)
+            self._progress(stats, now, oldest)
             t_hi -= window_days * DAY
         bookmark = self._meta("backfill_until")
         t_hi = min(t_hi, float(bookmark)) if bookmark else t_hi
-        while t_hi > oldest and stats["new"] < max_new:
+        while t_hi > oldest and stats["new"] < max_new and not out_of_time():
             t_lo = t_hi - window_days * DAY
             if self._window(t_lo, t_hi, known, stats, max_new, min_volume, skip_categories, now):
                 self._meta("backfill_until", t_lo)
+            self._progress(stats, now, oldest)
             t_hi = t_lo
-        bookmark = self._meta("backfill_until")
-        stats["backfill_days_left"] = round(max(0.0, ((float(bookmark) if bookmark else now) - oldest) / DAY), 1)
-        self._meta("last_run", f"{now:.0f}|{stats['new']}|{stats['skipped']}|{stats['seen']}")
-        import json
-        self._meta("diag", json.dumps(dict(self.diag, stats=stats, ts=now), default=str))
-        self.db.commit()
+        stats["out_of_time"] = out_of_time()
+        self._progress(stats, now, oldest)
         log.info("kalshi: %s", stats)
         return stats
 
+    def _progress(self, stats: dict, now: float, oldest: float) -> None:
+        """Counts and diagnostics after every window: an interrupted run still shows where it was."""
+        import json
+        bookmark = self._meta("backfill_until")
+        stats["backfill_days_left"] = round(max(0.0, ((float(bookmark) if bookmark else now) - oldest) / DAY), 1)
+        self._meta("last_run", f"{now:.0f}|{stats['new']}|{stats['skipped']}|{stats['seen']}")
+        self._meta("diag", json.dumps(dict(self.diag, stats=stats, ts=now), default=str))
+        self.db.commit()
+
     def _window(self, t_lo, t_hi, known, stats, max_new, min_volume, skip_categories, now) -> bool:
         stats["windows"] += 1
-        markets = self._paged("/markets", "markets", {"status": "settled", "min_close_ts": int(t_lo),
-                                                      "max_close_ts": int(t_hi), "limit": 1000}, 50000)
+        params = {"status": "settled", "min_close_ts": int(t_lo), "max_close_ts": int(t_hi), "limit": 1000}
+        if self.diag.get("mve_filter") != "unsupported":
+            params["mve_filter"] = "exclude"  # no parlays: listing them alone took hours
+        markets = self._paged("/markets", "markets", params, MAX_LISTED)
+        if not markets and "mve_filter" in params and self.diag.get("mve_filter") is None:
+            markets = self._paged("/markets", "markets", {k: v for k, v in params.items() if k != "mve_filter"}, MAX_LISTED)
+            self.diag["mve_filter"] = "unsupported" if markets else None
+        elif markets and "mve_filter" in params:
+            self.diag["mve_filter"] = "ok"
+        if len(markets) >= MAX_LISTED:
+            stats["capped_windows"] += 1  # accepted: the window counts as done, the rest of it is lost
         cats = self.series_categories() if markets else {}
         if markets and "market_keys" not in self.diag:  # what the live API really sends (shown in the export)
             m0 = markets[0]

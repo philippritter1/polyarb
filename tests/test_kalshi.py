@@ -130,3 +130,21 @@ def test_gap_reasons_and_millisecond_candles(tmp_path):
     st.db.commit()
     st2 = KalshiStudy(KalshiClient(), db)
     assert [r[0] for r in st2.db.execute("SELECT ticker FROM kalshi_skipped")] == ["Y"]
+
+
+def test_runtime_limit_and_unsupported_mve_filter(tmp_path):
+    class Old(KalshiClient):  # an API without mve_filter answers 400
+        def get_json(self, url, params):
+            if url.endswith("/markets") and "mve_filter" in params:
+                raise PaginationEnd("400")
+            return super().get_json(url, params)
+
+    st = KalshiStudy(Old(), str(tmp_path / "k.sqlite"))
+    stats = st.collect(days_back=3, recent_days=3, window_days=3, now=NOW)
+    assert stats["new"] == 2 and st.diag["mve_filter"] == "unsupported"
+    # a run that is out of time stops before listing anything, but still leaves its diagnosis
+    st2 = KalshiStudy(KalshiClient(), str(tmp_path / "k2.sqlite"))
+    stats = st2.collect(days_back=3, recent_days=3, window_days=3, now=NOW, max_runtime_s=-1)
+    assert stats["windows"] == 0 and stats["out_of_time"]
+    from arb.kalshi import diag_rows
+    assert "stats" in dict(diag_rows(str(tmp_path / "k2.sqlite"))[1])

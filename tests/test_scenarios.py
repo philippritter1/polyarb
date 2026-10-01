@@ -538,3 +538,19 @@ def test_max_day_usd_caps_one_end_date(tmp_path):
     assert len(eng.pf.positions) == 3 and spent <= 60 + 1e-6  # 25 + 25 + the 10 that is left for the day
     reasons = [r[0] for r in eng.store.db.execute("SELECT reason FROM opportunities")]
     assert "sized down by day" in reasons and "no capacity (day)" in reasons
+
+
+def test_band_scan_stats_and_topic_tags(tmp_path):
+    fkw = dict(end="2026-09-21T20:00:00Z", volumeNum=5000)
+    btc = _market("k1", "Bitcoin Up or Down - September 21, 4:00PM-4:05PM ET", ["0.50", "0.50"], ["BU", "BD"], **fkw)
+    wti = _market("p1", "WTI Crude Oil (WTI) closes above $94 on September 21?", ["0.15", "0.85"], ["WY", "WN"], **fkw)
+    cl = FakeClient(markets=[btc], events=[{"id": 7, "endDate": "2026-09-21T20:00:00Z", "markets": [wti]}],
+                    books={t: ob(t, [(p - 0.01, 500)], [(p, 500)]) for t, p in (("WY", 0.15), ("WN", 0.85))})
+    cfg = _cfg(tmp_path, "finanz_dog", strategy="band", category="Finanz", min_price=0.10, max_price=0.25,
+               min_volume=1000, max_hours_to_end=24, max_position_usd=10, max_markets=1, tag_slugs=["finance"])
+    eng = ScenarioEngine("finanz_dog", cfg, cl, SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["WY"]  # found through the topic tag although the listing was full
+    scan = json.loads(Path(eng.state_path.replace(".json", ".scan.json")).read_text())
+    assert scan["Liste voll"] == 1 and scan["Tag finance"] == 1 and scan["andere Kategorie"] == 1
+    assert scan["Seite im Preisband"] == 1 and scan["neu gekauft"] == 1

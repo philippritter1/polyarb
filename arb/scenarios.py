@@ -311,30 +311,59 @@ class PriceBandStrategy(Strategy):
         h_min, h_max = float(c.get("min_hours_to_end", 0.5)) * 3600, float(c.get("max_hours_to_end", 8)) * 3600
         v_min, v_max = float(c.get("min_volume", 0)), float(c.get("max_volume") or 1e18)
         category = c.get("category", "Sport")
+        cap = int(c.get("max_markets", 2000))
         markets = self.client.paged("/markets", {
             "active": "true", "closed": "false", "liquidity_num_min": c.get("min_liquidity", 500),
-            "end_date_min": _iso(now + h_min), "end_date_max": _iso(now + h_max)},
-            max_items=int(c.get("max_markets", 2000)))
-        out = []
+            "end_date_min": _iso(now + h_min), "end_date_max": _iso(now + h_max)}, max_items=cap)
+        st = self.scan = {"gelistet": len(markets), "Liste voll": int(len(markets) >= cap)}
+        # thousands of 5-minute crypto markets end in any window and can fill the list before the rest:
+        # events of the configured topic tags are fetched as well (their markets carry the event's end)
+        for tag in c.get("tag_slugs") or ():
+            evs = self.client.paged("/events", {"active": "true", "closed": "false", "tag_slug": tag,
+                                                "end_date_min": _iso(now + h_min), "end_date_max": _iso(now + h_max)},
+                                    max_items=1000)
+            extra = [dict(m, endDate=m.get("endDate") or ev.get("endDate"), events=[{"id": ev.get("id")}])
+                     for ev in evs for m in ev.get("markets") or [] if not m.get("closed")]
+            st[f"Tag {tag}"] = len(extra)
+            markets = markets + extra
+        out, seen_ids = [], set()
+
+        def drop(why: str) -> None:
+            st[why] = st.get(why, 0) + 1
+
         for m in markets:
-            end = _parse_ts(m.get("endDate"))
-            if not end or not now + h_min <= end <= now + h_max or not m.get("enableOrderBook"):
+            mid = str(m.get("conditionId") or m.get("id"))
+            if mid in seen_ids:
                 continue
-            if not m.get("acceptingOrders", True) or categorize(m) != category:
+            seen_ids.add(mid)
+            end = _parse_ts(m.get("endDate"))
+            if not end or not now + h_min <= end <= now + h_max:
+                drop("außerhalb Zeitfenster")
+                continue
+            if not m.get("enableOrderBook") or not m.get("acceptingOrders", True):
+                drop("kein Handel")
+                continue
+            if categorize(m) != category:
+                drop("andere Kategorie")
                 continue
             q = m.get("question") or ""
             if kinds and sport_kind(q) not in kinds:
+                drop("andere Sportart")
                 continue
             mtype = market_type(q)
             if (types and mtype not in types) or mtype in exclude_types:
+                drop("anderer Wett-Typ")
                 continue
             vol = float(m.get("volumeNum") or m.get("volume") or 0)
             if not v_min <= vol < v_max:
+                drop("Volumen außerhalb")
                 continue
             toks, prices = _parse_json_list(m.get("clobTokenIds")), _parse_json_list(m.get("outcomePrices"))
             outs = _parse_json_list(m.get("outcomes")) or ["Yes", "No"]
             if len(toks) != 2 or len(prices) != 2:
+                drop("nicht binär")
                 continue
+            drop("passend (Kategorie, Typ, Volumen)")
             evs = m.get("events") or [{}]
             group = f"event:{evs[0].get('id')}" if evs[0].get("id") else str(m.get("conditionId") or m.get("id"))
             for i in (0, 1):
@@ -342,6 +371,7 @@ class PriceBandStrategy(Strategy):
                 if want_outcome and str(outs[i]).lower() != want_outcome:
                     continue
                 if lo - 0.01 <= p <= hi:
+                    drop("Seite im Preisband")
                     out.append(Signal(str(toks[i]), group, m.get("question", ""), str(outs[i]),
                                       fair=min(0.99, p + float(c.get("assumed_edge", 0.03))), max_price=hi,
                                       fee=self.fees.resolve(m, FEE_CATEGORY.get(category, category.lower())),
@@ -488,6 +518,14 @@ class ScenarioEngine:
         self.store.equity(self.clock.now(), pf.equity, pf.cash, pf.cost, 0.0, pf.realized_pnl, None)
         self.store.commit()
         pf.save(self.state_path)
+        scan = getattr(self.strategy, "scan", None)
+        if scan is not None:  # where the markets of the last scan dropped out – for the tab and the export
+            scan = dict(scan, Signale=len(signals), **{"unter Max.-Preis": n_opps, "neu gekauft": opened}, ts=now)
+            try:
+                with open(self.state_path.replace(".json", ".scan.json"), "w", encoding="utf-8") as f:
+                    json.dump(scan, f)
+            except OSError:
+                pass
         skipped = getattr(self.strategy, "skipped", None)
         log.info("%s: %d signals, %d below max price, %d open, equity %.2f, guarded %d%s", self.name, len(signals),
                  n_opps, len(pf.positions), pf.equity, self.guarded, f", skipped {skipped}" if skipped else "")

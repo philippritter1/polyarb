@@ -200,11 +200,11 @@ def _write(path: Path, text: str, encoding: str) -> None:
 
 
 def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
-          kind: str = "arb", nav: list | None = None, overview: list | None = None) -> str:
+          kind: str = "arb", nav: list | None = None, overview: list | None = None, scan: dict | None = None) -> str:
     data = collect(db_path, float(start_capital))
     if source == "auto":
         source = "mock" if "mock" in Path(db_path).name else "paper"
-    data.update(source=source, kind=kind, nav=nav or [], overview=overview or [],
+    data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {},
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -286,9 +286,21 @@ def build_all(cfg: dict, out: str) -> list:
         return nav + [dict(label=l, href=up + k + "/", ret=None, active=k == active) for k, l in extra]
 
     overview = [dict(rets[p["key"]], label=p["label"], href=(p["key"] + "/") if p["key"] else "./") for p in pages]
+    def scan_of(p: dict) -> dict:
+        try:
+            return json.loads((data_dir / f"scenario-{p['key']}.scan.json").read_text("utf-8")) if p["key"] else {}
+        except (OSError, ValueError):
+            return {}
+
+    scans = {p["key"]: scan_of(p) for p in pages}
     built = [build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav_for(p["key"]),
-                   overview=overview if not p["key"] else None)
+                   overview=overview if not p["key"] else None, scan=scans[p["key"]])
              for p in pages]
+    for p in pages:  # last scan as CSV next to the trades (export)
+        if scans[p["key"]]:
+            sc = dict(scans[p["key"]])
+            sc["ts"] = datetime.fromtimestamp(sc["ts"]).strftime("%Y-%m-%d %H:%M") if sc.get("ts") else ""
+            _write(p["out"].parent / "scan.csv", _csv(["Schritt", "Anzahl"], [[k, v] for k, v in sc.items()]), "utf-8-sig")
 
     from arb.backtest import stress_test
     from arb.odds import compare
@@ -333,6 +345,9 @@ def build_all(cfg: dict, out: str) -> list:
         rel = "../" + (p["key"] + "/" if p["key"] else "")
         files += [(p["label"], "Alle Trades und Auszahlungen", rel + "trades.csv", folder / "trades.csv", f"{slug}/trades.csv"),
                   (p["label"], "Equity-Verlauf (alle 5 Min.)", rel + "equity.csv", folder / "equity.csv", f"{slug}/equity.csv")]
+        if (folder / "scan.csv").exists():
+            files.append((p["label"], "Letzter Scan: wo Märkte am Filter hängen bleiben", rel + "scan.csv",
+                          folder / "scan.csv", f"{slug}/scan.csv"))
     files += [("Studie", "Aufgelöste Märkte mit Preisen vor Schluss und Ergebnis", "studie-maerkte.csv",
                exp / "studie-maerkte.csv", "studie/maerkte.csv"),
               ("Studie", "Kalibrierung nach Zeitpunkt und Preisbereich", "studie-kalibrierung.csv",
@@ -752,6 +767,7 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <nav class="nav" id="nav"></nav>
 <h1><span id="ttl"></span> <span class="badge" id="src"></span></h1>
 <p class="sub" id="range"></p>
+<p class="note" id="scan"></p>
 <div id="halt"></div>
 <div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
 <div class="kpis" id="kpis"></div>
@@ -790,6 +806,8 @@ function ticks(min,max,n=4){const span=max-min||1,step=Math.pow(10,Math.floor(Ma
 $("src").textContent=D.source==="mock"?"SYNTHETISCHE DATEN (Mock)":"LIVE-Orderbücher · Paper";
 const K=D.kpi;
 $("range").textContent=K.t0?`${dt(K.t0)} – ${dt(K.t1)} · ${K.scans.toLocaleString("de-AT")} Scans · ${K.baskets} Märkte/Körbe · Median-Scan ${fmt(K.med_scan_ms,0)} ms`:"Noch keine Daten";
+if(D.scan&&Object.keys(D.scan).length){const S={...D.scan};const t=S.ts;delete S.ts;
+ $("scan").innerHTML=`<b>Letzter Scan${t?" "+dt(t):""}:</b> `+Object.entries(S).map(([k,v])=>`${k} ${v}`).join(" · ")}
 if(K.halted)$("halt").innerHTML=`<div class="warnbox"><b>Handel pausiert:</b> ${K.halted}</div>`;
 if(D.source==="mock")$("halt").innerHTML+=`<div class="warnbox">Diese Zahlen stammen aus dem <b>synthetischen Mock-Markt</b> und testen nur die Pipeline. Sie sagen nichts über reale Profitabilität aus.</div>`;
 const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Positionen`],["Rendite",pct(K.ret),`Max. Drawdown ${pct(K.mdd)}`],

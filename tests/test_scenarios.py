@@ -519,3 +519,22 @@ def test_partial_fill_logs_what_was_really_spent(tmp_path):
         "SELECT status, capital, locked, matched_qty FROM executions").fetchone()
     assert status == "partial" and qty < 100
     assert math.isclose(capital, locked) and math.isclose(capital, eng.pf.positions["C1"].cost)
+
+
+def test_max_day_usd_caps_one_end_date(tmp_path):
+    kw = dict(end="2026-09-21T20:00:00Z", volumeNum=1800)
+    ms = [_market(f"w{i}", f"Will the highest temperature in City{i} be 24°C on September 21?", ["0.20", "0.80"],
+                  [f"Y{i}", f"N{i}"], **kw) for i in range(6)]
+    books = {}
+    for i in range(6):
+        books[f"N{i}"] = ob(f"N{i}", [(0.79, 500)], [(0.80, 500)])
+        books[f"Y{i}"] = ob(f"Y{i}", [(0.19, 500)], [(0.20, 500)])
+    cfg = _cfg(tmp_path, "wetter_no_breit", strategy="band", category="Wetter", outcome="No", min_price=0.55,
+               max_price=0.97, max_volume=5000, max_hours_to_end=12, max_spread=0.02, max_position_usd=25,
+               max_day_usd=60, max_new_per_step=10)
+    eng = ScenarioEngine("wetter_no_breit", cfg, FakeClient(markets=ms, books=books), SimClock(NOW))
+    eng.step()
+    spent = sum(p.cost for p in eng.pf.positions.values())
+    assert len(eng.pf.positions) == 3 and spent <= 60 + 1e-6  # 25 + 25 + the 10 that is left for the day
+    reasons = [r[0] for r in eng.store.db.execute("SELECT reason FROM opportunities")]
+    assert "sized down by day" in reasons and "no capacity (day)" in reasons

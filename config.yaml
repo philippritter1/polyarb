@@ -187,6 +187,7 @@ scenarios:
     min_liquidity: 100
     max_position_usd: 25
     max_event_usd: 100           # pro Stadt und Tag: höchstens ein Bucket tritt ein
+    max_day_usd: 1000            # 02.10.: höchstens so viel auf einen Messtag (alle Städte zusammen)
     max_new_per_step: 10
     max_open_positions: 200
   finanz_dog:

@@ -434,6 +434,10 @@ class ScenarioEngine:
         caps = {"position": float(sc.get("max_position_usd", 50)),
                 "cash": self.pf.cash - float(sc.get("cash_buffer_pct", 0.10)) * eq,
                 "event": float(sc.get("max_event_usd", 100)) - self.pf.exposure(s.group)}
+        if sc.get("max_day_usd") and s.end_ts:  # all markets ending on one (UTC) day: one weather day, one risk
+            day = int(s.end_ts // DAY)
+            caps["day"] = float(sc["max_day_usd"]) - sum(p.cost for p in self.pf.positions.values()
+                                                         if p.end_ts and int(p.end_ts // DAY) == day)
         if s.kelly:  # binary bet at price a with win prob p: f* = (p - a) / (1 - a)
             caps["kelly"] = max(0.0, (s.fair - ask) / (1 - ask)) * float(sc.get("kelly_fraction", 0.25)) * eq
         binding = min(caps, key=caps.get)

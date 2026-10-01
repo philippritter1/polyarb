@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 DAY = 86400.0
 CHECKPOINTS = {"1d": DAY, "6h": 6 * 3600, "1h": 3600}
-VERSION = 2  # v2 (02.10.): millisecond candle times, detailed reasons; skipped candle problems are retried
+VERSION = 3  # v2: millisecond candle times, detailed reasons, retries; v3: no parlays ("Exotics")
 FEE_RATE = 0.07  # Kalshi taker fee: 7 % * p * (1 - p) per contract (rounded up to the cent per order)
 
 # Kalshi series categories -> the German categories of the Polymarket study
@@ -38,7 +38,8 @@ CATEGORY_MAP = {
     "sports": "Sport", "financials": "Finanz", "economics": "Wirtschaft", "politics": "Politik",
     "elections": "Politik", "crypto": "Krypto", "entertainment": "Kultur", "mentions": "Social",
     "science and technology": "Tech/KI", "companies": "Finanz", "world": "Sonstiges", "health": "Sonstiges",
-    "transportation": "Sonstiges", "social": "Social",
+    "transportation": "Sonstiges", "social": "Social", "commodities": "Finanz",
+    "exotics": "Kombiwetten",  # multi-leg parlays (KXMVE...): thousands a day, crowd out everything else
 }
 
 SCHEMA = """
@@ -161,6 +162,7 @@ class KalshiStudy:
         if not row or int(row[0]) < VERSION:  # candle problems of older versions: list and try those markets again
             self.db.execute("DELETE FROM kalshi_skipped WHERE reason LIKE 'no candles%' OR reason LIKE 'no prices%'")
             self.db.execute("DELETE FROM kalshi_meta WHERE key='backfill_until'")
+            self.db.execute("DELETE FROM kalshi_markets WHERE lower(kalshi_category)='exotics' OR series LIKE 'KXMVE%'")
             self.db.execute("INSERT OR REPLACE INTO kalshi_meta VALUES('version', ?)", (str(VERSION),))
             self.db.commit()
         self.diag: Dict[str, object] = {"errors": [], "requests": 0}
@@ -221,13 +223,13 @@ class KalshiStudy:
     # ------------------------------------------------------------------ collect
     def collect(self, days_back: float = 90, max_new: int = 2000, window_days: float = 1,
                 min_volume: float = 100, recent_days: float = 3,
-                skip_categories: tuple = ("Krypto",), now: Optional[float] = None) -> Dict[str, int]:
+                skip_categories: tuple = ("Krypto", "Kombiwetten"), now: Optional[float] = None) -> Dict[str, int]:
         """Like the Polymarket study: the last `recent_days` first, then the backfill continues where
         the previous run stopped. Crypto is skipped by default: thousands of hourly price ranges a day
         would crowd out everything else, and the Polymarket study found nothing there."""
         now = time.time() if now is None else now
         known = {r[0] for r in self.db.execute("SELECT ticker FROM kalshi_markets UNION SELECT ticker FROM kalshi_skipped")}
-        stats = {"new": 0, "skipped": 0, "seen": 0, "windows": 0, "low_volume": 0, "crypto": 0}
+        stats = {"new": 0, "skipped": 0, "seen": 0, "windows": 0, "low_volume": 0, "category_skipped": 0}
         oldest = now - days_back * DAY
         t_hi = now
         while t_hi > now - recent_days * DAY and stats["new"] < max_new:
@@ -271,8 +273,10 @@ class KalshiStudy:
                 continue
             kcat = cats.get(series_of(m)) or str(m.get("category") or "")
             cat = CATEGORY_MAP.get(kcat.lower(), "Sonstiges")
+            if series_of(m).startswith("KXMVE"):
+                cat = "Kombiwetten"
             if cat in skip_categories:
-                stats["crypto"] += 1
+                stats["category_skipped"] += 1
                 continue
             todo.append((m, kcat, cat))
         todo.sort(key=lambda x: -volume_of(x[0]))  # the most traded first

@@ -31,6 +31,8 @@ class KalshiClient:
                  title="Yankees win?", result="", volume=50000, close_time=CLOSE),          # not settled yet
             dict(ticker="KXBTC-26SEP23-B100", event_ticker="KXBTC-26SEP23", market_type="binary",
                  title="Bitcoin price range", result="no", volume=90000, close_time=CLOSE),  # crypto: skipped
+            dict(ticker="KXMVECROSSCATEGORY-S1-X", event_ticker="KXMVECROSSCATEGORY-S1", market_type="binary",
+                 title="yes Alcaraz,yes Tiafoe", result="no", volume=900000, close_time=CLOSE),  # parlay: skipped
             dict(ticker="KXHIGHMIA-26SEP23-B90", event_ticker="KXHIGHMIA-26SEP23", market_type="binary",
                  title="Highest temperature in Miami on Sep 23?", result="no", volume=20, close_time=CLOSE),  # too small
         ]
@@ -47,7 +49,8 @@ class KalshiClient:
             return {"series": [{"ticker": "KXHIGHNY", "category": "Climate and Weather"},
                                {"ticker": "KXHIGHCHI", "category": "Climate and Weather"},
                                {"ticker": "KXMLB", "category": "Sports"}, {"ticker": "KXBTC", "category": "Crypto"},
-                               {"ticker": "KXHIGHMIA", "category": "Climate and Weather"}]}
+                               {"ticker": "KXHIGHMIA", "category": "Climate and Weather"},
+                               {"ticker": "KXMVECROSSCATEGORY", "category": "Exotics"}]}
         if path == "/series/KXHIGHNY/markets/KXHIGHNY-26SEP23-B78/candlesticks":
             return {"candlesticks": _candles(CLOSE, 20, 19, 21)}
         if path == "/series/KXHIGHCHI/markets/KXHIGHCHI-26SEP23-B70/candlesticks":
@@ -72,7 +75,7 @@ def test_collect_reads_cents_dollars_and_historical(tmp_path):
     assert st.db.execute("SELECT reason FROM kalshi_skipped").fetchone()[0] == "result ''"
     # second run: nothing new, the bitcoin market was never fetched
     assert st.collect(days_back=3, recent_days=3, window_days=3, now=NOW)["new"] == 0
-    assert not any("KXBTC" in c for c in st.client.calls)
+    assert not any("KXBTC" in c or "KXMVE" in c for c in st.client.calls)
     header, out = csv_rows(db)
     assert len(out) == 2 and header[0] == "Ticker" and out[0][9] in ("YES", "NO")
     from arb.kalshi import diag_rows

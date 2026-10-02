@@ -72,7 +72,7 @@ storage:
   db_path: data/polyarb.sqlite
 
 notify:
-  scenario: underdog           # Push-Nachrichten (Trades, Auszahlungen, Berichte) für dieses Szenario; leer = Arbitrage
+  scenario: wetter_no_breit    # Alarme (Stillstand, Kill-Switch) für dieses Szenario; der 4-h-Bericht umfasst alle
 
 api:
   gamma_url: https://gamma-api.polymarket.com
@@ -100,7 +100,7 @@ scenarios:
     min_edge_bps: 50
     min_annualized_return: 0.25  # Kapital ist bis zur Auflösung gebunden
   underdog:
-    enabled: true
+    enabled: false               # abgeschaltet 02.10.: ersetzt durch fussball_dog; live 3 von 99 gewonnen (erwartet 7), -408 $
     title: Underdog-Sport
     strategy: underdog           # Studie 01.08.-30.09. (Kategorien korrigiert): echte Sport-Außenseiter 3-10 % gewannen ~10 % statt ~6 %
     reset: 3                     # v3: nur echte Sportmärkte (v2 hat auch Temperatur-Buckets gekauft)
@@ -192,7 +192,7 @@ scenarios:
     max_new_per_step: 10
     max_open_positions: 200
   finanz_dog:
-    enabled: true
+    enabled: false               # abgeschaltet 02.10.: widerlegt – Studie mit 1.011 Wetten -7,6 % (2. Hälfte -23,5 %)
     title: Finanz-Außenseiter
     strategy: band               # Studie: Favoriten bei 75-90 % zu teuer, Außenseiter 10-25 % +36 %; nur 62 Handelstage, neu kaum Daten
     category: Finanz             # Schlusskurse, Hoch/Tief, Up or Down von Aktien, Indizes, Öl, Gold
@@ -277,7 +277,7 @@ scenarios:
     max_new_per_step: 3
     max_open_positions: 40
   weather:
-    enabled: true
+    enabled: false               # abgeschaltet 02.10.: Wetter-Modell verliert auch live; Messwert-Studie: Markt preist Stationen sofort ein
     title: Wetter-Modell
     strategy: weather
     reset: 2                     # neuer Wert = Szenario startet neu (v2: Fixes nach dem Totalverlust am 29.09.)

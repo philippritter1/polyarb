@@ -378,7 +378,7 @@ def test_underdog_buys_real_ask_and_skips_wide_spreads(tmp_path):
     assert eng.guarded == 1
 
 
-def test_notifications_follow_the_underdog_scenario(tmp_path):
+def test_notifications_follow_the_configured_scenario(tmp_path):
     import os
     import subprocess
     kw = dict(gameStartTime="2026-09-21T16:00:00Z", end="2026-09-21T18:00:00Z")
@@ -396,6 +396,9 @@ def test_notifications_follow_the_underdog_scenario(tmp_path):
                if (tmp_path / "data").exists() else str(tmp_path / "scenario-underdog.sqlite"),
                NOTIFY_STATE=str(state), START_CAPITAL="500")
     root = Path(__file__).resolve().parents[1]
+    import yaml
+    conf = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+    label = conf["scenarios"][conf["notify"]["scenario"]]["title"]  # the book the alerts follow
     # since 01.10. single trade/payout pushes are off by default: only problems and the 4-hour report
     out = subprocess.run([sys.executable, "deploy/notify.py", "watch"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
@@ -403,14 +406,14 @@ def test_notifications_follow_the_underdog_scenario(tmp_path):
     state.write_text(json.dumps({"last_exec_ts": 0, "last_settle_ts": 0, "boot": 0}))
     out = subprocess.run([sys.executable, "deploy/notify.py", "watch"], cwd=root,
                          env=dict(env, NOTIFY_TRADES="1", NOTIFY_PAYOUTS="1"), capture_output=True, text=True).stdout
-    assert "Polyarb Underdog-Sport: Trade" in out and "Stk. für $10" in out
-    assert "Polyarb Underdog-Sport: Auszahlung" in out and "1 gewonnen, 0 verloren" in out
+    assert f"Polyarb {label}: Trade" in out and "Stk. für $10" in out
+    assert f"Polyarb {label}: Auszahlung" in out and "1 gewonnen, 0 verloren" in out
     pnl = eng.pf.realized_pnl
     rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "4"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
     assert pnl > 0 and "Polyarb 4h-Bericht" in rep  # the simulated trades lie outside the last 4 h ...
     assert f"Gesamt realisiert ${pnl:,.2f} ({pnl / 500 * 100:+.2f} % auf $500.00)" in rep
-    assert f"▲ Underdog-Sport: ${pnl:,.2f} (+{pnl / 500 * 100:.2f} %) | 4h $0.00" in rep
+    assert f"▲ {label}: ${pnl:,.2f} (+{pnl / 500 * 100:.2f} %) | 4h $0.00" in rep
     rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "100000"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
     assert f"| 100000h ${pnl:,.2f} · 1✓ 0✗" in rep  # ... but inside a long window

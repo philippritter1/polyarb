@@ -11,11 +11,15 @@ clears the threshold, so the size reflects executable depth, not just top-of-boo
 """
 from __future__ import annotations
 
+import logging
 import math
 import time
 from typing import Dict, List, Optional
 
 from .models import HELD_KINDS, Basket, Leg, Opportunity, OrderBook
+
+log = logging.getLogger(__name__)
+
 
 SECONDS_PER_DAY = 86_400
 
@@ -166,6 +170,9 @@ def build_opportunity(
 class Scanner:
     def __init__(self, scan_cfg: dict, fee_cfg: dict, universe_cfg: dict):
         self.min_edge_bps = float(scan_cfg["min_edge_bps"])
+        # real arbitrage pays a few percent; far more almost always means the basket is built wrong
+        # (02.10.: a ladder with "$1.525T" read as 1.525 promised 15-50 % and lost both legs)
+        self.max_edge_bps = float(scan_cfg.get("max_edge_bps") or 1e9)
         self.min_profit = float(scan_cfg["min_profit_usd"])
         self.min_ann = float(scan_cfg.get("min_annualized_return", 0.0))
         self.gas = float(fee_cfg.get("merge_gas_usd", 0.0))
@@ -219,6 +226,10 @@ class Scanner:
                 self.stats["raw_signals"] += 1
                 opp = build_opportunity(b, books, d, self.min_edge_bps, self.gas, now=now)
                 if not opp or opp.net_profit_usd < self.min_profit:
+                    continue
+                if opp.edge_bps > self.max_edge_bps:
+                    self.stats["too_good"] = self.stats.get("too_good", 0) + 1
+                    log.warning("too good to be true (%.0f bps), skipped: %s", opp.edge_bps, b.title[:80])
                     continue
                 if opp.annualized is not None and opp.annualized < self.min_ann:
                     continue

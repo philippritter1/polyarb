@@ -20,12 +20,13 @@ from typing import Callable, List, Optional, Tuple
 
 from .models import Basket, FeeSpec
 
-NUM_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*([kmb])?\b", re.I)
+NUM_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(trillion|billion|million|thousand|[kmbt])?\b", re.I)
 RANGE_RE = re.compile(r"\d\s*[-–]\s*\$?\d|between|\bto\b", re.I)
 MONTH_RE = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.I)
 DOWN = ("↓", "below", "under", "less than", "dip", "fall", "drop", "lower than", "<")
 UP = ("↑", "above", "over", "higher", "greater", "more than", "at least", "reach", "hit", "exceed", ">")
-MULT = {"k": 1e3, "m": 1e6, "b": 1e9}
+MULT = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12, "thousand": 1e3, "million": 1e6, "billion": 1e9,
+        "trillion": 1e12}  # 02.10.: without "T", $1.525T read as 1.525 < $975B and the ladder was built upside down
 
 
 def _list(v) -> list:

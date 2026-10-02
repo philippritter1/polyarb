@@ -626,3 +626,25 @@ def test_strict_weather_no_needs_a_reading(tmp_path):
         eng = ScenarioEngine("wetter_no_streng", cfg, FakeClient(markets=[m], books=books), SimClock(NOW))
         eng.step()
         assert list(eng.pf.positions) == bought
+
+
+def test_ladder_reads_trillions_and_skips_too_good_baskets():
+    """02.10.: '$1.525T' was read as 1.525, below '$975B' – the bot bought YES 1.525T + NO 975B and lost both."""
+    from arb.ladder import ladders_from_event, threshold
+    assert threshold("↑$1.525T", "valuation") == ("up", 1.525e12)
+    assert threshold("$1.5 trillion", "Will it hit") == ("up", 1.5e12)
+    ev = dict(id=9, title="Will OpenAI's valuation hit __ by September 30?", markets=[
+        _lm(1, "↑$975B", "Will OpenAI's valuation hit $975B by September 30?", ["Y975", "N975"]),
+        _lm(2, "↑$1.525T", "Will OpenAI's valuation hit $1.525T by September 30?", ["Y1525", "N1525"])])
+    # hitting 1.525T implies hitting 975B: YES on the broad 975B, NO on the narrow 1.525T
+    assert [b.token_ids for b in ladders_from_event(ev, _fee)] == [["Y975", "N1525"]]
+    # a basket that promises far more than real arbitrage pays is left out
+    from arb.scanner import Scanner
+    from arb.models import Basket, FeeSpec
+    basket = Basket("b1", "ladder", "t", ["A", "B"], ["YES a", "NO b"], [FeeSpec(0.0), FeeSpec(0.0)], payout=1.0)
+    books = {"A": ob("A", [(0.30, 500)], [(0.31, 500)]), "B": ob("B", [(0.40, 500)], [(0.41, 500)])}
+    cfg = {"min_edge_bps": 50, "min_profit_usd": 0.1, "min_annualized_return": 0}
+    for cap, n in ((None, 1), (1500, 0)):
+        sc = Scanner(dict(cfg, max_edge_bps=cap) if cap else cfg, dict(merge_gas_usd=0), {})
+        assert len(sc.scan([basket], books, now=NOW)) == n  # 0.72 for a sure $1 = 39 % "edge"
+    assert sc.stats["too_good"] == 1

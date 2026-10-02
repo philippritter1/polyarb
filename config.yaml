@@ -20,6 +20,7 @@ universe:
 scanner:
   scan_interval_s: 8
   min_edge_bps: 50             # Netto-Edge nach Fees, in Basispunkten auf eingesetztes Kapital
+  max_edge_bps: 1500           # mehr als 15 % "sicherer" Gewinn = fast immer ein falsch gebauter Korb -> auslassen
   min_profit_usd: 0.50         # Mindestgewinn pro Trade
   min_annualized_return: 0.25  # nur für Körbe mit Kapitalbindung (25 % p.a.)
 
@@ -93,11 +94,13 @@ scenarios:
     enabled: true
     title: Logische Arbitrage
     strategy: ladder             # Leitern wie "über 100k / über 110k" oder "bis Oktober / bis Dezember"
+    reset: 2                     # 02.10.: Neustart nach dem Billionen-Fehler (alte Daten archiviert)
     capital_usd: 2500
     scan_interval_s: 30          # REST-Polling über alle Leiter-Märkte
     max_events: 300              # meistgehandelte Events nach 24h-Volumen
     max_days_to_resolution: 90
     min_edge_bps: 50
+    max_edge_bps: 1500           # 02.10.: "$1.525T" als 1,525 gelesen -> verkehrter Korb, -1.498 $
     min_annualized_return: 0.25  # Kapital ist bis zur Auflösung gebunden
   underdog:
     enabled: false               # abgeschaltet 02.10.: ersetzt durch fussball_dog; live 3 von 99 gewonnen (erwartet 7), -408 $

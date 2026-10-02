@@ -441,8 +441,8 @@ def ladder_engine(name: str, cfg: dict, client, clock=None):
     c["universe"] = dict(c["universe"], include_binary=False, include_negrisk_baskets=False, include_negrisk_no=False,
                          include_ladders=True, max_ladder_events=int(sc.get("max_events", 300)),
                          max_days_to_resolution=float(sc.get("max_days_to_resolution", 90)))
-    c["scanner"] = dict(c["scanner"], **{k: sc[k] for k in ("min_edge_bps", "min_profit_usd", "min_annualized_return",
-                                                              "scan_interval_s") if k in sc})
+    c["scanner"] = dict(c["scanner"], **{k: sc[k] for k in ("min_edge_bps", "max_edge_bps", "min_profit_usd",
+                                                              "min_annualized_return", "scan_interval_s") if k in sc})
     if "risk" in sc:
         c["risk"] = dict(c["risk"], **sc["risk"])
     return Engine(c, client, clock=clock, persist=True,

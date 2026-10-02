@@ -612,3 +612,17 @@ def test_weather_no_skips_buckets_the_station_already_reached(tmp_path):
     assert scan["Station: Maximum liegt im Bucket (ausgelassen)"] == 1 and scan["Station: 3–4 Buckets darunter"] == 1
     note = eng.store.db.execute("SELECT note FROM executions").fetchone()[0]
     assert "3–4 Buckets darunter" in note
+
+
+def test_strict_weather_no_needs_a_reading(tmp_path):
+    kw = dict(end="2026-09-21T20:00:00Z", volumeNum=1800, description="no station link here")
+    m = _market("w1", "Will the highest temperature in Paris be 27°C on September 21?", ["0.30", "0.70"], ["Y27", "N27"], **kw)
+    books = {"Y27": ob("Y27", [(0.29, 500)], [(0.30, 500)]), "N27": ob("N27", [(0.69, 500)], [(0.70, 500)])}
+    for skip, bought in ((["Maximum liegt im Bucket"], ["N27"]),
+                         (["Maximum liegt im Bucket", "1 Bucket darunter", "keine Messung"], [])):
+        cfg = _cfg(tmp_path / str(len(skip)), "wetter_no_streng", strategy="band", category="Wetter", outcome="No",
+                   min_price=0.55, max_price=0.97, max_volume=5000, max_hours_to_end=12, max_spread=0.02,
+                   max_position_usd=50, obs_skip=skip)
+        eng = ScenarioEngine("wetter_no_streng", cfg, FakeClient(markets=[m], books=books), SimClock(NOW))
+        eng.step()
+        assert list(eng.pf.positions) == bought

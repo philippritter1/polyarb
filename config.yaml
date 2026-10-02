@@ -219,6 +219,34 @@ scenarios:
     max_day_usd: 1000            # 02.10.: höchstens so viel auf einen Messtag (alle Städte zusammen)
     max_new_per_step: 10
     max_open_positions: 200
+  wetter_no_streng:
+    enabled: true
+    title: Wetter-NO streng
+    strategy: band               # Studie: JA-Buckets sind durchweg zu teuer; NO 55-97 % unter 5k $: +8,4 %, neue Daten +5,8 %
+    category: Wetter
+    outcome: "No"                # nur die NO-Seite
+    tag_slugs: [weather]
+    # 02.10.: nur kaufen, wenn das gemessene Maximum mindestens 2 Buckets unter dem Bucket liegt oder ihn
+    # schon überschritten hat (Studie: 5.219 Käufe, +10,7 %, Hälften +9,2 / +12,2 %); ohne Messung kein Kauf
+    obs_skip: ["Maximum liegt im Bucket", "1 Bucket darunter", "keine Messung"]
+    obs_delay_min: 15            # nur Messungen, die schon 15 min veröffentlicht sind
+    side: "NO"                   # in Anführungszeichen: YAML liest NO sonst als "nein"
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.55
+    max_price: 0.97
+    max_volume: 5000             # Volumen beim Kauf; über 5k $ war es negativ
+    min_hours_to_end: 2
+    max_hours_to_end: 12         # getestet 6 h vorher
+    max_spread: 0.02
+    max_slippage: 0.01
+    assumed_edge: 0.05
+    min_liquidity: 100
+    max_position_usd: 50         # halb so viele Gelegenheiten, Orderbücher tief genug (~470 $ je Markt bis Kaufgrenze)
+    max_event_usd: 100           # pro Stadt und Tag: höchstens ein Bucket tritt ein
+    max_day_usd: 1000            # 02.10.: höchstens so viel auf einen Messtag (alle Städte zusammen)
+    max_new_per_step: 10
+    max_open_positions: 200
   finanz_dog:
     enabled: false               # abgeschaltet 02.10.: widerlegt – Studie mit 1.011 Wetten -7,6 % (2. Hälfte -23,5 %)
     title: Finanz-Außenseiter

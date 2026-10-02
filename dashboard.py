@@ -130,7 +130,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
-                  "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
+                  "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -912,7 +912,7 @@ $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</
 
 const NAMES={ladder_buy_all:"Logische Arbitrage",underdog_buy:"Underdog-Sport",favorite_buy:"Favorit-Kleinmarkt",weather_no_buy:"Wetter-NO",binary_buy_all:"Binär: YES+NO kaufen",binary_sell_all:"Binär: Split & verkaufen",negrisk_buy_all:"Multi-Outcome-Korb",negrisk_no_buy_all:"Multi-Outcome: alle NO",
  endgame_buy:"Endspiel-Ernte",longshot_buy:"Longshot: NO kaufen",weather_buy:"Wetter-Modell",fussball_dog_buy:"Fußball-Außenseiter",
- wetter_no_breit_buy:"Wetter-NO breit",wetter_no_mess_buy:"Wetter-NO + Messwerte",finanz_dog_buy:"Finanz-Außenseiter",mlb_spread_buy:"MLB-Spread"};
+ wetter_no_breit_buy:"Wetter-NO breit",wetter_no_mess_buy:"Wetter-NO + Messwerte",wetter_no_streng_buy:"Wetter-NO streng",finanz_dog_buy:"Finanz-Außenseiter",mlb_spread_buy:"MLB-Spread"};
 // ---------- grouped bars: expected vs realized
 (function(){
  const S=Object.entries(D.strat);const box=$("pnl");if(!S.length){box.textContent="Noch keine Trades.";return}

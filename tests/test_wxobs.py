@@ -141,3 +141,43 @@ def test_city_without_station_is_skipped(tmp_path):
     stats = st.collect(now=CLOSE + RETRY_AFTER + 60)
     assert stats["processed"] == 4  # a-d again (e stays "Frage nicht lesbar")
     assert st.db.execute("SELECT station, reason FROM wx_city").fetchone() == ("EGLC", None)
+
+
+def test_gap_classes():
+    from arb.wxobs import gap_class
+    assert gap_class("max", 24, 24, 26) == "Bucket schon überschritten"
+    assert gap_class("max", 24, 24, 24) == "Maximum liegt im Bucket"
+    assert gap_class("max", 24, 24, 23) == "1 Bucket darunter"
+    assert gap_class("max", 24, 24, 21) == "3–4 Buckets darunter"
+    assert gap_class("max", 80, 81, 77, "f") == "2 Buckets darunter"   # 3 °F below = 2 buckets of 2 °F
+    assert gap_class("max", 86, math.inf, 80, "f") == "3–4 Buckets darunter"
+    assert gap_class("max", -math.inf, 70, 69, "f") == "Maximum liegt im Bucket"
+    assert gap_class("min", 15, 15, 14) == "Bucket schon überschritten"
+    assert gap_class("min", 15, 15, 18) == "3–4 Buckets darunter"
+    assert gap_class("max", 24, 24, None) == "keine Messung"
+
+
+def test_no_filter_analysis(tmp_path):
+    """London on Sep 3 peaks at 25 °C; six hours before the 14:00 UTC end (08:00 UTC = 09:00 local, readings
+    published 15 min earlier) the station had 18 °C. NO on '24 °C' won, NO on '25 °C' lost."""
+    from arb.wxobs import no_filter_analysis
+    db = sqlite3.connect(str(tmp_path / "study.sqlite"))
+    db.executescript(STUDY_SCHEMA)
+    for cid, q, out, p6 in (("a", "Will the highest temperature in London be 24°C on September 3?", 0, 0.30),
+                            ("b", "Will the highest temperature in London be 25°C on September 3?", 1, 0.40),
+                            ("c", "Will the highest temperature in London be 19°C on September 3?", 0, 0.20)):
+        db.execute("INSERT INTO markets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (cid, q, "Wetter", 1, 0, 800, END, CLOSE, out, None, p6, p6, p6, 20, 0))
+    db.commit()
+    wx = str(tmp_path / "wx.sqlite")
+    st = WxObsStudy(Client(), wx, str(tmp_path / "study.sqlite"), fetch_text=lambda u, p: _iem_csv())
+    st.collect(now=CLOSE + 86400)
+    import json
+    res = json.loads(st.db.execute("SELECT value FROM wx_meta WHERE key='no_filter'").fetchone()[0])
+    cls = {r["cls"]: r for r in res["by_cls"] if r["n"]}
+    assert res["n"] == 3
+    assert cls["1 Bucket darunter"]["n"] == 1 and cls["1 Bucket darunter"]["hit"] == 1.0  # '19 °C' at 18 °C
+    assert cls["5+ Buckets darunter"]["n"] == 2 and cls["5+ Buckets darunter"]["hit"] == 0.5
+    assert {r["hour"] for r in res["by_hour"]} == {"vor 10 Uhr"}
+    assert res["filters"][0]["n"] == 3 and res["filters"][1]["n"] == 3 and res["filters"][2]["n"] == 2
+    assert no_filter_analysis(str(tmp_path / "none.sqlite"), str(tmp_path / "study.sqlite")) == {}

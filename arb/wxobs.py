@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import math
 import re
@@ -131,6 +132,7 @@ class WxObsStudy:
     def __init__(self, client, db_path: str, study_db: str, fetch_text: Optional[Callable[[str, dict], str]] = None):
         self.client = client
         self.study_db = study_db
+        self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
@@ -336,6 +338,14 @@ class WxObsStudy:
         self.db.execute("INSERT OR REPLACE INTO wx_meta VALUES('last_run', ?)",
                         (f"{now:.0f}|{stats['processed']}|{stats['candidates']}|{stats['priced']}",))
         self.db.commit()
+        try:  # Wetter-NO by where the station stood when buying – pure database work, stored for the dashboard
+            import json
+            res = no_filter_analysis(self.db_path, self.study_db)
+            if res:
+                self.db.execute("INSERT OR REPLACE INTO wx_meta VALUES('no_filter', ?)", (json.dumps(res),))
+                self.db.commit()
+        except Exception as e:  # noqa – never fail the collection run
+            log.warning("wxobs: no_filter_analysis failed: %s", e)
         log.info("wxobs: %s", stats)
         return stats
 
@@ -376,6 +386,8 @@ def analysis(db_path: str, slip: float = 0.01) -> dict:
         out["stations"] = db.execute("SELECT city, station, tz, source, reason FROM wx_city ORDER BY city").fetchall()
         r = db.execute("SELECT value FROM wx_meta WHERE key='last_run'").fetchone()
         out["last_run"] = r[0] if r else None
+        r = db.execute("SELECT value FROM wx_meta WHERE key='no_filter'").fetchone()
+        out["no_filter"] = json.loads(r[0]) if r else {}
     except sqlite3.OperationalError:
         rows = []
     db.close()
@@ -455,3 +467,104 @@ def csv_rows(db_path: str) -> tuple:
             r[i] = "" if r[i] in (math.inf, -math.inf) else r[i]
         out.append(r)
     return header, out
+
+
+# ====================================================================== Wetter-NO with station readings
+NO_BAND = (0.55, 0.97)
+NO_MAX_VOLUME = 5000.0
+GAP_CLASSES = ["Bucket schon überschritten", "Maximum liegt im Bucket", "1 Bucket darunter", "2 Buckets darunter",
+               "3–4 Buckets darunter", "5+ Buckets darunter", "keine Messung"]
+FILTERS = [  # which classes a filtered rule would still buy
+    ("alle (Wetter-NO breit heute)", None),
+    ("ohne 'Maximum im Bucket'", {"Maximum liegt im Bucket"}),
+    ("ohne 'im Bucket' und '1 darunter'", {"Maximum liegt im Bucket", "1 Bucket darunter"}),
+    ("nur ≥ 2 darunter oder überschritten", {"Maximum liegt im Bucket", "1 Bucket darunter", "keine Messung"}),
+    ("nur ≥ 3 darunter oder überschritten", {"Maximum liegt im Bucket", "1 Bucket darunter", "2 Buckets darunter",
+                                            "keine Messung"}),
+]
+
+
+def gap_class(kind: str, lo: float, hi: float, v: Optional[int], unit: str = "c") -> str:
+    """Where the day's running max (min) stands relative to the bucket, counted in bucket widths
+    (Polymarket: 1 °C, 2 °F; the open-ended edge buckets count with the same width)."""
+    if v is None:
+        return "keine Messung"
+    width = (hi - lo + 1) if lo != -math.inf and hi != math.inf else (2 if unit == "f" else 1)
+    if kind == "max":
+        if hi != math.inf and v > hi:
+            return "Bucket schon überschritten"
+        if lo == -math.inf or v >= lo:
+            return "Maximum liegt im Bucket"
+        gap = math.ceil((lo - v) / max(width, 1))
+    else:
+        if lo != -math.inf and v < lo:
+            return "Bucket schon überschritten"
+        if hi == math.inf or v <= hi:
+            return "Maximum liegt im Bucket"
+        gap = math.ceil((v - hi) / max(width, 1))
+    return "1 Bucket darunter" if gap <= 1 else "2 Buckets darunter" if gap == 2 else \
+        "3–4 Buckets darunter" if gap <= 4 else "5+ Buckets darunter"
+
+
+def hour_class(h: int) -> str:
+    return "vor 10 Uhr" if h < 10 else "10–14 Uhr" if h < 14 else "ab 14 Uhr"
+
+
+def no_filter_analysis(wx_db: str, study_db: str, slip: float = 0.02, delay_s: float = 900) -> dict:
+    """Every Wetter-NO purchase of the study (NO side 55–97 % six hours before the end, market under 5k $),
+    classified by where the station's running max stood at that moment (readings published at least
+    `delay_s` earlier). Return per class, per local hour and for a few filter variants."""
+    from zoneinfo import ZoneInfo
+    if not (Path(wx_db).exists() and Path(study_db).exists()):
+        return {}
+    sdb, wdb = sqlite3.connect(study_db), sqlite3.connect(wx_db)
+    try:
+        rows = sdb.execute("""SELECT question, end_ts, close_ts, outcome, p_6h, volume FROM markets
+                              WHERE category='Wetter' AND p_6h IS NOT NULL""").fetchall()
+        cities = {c: (st, tz) for c, st, tz in wdb.execute(
+            "SELECT city, station, tz FROM wx_city WHERE reason IS NULL AND station IS NOT NULL AND tz IS NOT NULL")}
+        fetched = set(wdb.execute("SELECT station, day FROM wx_obs_day"))
+    except sqlite3.OperationalError:
+        sdb.close(), wdb.close()
+        return {}
+    bets = []
+    for q, end, close, outcome, p6, vol in rows:
+        no = 1 - p6
+        if not NO_BAND[0] <= no < NO_BAND[1] or (vol or 0) >= NO_MAX_VOLUME:
+            continue
+        year = datetime.fromtimestamp(end or close, tz=timezone.utc).year
+        pq = parse_question(q, year)
+        if not pq or pq[1] not in cities:
+            continue
+        kind, city, (lo, hi, unit), day = pq
+        station, tz = cities[city]
+        if (station, day.isoformat()) not in fetched:
+            continue
+        ref = min(t for t in (end, close) if t)
+        t = ref - 6 * 3600
+        z = ZoneInfo(tz)
+        start = datetime(day.year, day.month, day.day, tzinfo=z).timestamp()
+        vals = [to_unit(r[0], unit) for r in wdb.execute(
+            "SELECT tmpf FROM wx_obs WHERE station=? AND ts>=? AND ts<=?", (station, start, t - delay_s))]
+        v = (max(vals) if kind == "max" else min(vals)) if vals else None
+        b = min(no + slip, 0.99)
+        bets.append(dict(cls=gap_class(kind, lo, hi, v, unit), hour=hour_class(datetime.fromtimestamp(t, tz=z).hour),
+                         cost=b * (1 + 0.05 * (1 - b)), won=1 - outcome, price=no, t=t))
+    sdb.close(), wdb.close()
+
+    def stats(bs: list) -> dict:
+        if not bs:
+            return dict(n=0)
+        cost = sum(x["cost"] for x in bs)
+        bs2 = sorted(bs, key=lambda x: x["t"])
+        h = len(bs2) // 2
+        roi = lambda s: (sum(x["won"] for x in s) - sum(x["cost"] for x in s)) / sum(x["cost"] for x in s) if s else 0  # noqa
+        return dict(n=len(bs), price=sum(x["price"] for x in bs) / len(bs), hit=sum(x["won"] for x in bs) / len(bs),
+                    roi=(sum(x["won"] for x in bs) - cost) / cost, profit=sum(x["won"] for x in bs) - cost,
+                    first=roi(bs2[:h]), second=roi(bs2[h:]))
+    by_cls = [dict(cls=c, **stats([x for x in bets if x["cls"] == c])) for c in GAP_CLASSES]
+    by_hour = [dict(cls=c, hour=hc, **stats([x for x in bets if x["cls"] == c and x["hour"] == hc]))
+               for c in GAP_CLASSES for hc in ("vor 10 Uhr", "10–14 Uhr", "ab 14 Uhr")]
+    filters = [dict(name=n, **stats([x for x in bets if not skip or x["cls"] not in skip])) for n, skip in FILTERS]
+    return dict(n=len(bets), slip=slip, by_cls=by_cls, by_hour=[r for r in by_hour if r["n"]], filters=filters,
+                ts=time.time())

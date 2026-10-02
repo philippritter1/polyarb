@@ -354,6 +354,12 @@ def build_all(cfg: dict, out: str) -> list:
     exp.mkdir(parents=True, exist_ok=True)
     _write(exp / "kalshi-maerkte.csv", _csv(*kalshi_csv_rows(kalshi_db)), "utf-8-sig")
     _write(exp / "wetter-messwerte.csv", _csv(*wx_csv_rows(wx_db)), "utf-8-sig")
+    nf = wx_analysis(wx_db).get("no_filter") or {}
+    _write(exp / "wetter-no-filter.csv", _csv(
+        ["Tabelle", "Gruppe", "Ortszeit", "Käufe", "Ø NO-Preis", "NO gewonnen", "Rendite +2ct", "1. Hälfte", "2. Hälfte"],
+        [[t, r.get("cls") or r.get("name"), r.get("hour", ""), r["n"], r.get("price"), r.get("hit"), r.get("roi"),
+          r.get("first"), r.get("second")] for t, key in (("Stand", "by_cls"), ("Filter", "filters"), ("Ortszeit", "by_hour"))
+         for r in nf.get(key, []) if r.get("n")]), "utf-8-sig")
     from arb.kalshi import diag_rows as kalshi_diag_rows
     from arb.wxobs import station_rows as wx_station_rows
     _write(exp / "kalshi-diagnose.csv", _csv(*kalshi_diag_rows(kalshi_db)), "utf-8-sig")
@@ -388,6 +394,8 @@ def build_all(cfg: dict, out: str) -> list:
                exp / "kalshi-maerkte.csv", "kalshi/maerkte.csv"),
               ("Wetter-Messwerte", "Temperatur-Buckets: ab wann laut Station unmöglich, und Preis danach",
                "wetter-messwerte.csv", exp / "wetter-messwerte.csv", "wetter-messwerte/maerkte.csv"),
+              ("Wetter-Messwerte", "Wetter-NO nach Stand der Station beim Kauf (Filter-Varianten)", "wetter-no-filter.csv",
+               exp / "wetter-no-filter.csv", "wetter-messwerte/no-filter.csv"),
               ("Wetter-Messwerte", "Stationen je Stadt und was die Marktbeschreibung verlinkt", "wetter-stationen.csv",
                exp / "wetter-stationen.csv", "wetter-messwerte/stationen.csv"),
               ("Kalshi", "Diagnose des letzten Laufs (Anfragen, Fehler, Felder der API)", "kalshi-diagnose.csv",
@@ -610,7 +618,7 @@ def wxobs_page(w: dict, nav: list) -> str:
                 f'<td class="num {ecls}">{r["errors"]} ({_de(r["errors"] / r["n"] * 100, 2)} %)</td>'
                 f'<td class="num">{_de(r["yes"] * 100)} ct</td><td class="num">{k(r["ge2"])} / {k(r["ge5"])} / {k(r["ge10"])}</td>'
                 f'<td class="num {cls}">{_de(r["roi"] * 100, 2)} %</td><td class="num">{_de(r["hours"], 1)} h</td></tr>')
-    body = [intro, status,
+    body = [intro, status, _wx_no_filter(w),
             '<div class="card"><h2>Ergebnis</h2><p class="note">Jede Zeile: alle Buckets, die laut Station unmöglich '
             'waren und danach noch mindestens 0,5 Cent kosteten. Rendite je Kauf (nicht pro Jahr) – das Geld ist bis '
             'zur Auflösung gebunden (Median-Haltedauer in der letzten Spalte).</p><div class="tblwrap"><table><tr>'
@@ -626,6 +634,32 @@ def wxobs_page(w: dict, nav: list) -> str:
                 f'<th class="num">Fehler</th><th class="num">Ø YES-Preis</th></tr>{crs}</table></div></div>')
     body.append(_wx_stations(w))
     return _page(title, nav, "".join(body))
+
+
+def _wx_no_filter(w: dict) -> str:
+    nf = w.get("no_filter") or {}
+    if not nf.get("n"):
+        return ""
+    def cells(r):
+        if not r.get("n"):
+            return '<td class="num" colspan="5">–</td>'
+        n = f'{r["n"]:,}'.replace(",", ".")
+        return (f'<td class="num">{n}</td><td class="num">{_de(r["price"] * 100)} %</td>'
+                f'<td class="num">{_de(r["hit"] * 100)} %</td><td class="num {"pos" if r["roi"] > 0 else "neg"}">'
+                f'{_de(r["roi"] * 100)} %</td><td class="num">{_de(r["first"] * 100)} / {_de(r["second"] * 100)} %</td>')
+    head = ('<th class="num">Käufe</th><th class="num">Ø NO-Preis</th><th class="num">NO gewonnen</th>'
+            '<th class="num">Rendite (+2 ct)</th><th class="num">1. / 2. Hälfte</th>')
+    trs = "".join(f'<tr><td>{html.escape(r["cls"])}</td>{cells(r)}</tr>' for r in nf["by_cls"] if r.get("n"))
+    frs = "".join(f'<tr><td>{html.escape(r["name"])}</td>{cells(r)}</tr>' for r in nf["filters"])
+    hrs = "".join(f'<tr><td>{html.escape(r["cls"])}</td><td>{r["hour"]}</td>{cells(r)}</tr>' for r in nf["by_hour"])
+    return ('<div class="card"><h2>Wetter-NO mit Messwerten: Wo stand die Station beim Kauf?</h2><p class="note">Alle '
+            'Käufe der Regel Wetter-NO breit in der Studie (NO 55–97 %, Markt unter 5k $, 6 h vor Schluss), eingeteilt danach, '
+            'wo das bis dahin gemessene Tagesmaximum lag (Messungen mindestens 15 min alt). Liegt es schon im Bucket, '
+            'ist NO riskant; liegt es weit darunter oder ist der Bucket überschritten, sicherer.</p>'
+            f'<div class="tblwrap"><table><tr><th>Stand der Station</th>{head}</tr>{trs}</table></div>'
+            f'<h2 style="margin-top:14px">Filter-Varianten</h2><div class="tblwrap"><table><tr><th>Regel kauft …</th>{head}</tr>'
+            f'{frs}</table></div><h2 style="margin-top:14px">Nach Ortszeit beim Kauf</h2><div class="tblwrap"><table>'
+            f'<tr><th>Stand der Station</th><th>Ortszeit</th>{head}</tr>{hrs}</table></div></div>')
 
 
 def _wx_stations(w: dict) -> str:

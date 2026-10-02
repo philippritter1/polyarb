@@ -579,3 +579,36 @@ def test_capacity_counts_what_the_books_offered(tmp_path):
     assert day["day"] == "2026-09-21" and day["n"] == 6  # also the three the day limit stopped
     assert math.isclose(day["slip"], 6 * 400) and math.isclose(day["c2"], 6 * 400)
     assert math.isclose(day["band"], 6 * (400 + 830)) and 55 < day["bought"] <= 60 + 1e-6
+
+
+def test_weather_no_skips_buckets_the_station_already_reached(tmp_path):
+    """Paris, day 2026-09-21 (UTC+2): the station reported 24 °C this morning. NO on '24 °C' is skipped
+    (the max sits in the bucket), NO on '27 °C' is bought (3 buckets above)."""
+    desc = "Resolution: https://www.weather.gov/wrh/timeseries?site=lfpb"
+    kw = dict(end="2026-09-21T20:00:00Z", volumeNum=1800, description=desc)
+    a = _market("w1", "Will the highest temperature in Paris be 24°C on September 21?", ["0.30", "0.70"], ["Y24", "N24"], **kw)
+    b = _market("w2", "Will the highest temperature in Paris be 27°C on September 21?", ["0.30", "0.70"], ["Y27", "N27"], **kw)
+    books = {t: ob(t, [(p - 0.01, 500)], [(p, 500)]) for t, p in
+             (("Y24", 0.30), ("N24", 0.70), ("Y27", 0.30), ("N27", 0.70))}
+
+    class Obs(FakeClient):
+        def get_json(self, url, params):
+            if "stationinfo" in url:
+                return [{"icaoId": "LFPB", "lat": 48.97, "lon": 2.44}]
+            if "open-meteo.com/v1/forecast" in url:
+                return {"timezone": "Europe/Paris"}
+            if "metar" in url:
+                assert params["ids"] == "LFPB"
+                return [{"obsTime": int(NOW) - 3600 * k, "temp": t} for k, t in ((1, 24.0), (3, 21.0), (40, 30.0))]
+            return super().get_json(url, params)
+
+    cfg = _cfg(tmp_path, "wetter_no_mess", strategy="band", category="Wetter", outcome="No", min_price=0.55,
+               max_price=0.97, max_volume=5000, max_hours_to_end=12, max_spread=0.02, max_position_usd=25,
+               obs_skip=["Maximum liegt im Bucket"])
+    eng = ScenarioEngine("wetter_no_mess", cfg, Obs(markets=[a, b], books=books), SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["N27"]
+    scan = json.loads(Path(eng.state_path.replace(".json", ".scan.json")).read_text())
+    assert scan["Station: Maximum liegt im Bucket (ausgelassen)"] == 1 and scan["Station: 3–4 Buckets darunter"] == 1
+    note = eng.store.db.execute("SELECT note FROM executions").fetchone()[0]
+    assert "3–4 Buckets darunter" in note

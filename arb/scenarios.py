@@ -307,6 +307,10 @@ class PriceBandStrategy(Strategy):
         kinds, types = c.get("kinds"), c.get("types")
         exclude_types = set(c.get("exclude_types") or ())
         want_outcome = str(c.get("outcome") or "").lower()
+        obs_skip = set(c.get("obs_skip") or ())  # weather: station classes not to buy (see arb.wxobs.gap_class)
+        if obs_skip and getattr(self, "_obs", None) is None:
+            from .wxobs import LiveObs
+            self._obs = LiveObs(self.client.get_json, ttl_s=float(c.get("obs_ttl_s", 600)))
         lo, hi = float(c.get("min_price", 0.03)), float(c.get("max_price", 0.10))
         h_min, h_max = float(c.get("min_hours_to_end", 0.5)) * 3600, float(c.get("max_hours_to_end", 8)) * 3600
         v_min, v_max = float(c.get("min_volume", 0)), float(c.get("max_volume") or 1e18)
@@ -372,11 +376,20 @@ class PriceBandStrategy(Strategy):
                     continue
                 if lo - 0.01 <= p <= hi:
                     drop("Seite im Preisband")
+                    obs_note = ""
+                    if obs_skip:  # where today's station reading stands relative to this bucket
+                        cls = self._obs.gap(q, m.get("description") or m.get("resolutionSource") or "", now,
+                                            float(c.get("obs_delay_min", 15)) * 60)
+                        if cls in obs_skip:
+                            drop(f"Station: {cls} (ausgelassen)")
+                            continue
+                        drop(f"Station: {cls}")
+                        obs_note = f" | {cls}"
                     out.append(Signal(str(toks[i]), group, m.get("question", ""), str(outs[i]),
                                       fair=min(0.99, p + float(c.get("assumed_edge", 0.03))), max_price=hi,
                                       fee=self.fees.resolve(m, FEE_CATEGORY.get(category, category.lower())),
                                       end_ts=end, delay_s=_delay(m),
-                                      reason=f"{c.get('side', 'side')} {p:.3f} {mtype} vol {vol:,.0f}", min_ask=lo,
+                                      reason=f"{c.get('side', 'side')} {p:.3f} {mtype} vol {vol:,.0f}{obs_note}", min_ask=lo,
                                       max_spread=float(c.get("max_spread", 0.03))))
         return out
 

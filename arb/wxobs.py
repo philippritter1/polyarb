@@ -568,3 +568,78 @@ def no_filter_analysis(wx_db: str, study_db: str, slip: float = 0.02, delay_s: f
     filters = [dict(name=n, **stats([x for x in bets if not skip or x["cls"] not in skip])) for n, skip in FILTERS]
     return dict(n=len(bets), slip=slip, by_cls=by_cls, by_hour=[r for r in by_hour if r["n"]], filters=filters,
                 ts=time.time())
+
+
+# ====================================================================== live readings for scenarios
+METAR_URL = "https://aviationweather.gov/api/data/metar"
+
+
+class LiveObs:
+    """Current station readings for live trading: METAR from aviationweather.gov (free, no key),
+    station time zone from its coordinates. Cached: one request per station every `ttl_s`."""
+
+    def __init__(self, get_json: Callable[[str, dict], object], ttl_s: float = 600):
+        self.get_json, self.ttl = get_json, ttl_s
+        self._tz: Dict[str, Optional[str]] = {}
+        self._obs: Dict[str, Tuple[float, List[Tuple[float, float]]]] = {}
+
+    def _json(self, url: str, params: dict):
+        try:
+            return self.get_json(url, params)
+        except Exception as e:  # noqa – no reading = no filter decision, the caller treats it as "keine Messung"
+            log.debug("liveobs %s: %s", url, e)
+            return None
+
+    def tz(self, station: str) -> Optional[str]:
+        if station not in self._tz:
+            info = self._json(STATIONINFO_URL, {"ids": station, "format": "json"})
+            info = info[0] if isinstance(info, list) and info else info if isinstance(info, dict) else {}
+            tz = None
+            if info.get("lat") is not None and info.get("lon") is not None:
+                tz = (self._json(TZ_URL, {"latitude": info["lat"], "longitude": info["lon"], "timezone": "auto",
+                                          "forecast_days": 1, "daily": "temperature_2m_max"}) or {}).get("timezone")
+            self._tz[station] = tz if tz and tz != "GMT" else None
+        return self._tz[station]
+
+    def readings(self, station: str, now: float) -> List[Tuple[float, float]]:
+        """(ts, °F) of the last 30 hours, oldest first."""
+        hit = self._obs.get(station)
+        if hit and now - hit[0] < self.ttl:
+            return hit[1]
+        data = self._json(METAR_URL, {"ids": station, "format": "json", "hours": 30})
+        out = []
+        for o in data if isinstance(data, list) else []:
+            t = o.get("obsTime")
+            t = float(t) if isinstance(t, (int, float)) else _parse_iso(o.get("reportTime") or o.get("obsTime"))
+            temp = o.get("temp")
+            if t and isinstance(temp, (int, float)):
+                out.append((t, temp * 9 / 5 + 32))
+        out.sort()
+        self._obs[station] = (now, out)
+        return out
+
+    def gap(self, question: str, description: str, now: float, delay_s: float = 900) -> str:
+        """Where today's running max (min) of the market's station stands relative to its bucket."""
+        from zoneinfo import ZoneInfo
+        pq = parse_question(question, datetime.fromtimestamp(now, tz=timezone.utc).year)
+        station = station_from(description or "")
+        if not pq or not station:
+            return "keine Messung"
+        kind, _city, (lo, hi, unit), day = pq
+        tz = self.tz(station)
+        if not tz:
+            return "keine Messung"
+        start = datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(tz)).timestamp()
+        vals = [to_unit(f, unit) for t, f in self.readings(station, now) if start <= t <= now - delay_s
+                and t < start + 86400]
+        v = (max(vals) if kind == "max" else min(vals)) if vals else None
+        return gap_class(kind, lo, hi, v, unit)
+
+
+def _parse_iso(v) -> Optional[float]:
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00").replace(" ", "T")).timestamp()
+    except ValueError:
+        return None

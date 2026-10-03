@@ -340,10 +340,11 @@ class WxObsStudy:
         self.db.commit()
         try:  # Wetter-NO by where the station stood when buying – pure database work, stored for the dashboard
             import json
-            res = no_filter_analysis(self.db_path, self.study_db)
-            if res:
-                self.db.execute("INSERT OR REPLACE INTO wx_meta VALUES('no_filter', ?)", (json.dumps(res),))
-                self.db.commit()
+            for key, max_vol, clean in NO_VARIANTS:
+                res = no_filter_analysis(self.db_path, self.study_db, max_volume=max_vol, clean=clean)
+                if res:
+                    self.db.execute("INSERT OR REPLACE INTO wx_meta VALUES(?, ?)", (key, json.dumps(res)))
+                    self.db.commit()
         except Exception as e:  # noqa – never fail the collection run
             log.warning("wxobs: no_filter_analysis failed: %s", e)
         log.info("wxobs: %s", stats)
@@ -386,8 +387,9 @@ def analysis(db_path: str, slip: float = 0.01) -> dict:
         out["stations"] = db.execute("SELECT city, station, tz, source, reason FROM wx_city ORDER BY city").fetchall()
         r = db.execute("SELECT value FROM wx_meta WHERE key='last_run'").fetchone()
         out["last_run"] = r[0] if r else None
-        r = db.execute("SELECT value FROM wx_meta WHERE key='no_filter'").fetchone()
-        out["no_filter"] = json.loads(r[0]) if r else {}
+        for key, *_ in NO_VARIANTS:
+            r = db.execute("SELECT value FROM wx_meta WHERE key=?", (key,)).fetchone()
+            out[key] = json.loads(r[0]) if r else {}
     except sqlite3.OperationalError:
         rows = []
     db.close()
@@ -510,7 +512,15 @@ def hour_class(h: int) -> str:
     return "vor 10 Uhr" if h < 10 else "10–14 Uhr" if h < 14 else "ab 14 Uhr"
 
 
-def no_filter_analysis(wx_db: str, study_db: str, slip: float = 0.02, delay_s: float = 900) -> dict:
+NO_VARIANTS = [  # (key in wx_meta, max. FINAL volume, only the random sample of row version >= 2)
+    ("no_filter", NO_MAX_VOLUME, False),       # as the scenarios were found – the final volume looks ahead
+    ("no_filter_allvol", None, False),         # without the volume filter
+    ("no_filter_clean", None, True),           # without it, on the unbiased random sample only
+]
+
+
+def no_filter_analysis(wx_db: str, study_db: str, slip: float = 0.02, delay_s: float = 900,
+                       max_volume: Optional[float] = NO_MAX_VOLUME, clean: bool = False) -> dict:
     """Every Wetter-NO purchase of the study (NO side 55–97 % six hours before the end, market under 5k $),
     classified by where the station's running max stood at that moment (readings published at least
     `delay_s` earlier). Return per class, per local hour and for a few filter variants."""
@@ -519,8 +529,9 @@ def no_filter_analysis(wx_db: str, study_db: str, slip: float = 0.02, delay_s: f
         return {}
     sdb, wdb = sqlite3.connect(study_db), sqlite3.connect(wx_db)
     try:
-        rows = sdb.execute("""SELECT question, end_ts, close_ts, outcome, p_6h, volume FROM markets
-                              WHERE category='Wetter' AND p_6h IS NOT NULL""").fetchall()
+        where = " AND v >= 2 AND sample < 20" if clean else ""
+        rows = sdb.execute(f"""SELECT question, end_ts, close_ts, outcome, p_6h, volume FROM markets
+                               WHERE category='Wetter' AND p_6h IS NOT NULL{where}""").fetchall()
         cities = {c: (st, tz) for c, st, tz in wdb.execute(
             "SELECT city, station, tz FROM wx_city WHERE reason IS NULL AND station IS NOT NULL AND tz IS NOT NULL")}
         fetched = set(wdb.execute("SELECT station, day FROM wx_obs_day"))
@@ -530,7 +541,7 @@ def no_filter_analysis(wx_db: str, study_db: str, slip: float = 0.02, delay_s: f
     bets = []
     for q, end, close, outcome, p6, vol in rows:
         no = 1 - p6
-        if not NO_BAND[0] <= no < NO_BAND[1] or (vol or 0) >= NO_MAX_VOLUME:
+        if not NO_BAND[0] <= no < NO_BAND[1] or (max_volume is not None and (vol or 0) >= max_volume):
             continue
         year = datetime.fromtimestamp(end or close, tz=timezone.utc).year
         pq = parse_question(q, year)

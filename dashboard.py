@@ -366,12 +366,17 @@ def build_all(cfg: dict, out: str) -> list:
     exp.mkdir(parents=True, exist_ok=True)
     _write_csv(exp / "kalshi-maerkte.csv", *kalshi_csv_rows(kalshi_db))
     _write_csv(exp / "wetter-messwerte.csv", *wx_csv_rows(wx_db))
-    nf = wx_analysis(wx_db).get("no_filter") or {}
+    wxa = wx_analysis(wx_db)
+    variants = (("Endvolumen < 5k (wie gefunden)", "no_filter"), ("alle Volumen", "no_filter_allvol"),
+                ("alle Volumen, Zufalls-Stichprobe", "no_filter_clean"))
     _write(exp / "wetter-no-filter.csv", _csv(
-        ["Tabelle", "Gruppe", "Ortszeit", "Käufe", "Ø NO-Preis", "NO gewonnen", "Rendite +2ct", "1. Hälfte", "2. Hälfte"],
+        ["Tabelle", "Gruppe", "Ortszeit", "Käufe", "Ø NO-Preis", "NO gewonnen", "Rendite +2ct", "1. Hälfte", "2. Hälfte",
+         "Variante"],
         [[t, r.get("cls") or r.get("name"), r.get("hour", ""), r["n"], r.get("price"), r.get("hit"), r.get("roi"),
-          r.get("first"), r.get("second")] for t, key in (("Stand", "by_cls"), ("Filter", "filters"), ("Ortszeit", "by_hour"))
-         for r in nf.get(key, []) if r.get("n")]), "utf-8-sig")
+          r.get("first"), r.get("second"), vname]
+         for vname, vkey in variants
+         for t, key in (("Stand", "by_cls"), ("Filter", "filters"), ("Ortszeit", "by_hour"))
+         for r in (wxa.get(vkey) or {}).get(key, []) if r.get("n")]), "utf-8-sig")
     from arb.kalshi import diag_rows as kalshi_diag_rows
     from arb.wxobs import station_rows as wx_station_rows
     _write(exp / "kalshi-diagnose.csv", _csv(*kalshi_diag_rows(kalshi_db)), "utf-8-sig")

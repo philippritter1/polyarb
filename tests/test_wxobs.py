@@ -181,3 +181,8 @@ def test_no_filter_analysis(tmp_path):
     assert {r["hour"] for r in res["by_hour"]} == {"vor 10 Uhr"}
     assert res["filters"][0]["n"] == 3 and res["filters"][1]["n"] == 3 and res["filters"][2]["n"] == 2
     assert no_filter_analysis(str(tmp_path / "none.sqlite"), str(tmp_path / "study.sqlite")) == {}
+    # a market above 5k final volume only counts without the volume filter
+    db.execute("UPDATE markets SET volume=9000 WHERE condition_id='a'")
+    db.commit()
+    assert no_filter_analysis(wx, str(tmp_path / "study.sqlite"))["n"] == 2
+    assert no_filter_analysis(wx, str(tmp_path / "study.sqlite"), max_volume=None)["n"] == 3

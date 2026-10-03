@@ -187,14 +187,25 @@ def trades_csv(db_path: str) -> str:
     return buf.getvalue()
 
 
-def _csv(header: list, rows: list) -> str:
-    """German-Excel CSV: ';' separator, decimal comma."""
-    buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+def _csv_rows(w, header: list, rows) -> None:
     w.writerow(header)
     for r in rows:
         w.writerow([_num(v) if isinstance(v, float) else ("" if v is None else v) for v in r])
+
+
+def _csv(header: list, rows: list) -> str:
+    """German-Excel CSV: ';' separator, decimal comma."""
+    buf = io.StringIO()
+    _csv_rows(csv.writer(buf, delimiter=";", lineterminator="\r\n"), header, rows)
     return buf.getvalue()
+
+
+def _write_csv(path: Path, header: list, rows) -> None:
+    """Like _write(path, _csv(...)) but streamed row by row: the raw study tables are too big to hold in memory."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8-sig", newline="") as fh:
+        _csv_rows(csv.writer(fh, delimiter=";", lineterminator="\r\n"), header, rows)
+    os.replace(tmp, path)
 
 
 def equity_csv(db_path: str, every_s: float = 300) -> str:
@@ -334,7 +345,8 @@ def build_all(cfg: dict, out: str) -> list:
     stress = _cached_stress(study_db, stress_test)
     books = compare(study_db)
     (root / "study").mkdir(parents=True, exist_ok=True)
-    _write(root / "study" / "index.html", study_page(calibration(study_db), nav_for("study"), stress, books), "utf-8")
+    calib = calibration(study_db)
+    _write(root / "study" / "index.html", study_page(calib, nav_for("study"), stress, books), "utf-8")
     built.append(str(root / "study" / "index.html"))
 
     from arb.kalshi import analysis as kalshi_analysis, csv_rows as kalshi_csv_rows
@@ -352,8 +364,8 @@ def build_all(cfg: dict, out: str) -> list:
 
     exp = root / "export"
     exp.mkdir(parents=True, exist_ok=True)
-    _write(exp / "kalshi-maerkte.csv", _csv(*kalshi_csv_rows(kalshi_db)), "utf-8-sig")
-    _write(exp / "wetter-messwerte.csv", _csv(*wx_csv_rows(wx_db)), "utf-8-sig")
+    _write_csv(exp / "kalshi-maerkte.csv", *kalshi_csv_rows(kalshi_db))
+    _write_csv(exp / "wetter-messwerte.csv", *wx_csv_rows(wx_db))
     nf = wx_analysis(wx_db).get("no_filter") or {}
     _write(exp / "wetter-no-filter.csv", _csv(
         ["Tabelle", "Gruppe", "Ortszeit", "Käufe", "Ø NO-Preis", "NO gewonnen", "Rendite +2ct", "1. Hälfte", "2. Hälfte"],
@@ -364,9 +376,11 @@ def build_all(cfg: dict, out: str) -> list:
     from arb.wxobs import station_rows as wx_station_rows
     _write(exp / "kalshi-diagnose.csv", _csv(*kalshi_diag_rows(kalshi_db)), "utf-8-sig")
     _write(exp / "wetter-stationen.csv", _csv(*wx_station_rows(wx_db)), "utf-8-sig")
-    markets, calib = study_csvs(study_db)
-    _write(exp / "studie-maerkte.csv", markets, "utf-8-sig")
-    _write(exp / "studie-kalibrierung.csv", calib, "utf-8-sig")
+    _write_csv(exp / "studie-maerkte.csv", STUDY_MARKET_HEADER, study_market_rows(study_db))
+    _write_csv(exp / "studie-kalibrierung.csv", ["Zeitpunkt", "Preisbereich", "n", "Ø Preis", "gewonnen", "95% von", "95% bis",
+                                                  "Differenz"],
+               [[r["cp"], f'{r["lo"]:.2f}-{r["hi"]:.2f}', r["n"], r["price"], r["rate"], r["ci_lo"], r["ci_hi"], r["edge"]]
+                for r in calib["rows"]])
     _write(exp / "studie-stresstest.csv", stress_csv(stress), "utf-8-sig")
     _write(exp / "studie-buchmacher.csv", books_csv(study_db), "utf-8-sig")
     files = []  # (group, label, path relative to export/, file on disk, name inside the zip)
@@ -724,29 +738,28 @@ def _edge_cls(r: dict) -> str:
     return "pos" if r["ci_lo"] > r["price"] else "neg" if r["ci_hi"] < r["price"] else ""
 
 
-def study_csvs(study_db: str) -> tuple:
-    from arb.study import calibration
-    rows = []
-    if Path(study_db).exists():
-        db = sqlite3.connect(study_db)
-        try:
-            for r in _q(db, """SELECT end_ts, close_ts, question, category, neg_risk, volume, outcome,
-                                      p_7d, p_1d, p_6h, p_1h, n_points, condition_id FROM markets ORDER BY end_ts"""):
-                rows.append([datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M") if r[0] else "",
-                             datetime.fromtimestamp(r[1]).strftime("%Y-%m-%d %H:%M") if r[1] else "",
-                             r[2], r[3], "ja" if r[4] else "nein", float(r[5] or 0), "YES" if r[6] else "NO",
-                             *r[7:11], r[11], r[12]])
-        except sqlite3.OperationalError:
-            pass
+STUDY_MARKET_HEADER = ["Ende geplant", "Geschlossen", "Frage", "Kategorie", "Multi-Outcome", "Volumen $", "Ergebnis",
+                       "YES 7 Tage vorher", "YES 1 Tag vorher", "YES 6 h vorher", "YES 1 h vorher", "Preispunkte",
+                       "Markt-ID"]
+
+
+def study_market_rows(study_db: str):
+    """Resolved markets of the study, one CSV row at a time (the table has well over 100k rows)."""
+    if not Path(study_db).exists():
+        return
+    db = sqlite3.connect(study_db)
+    try:
+        cur = db.execute("""SELECT end_ts, close_ts, question, category, neg_risk, volume, outcome,
+                                   p_7d, p_1d, p_6h, p_1h, n_points, condition_id FROM markets ORDER BY end_ts""")
+        for r in cur:
+            yield [datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M") if r[0] else "",
+                   datetime.fromtimestamp(r[1]).strftime("%Y-%m-%d %H:%M") if r[1] else "",
+                   r[2], r[3], "ja" if r[4] else "nein", float(r[5] or 0), "YES" if r[6] else "NO",
+                   *r[7:11], r[11], r[12]]
+    except sqlite3.OperationalError:
+        pass
+    finally:
         db.close()
-    markets = _csv(["Ende geplant", "Geschlossen", "Frage", "Kategorie", "Multi-Outcome", "Volumen $", "Ergebnis",
-                    "YES 7 Tage vorher", "YES 1 Tag vorher", "YES 6 h vorher", "YES 1 h vorher", "Preispunkte",
-                    "Markt-ID"], rows)
-    cal = calibration(study_db)
-    crow = [[r["cp"], f'{r["lo"]:.2f}-{r["hi"]:.2f}', r["n"], r["price"], r["rate"], r["ci_lo"], r["ci_hi"], r["edge"]]
-            for r in cal["rows"]]
-    calib = _csv(["Zeitpunkt", "Preisbereich", "n", "Ø Preis", "gewonnen", "95% von", "95% bis", "Differenz"], crow)
-    return markets, calib
 
 
 # the raw study tables grow without bound; the compact ZIP leaves them out so it stays small enough to upload

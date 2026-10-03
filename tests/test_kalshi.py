@@ -157,7 +157,7 @@ def test_volume_before_checkpoint_and_random_sample(tmp_path):
     from arb.kalshi import SAMPLE_PCT, sample_bucket, volume_before
     cs = [dict(c, volume_fp="10.00") for c in _candles(CLOSE, 20, 19, 21)]  # 31 hourly candles, 10 contracts each
     assert volume_before(cs, CLOSE - 3600) == 240.0  # 24 candles in the day before
-    assert volume_before(cs, CLOSE - 86400) is None   # candles do not reach 24 h further back
+    assert volume_before(cs, CLOSE - 86400) == 70.0  # market opened 30 h before the close: 7 candles until then
 
     small = [f"KXHIGHNY-S{i}" for i in range(400) if sample_bucket(f"KXHIGHNY-S{i}") < SAMPLE_PCT][:2]
     dropped = [f"KXHIGHNY-S{i}" for i in range(400) if sample_bucket(f"KXHIGHNY-S{i}") >= SAMPLE_PCT][:2]
@@ -178,8 +178,9 @@ def test_volume_before_checkpoint_and_random_sample(tmp_path):
     st = KalshiStudy(C(), db)
     st.collect(days_back=3, recent_days=3, window_days=3, min_volume=100, now=NOW)
     rows = {r[0]: r[1:] for r in st.db.execute("SELECT ticker, sample, vol_6h, v FROM kalshi_markets")}
+    assert all(r[2] == 3 for r in rows.values())
     assert set(rows) == set(small)  # below min_volume only the random sample
-    assert all(r[0] < SAMPLE_PCT and r[2] == 2 for r in rows.values())
+    assert all(r[0] < SAMPLE_PCT for r in rows.values())
     assert all(r[1] == 48 for r in rows.values())  # 6 h checkpoint: 24 candles of 2 contracts in the day before
     header, out = csv_rows(db)
     assert len(header) == len(out[0]) == 25

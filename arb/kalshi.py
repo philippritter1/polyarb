@@ -31,7 +31,7 @@ DAY = 86400.0
 CHECKPOINTS = {"1d": DAY, "6h": 6 * 3600, "1h": 3600}
 VERSION = 4  # v2: millisecond candle times, detailed reasons, retries; v3: no parlays ("Exotics");
 # v4: random sample below the volume filter, volume before each checkpoint, rows collected anew
-ROW_VERSION = 2
+ROW_VERSION = 3  # 3: volume before the checkpoint also when the candles start later (market opened later)
 SAMPLE_PCT = 20  # share of markets kept regardless of volume: the final volume depends on the outcome
 FEE_RATE = 0.07  # Kalshi taker fee: 7 % * p * (1 - p) per contract (rounded up to the cent per order)
 MAX_LISTED = 20000  # markets listed per window at most (20 pages)
@@ -129,10 +129,9 @@ def candle_volume(c: dict) -> float:
     return 0.0
 
 
-def volume_before(candles: List[dict], ts: float, span: float = DAY) -> Optional[float]:
-    """Contracts traded in (ts - span, ts]; None if the candles do not reach back that far."""
-    if not candles or candle_ts(candles[0]) > ts - span + 3600:
-        return None
+def volume_before(candles: List[dict], ts: float, span: float = DAY) -> float:
+    """Contracts traded in (ts - span, ts]. The candles are requested from far enough back; a market that
+    opened later, or hours without a candle, simply traded nothing then – what one would have seen at ts."""
     return sum(candle_volume(c) for c in candles if ts - span < candle_ts(c) <= ts)
 
 

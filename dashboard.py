@@ -740,7 +740,14 @@ def _edge_cls(r: dict) -> str:
 
 STUDY_MARKET_HEADER = ["Ende geplant", "Geschlossen", "Frage", "Kategorie", "Multi-Outcome", "Volumen $", "Ergebnis",
                        "YES 7 Tage vorher", "YES 1 Tag vorher", "YES 6 h vorher", "YES 1 h vorher", "Preispunkte",
-                       "Markt-ID"]
+                       "Markt-ID", "Stichprobe (0-99)", "Preis unverändert seit h (7 Tage)", "… (1 Tag)", "… (6 h)",
+                       "… (1 h)", "Version"]
+
+
+def _cols(db, table: str, cols: list) -> str:
+    """SELECT list that reads NULL for columns an older database does not have yet."""
+    have = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+    return ", ".join(c if c in have else f"NULL AS {c}" for c in cols)
 
 
 def study_market_rows(study_db: str):
@@ -749,13 +756,15 @@ def study_market_rows(study_db: str):
         return
     db = sqlite3.connect(study_db)
     try:
-        cur = db.execute("""SELECT end_ts, close_ts, question, category, neg_risk, volume, outcome,
-                                   p_7d, p_1d, p_6h, p_1h, n_points, condition_id FROM markets ORDER BY end_ts""")
+        cols = _cols(db, "markets", ["end_ts", "close_ts", "question", "category", "neg_risk", "volume", "outcome",
+                                     "p_7d", "p_1d", "p_6h", "p_1h", "n_points", "condition_id", "sample",
+                                     "a_7d", "a_1d", "a_6h", "a_1h", "v"])
+        cur = db.execute(f"SELECT {cols} FROM markets ORDER BY end_ts")
         for r in cur:
             yield [datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M") if r[0] else "",
                    datetime.fromtimestamp(r[1]).strftime("%Y-%m-%d %H:%M") if r[1] else "",
                    r[2], r[3], "ja" if r[4] else "nein", float(r[5] or 0), "YES" if r[6] else "NO",
-                   *r[7:11], r[11], r[12]]
+                   *r[7:11], r[11], r[12], r[13], *r[14:18], r[18] or 1]
     except sqlite3.OperationalError:
         pass
     finally:

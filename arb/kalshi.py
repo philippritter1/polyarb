@@ -29,7 +29,10 @@ log = logging.getLogger(__name__)
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 DAY = 86400.0
 CHECKPOINTS = {"1d": DAY, "6h": 6 * 3600, "1h": 3600}
-VERSION = 3  # v2: millisecond candle times, detailed reasons, retries; v3: no parlays ("Exotics")
+VERSION = 4  # v2: millisecond candle times, detailed reasons, retries; v3: no parlays ("Exotics");
+# v4: random sample below the volume filter, volume before each checkpoint, rows collected anew
+ROW_VERSION = 2
+SAMPLE_PCT = 20  # share of markets kept regardless of volume: the final volume depends on the outcome
 FEE_RATE = 0.07  # Kalshi taker fee: 7 % * p * (1 - p) per contract (rounded up to the cent per order)
 MAX_LISTED = 20000  # markets listed per window at most (20 pages)
 
@@ -53,6 +56,20 @@ CREATE TABLE IF NOT EXISTS kalshi_markets(
 CREATE TABLE IF NOT EXISTS kalshi_skipped(ticker TEXT PRIMARY KEY, reason TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS kalshi_meta(key TEXT PRIMARY KEY, value TEXT);
 """
+# v2 columns (03.10.), added to older databases on start:
+#   sample  0..99 from a hash of the ticker: rows with sample < SAMPLE_PCT are a random sample of ALL markets
+#   vol_*   contracts traded in the 24 h before the checkpoint (known at that time, unlike the final volume)
+#   exp_ts  expected expiration (close_ts can be early when the outcome was settled early)
+V2_COLUMNS = [("sample", "INT"), ("vol_1d", "REAL"), ("vol_6h", "REAL"), ("vol_1h", "REAL"), ("exp_ts", "REAL"),
+              ("v", "INT")]
+COLUMNS = ["ticker", "event_ticker", "series", "title", "subtitle", "category", "kalshi_category", "volume",
+           "close_ts", "result", "p_1d", "p_6h", "p_1h", "ask_yes_1d", "ask_no_1d", "ask_yes_6h", "ask_no_6h",
+           "ask_yes_1h", "ask_no_1h", "collected_ts"] + [c for c, _ in V2_COLUMNS]
+
+
+def sample_bucket(key: str) -> int:
+    import hashlib
+    return int(hashlib.sha1(str(key).encode()).hexdigest()[:8], 16) % 100
 
 
 def _ts(v) -> Optional[float]:
@@ -99,6 +116,24 @@ def candle_prices(candle: dict) -> dict:
     if p is None and ask is not None and bid is not None:
         p = (ask + bid) / 2  # no trade that hour: the middle of the book
     return dict(p=p, ask_yes=ask, ask_no=(1 - bid) if bid is not None else None)
+
+
+def candle_volume(c: dict) -> float:
+    for k in ("volume", "volume_fp"):
+        v = c.get(k)
+        if v not in (None, ""):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
+def volume_before(candles: List[dict], ts: float, span: float = DAY) -> Optional[float]:
+    """Contracts traded in (ts - span, ts]; None if the candles do not reach back that far."""
+    if not candles or candle_ts(candles[0]) > ts - span + 3600:
+        return None
+    return sum(candle_volume(c) for c in candles if ts - span < candle_ts(c) <= ts)
 
 
 def candle_ts(c: dict) -> float:
@@ -158,6 +193,13 @@ class KalshiStudy:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(kalshi_markets)")}
+        for name, typ in V2_COLUMNS:
+            if name not in have:
+                self.db.execute(f"ALTER TABLE kalshi_markets ADD COLUMN {name} {typ}")
+        if "sample" not in have:
+            self.db.executemany("UPDATE kalshi_markets SET sample=? WHERE ticker=?", [
+                (sample_bucket(t), t) for (t,) in self.db.execute("SELECT ticker FROM kalshi_markets").fetchall()])
         self._series: Optional[Dict[str, str]] = None
         row = self.db.execute("SELECT value FROM kalshi_meta WHERE key='version'").fetchone()
         if not row or int(row[0]) < VERSION:  # candle problems of older versions: list and try those markets again
@@ -232,7 +274,8 @@ class KalshiStudy:
         now = time.time() if now is None else now
         started = time.monotonic()
         out_of_time = lambda: time.monotonic() - started > max_runtime_s  # noqa: E731 – the timer starts the next run
-        known = {r[0] for r in self.db.execute("SELECT ticker FROM kalshi_markets UNION SELECT ticker FROM kalshi_skipped")}
+        known = {r[0] for r in self.db.execute("SELECT ticker FROM kalshi_markets WHERE v >= ? UNION "
+                                                "SELECT ticker FROM kalshi_skipped", (ROW_VERSION,))}
         stats = {"new": 0, "skipped": 0, "seen": 0, "windows": 0, "low_volume": 0, "category_skipped": 0,
                  "capped_windows": 0, "out_of_time": False}
         oldest = now - days_back * DAY
@@ -289,7 +332,7 @@ class KalshiStudy:
             t = str(m.get("ticker") or "")
             if not t or t in known:
                 continue
-            if volume_of(m) < min_volume:
+            if volume_of(m) < min_volume and sample_bucket(t) >= SAMPLE_PCT:
                 stats["low_volume"] += 1
                 continue
             opened, closed = _ts(m.get("open_time")), _ts(m.get("close_time"))
@@ -315,7 +358,8 @@ class KalshiStudy:
                 self.db.execute("INSERT OR REPLACE INTO kalshi_skipped VALUES(?,?,?)", (m["ticker"], row, now))
                 stats["skipped"] += 1
             else:
-                self.db.execute(f"INSERT OR REPLACE INTO kalshi_markets VALUES({','.join('?' * 20)})", row)
+                self.db.execute(f"INSERT OR REPLACE INTO kalshi_markets({','.join(COLUMNS)}) "
+                                f"VALUES({','.join('?' * len(COLUMNS))})", row)
                 stats["new"] += 1
             if (stats["new"] + stats["skipped"]) % 50 == 0:
                 self.db.commit()
@@ -333,7 +377,7 @@ class KalshiStudy:
         ref = min(t for t in (close, exp) if t) if (close or exp) else None
         if not ref:
             return "no close time"
-        cs = self.candles(m, ref - 30 * 3600, ref)
+        cs = self.candles(m, ref - 54 * 3600, ref)  # 30 h for the prices, 24 h more for the volume before 1 d
         if not cs:
             if "no_candles_sample" not in self.diag:
                 self.diag["no_candles_sample"] = {"ticker": m.get("ticker"), "series": series_of(m),
@@ -353,7 +397,8 @@ class KalshiStudy:
                 volume_of(m), ref, out,
                 g("1d", "p"), g("6h", "p"), g("1h", "p"),
                 g("1d", "ask_yes"), g("1d", "ask_no"), g("6h", "ask_yes"), g("6h", "ask_no"),
-                g("1h", "ask_yes"), g("1h", "ask_no"), now)
+                g("1h", "ask_yes"), g("1h", "ask_no"), now,
+                sample_bucket(m["ticker"]), *(volume_before(cs, ref - dt) for dt in CHECKPOINTS.values()), exp, ROW_VERSION)
 
 
 # ====================================================================== analysis
@@ -483,14 +528,16 @@ def csv_rows(db_path: str) -> tuple:
     header = ["Ticker", "Event", "Serie", "Frage", "Bucket/Untertitel", "Kategorie", "Kalshi-Kategorie",
               "Volumen (Kontrakte)", "Schluss", "Ergebnis", "Preis 1 Tag vorher", "Preis 6 h vorher",
               "Preis 1 h vorher", "Ask YES 1 Tag", "Ask NO 1 Tag", "Ask YES 6 h", "Ask NO 6 h", "Ask YES 1 h",
-              "Ask NO 1 h"]
+              "Ask NO 1 h", "Stichprobe (0-99)", "Kontrakte 24 h vor 1 Tag", "… vor 6 h", "… vor 1 h",
+              "Ablauf erwartet", "Version"]
     if not Path(db_path).exists():
         return header, []
     db = sqlite3.connect(db_path)
     try:
-        rows = db.execute("""SELECT ticker, event_ticker, series, title, subtitle, category, kalshi_category, volume,
-                                    close_ts, result, p_1d, p_6h, p_1h, ask_yes_1d, ask_no_1d, ask_yes_6h, ask_no_6h,
-                                    ask_yes_1h, ask_no_1h FROM kalshi_markets ORDER BY close_ts""").fetchall()
+        have = {r[1] for r in db.execute("PRAGMA table_info(kalshi_markets)")}
+        cols = [c for c in COLUMNS if c != "collected_ts"]
+        sel = ", ".join(c if c in have else f"NULL AS {c}" for c in cols)
+        rows = db.execute(f"SELECT {sel} FROM kalshi_markets ORDER BY close_ts").fetchall()
     except sqlite3.OperationalError:
         rows = []
     db.close()
@@ -499,6 +546,8 @@ def csv_rows(db_path: str) -> tuple:
         r = list(r)
         r[8] = datetime.fromtimestamp(r[8]).strftime("%Y-%m-%d %H:%M") if r[8] else ""
         r[9] = "YES" if r[9] == 1 else "NO"
+        r[23] = datetime.fromtimestamp(r[23]).strftime("%Y-%m-%d %H:%M") if r[23] else ""
+        r[24] = r[24] or 1
         out.append(r)
     return header, out
 

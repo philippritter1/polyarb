@@ -37,7 +37,8 @@ class StudyClient:
                                      outcomePrices=json.dumps(["1", "0"] if won else ["0", "1"]),
                                      endDate="2026-09-21T13:33:20Z", volumeNum=5000))
         self.markets.append(dict(conditionId="bad", question="?", clobTokenIds=json.dumps(["a", "b"]),
-                                 outcomePrices=json.dumps(["0.5", "0.5"]), endDate="2026-09-21T13:33:20Z"))
+                                 outcomePrices=json.dumps(["0.5", "0.5"]), endDate="2026-09-21T13:33:20Z",
+                                 volumeNum=5000))
         self.calls = 0
 
     def paged(self, path, params, max_items=1000):
@@ -288,3 +289,79 @@ def test_study_zip_split(tmp_path):
     assert len(rows) == 20000
     assert _zip_split(tmp_path, "s", files[1:], limit=60_000) == [tmp_path / "s.zip"]
     assert not list(tmp_path.glob("s-teil*.zip"))
+
+
+def test_price_age_and_planned_end(tmp_path):
+    from arb.study import price_age_at, sample_bucket, SAMPLE_PCT
+    hist = [{"t": 0, "p": 0.5}, {"t": 3600, "p": 0.5}, {"t": 7200, "p": 0.5}, {"t": 10800, "p": 0.6}]
+    assert price_age_at(hist, 7200, 3600) == (0.5, 2.0)  # 0.50 since t=0: two hours without a change
+    assert price_age_at(hist, 10800, 3600) == (0.6, 0.0)
+
+    end = END
+    small = [f"s{i}" for i in range(400) if sample_bucket(f"s{i}") < SAMPLE_PCT][:3]
+    dropped = [f"s{i}" for i in range(400) if sample_bucket(f"s{i}") >= SAMPLE_PCT][:3]
+
+    class C(StudyClient):
+        def __init__(self):
+            super().__init__(0)
+            base = dict(outcomePrices=json.dumps(["1", "0"]), endDate="2026-09-21T13:33:20Z")
+            # "hit" market: planned end END, closed (hit) 2 days early -> only 7 d is before the close
+            self.markets = [dict(base, conditionId="hit", question="Will X hit $10?", clobTokenIds=json.dumps(["H", "h"]),
+                                 closedTime="2026-09-19T13:33:20Z", volumeNum=5000)]
+            self.markets += [dict(base, conditionId=c, question=f"small {c}", clobTokenIds=json.dumps([c, "x"]),
+                                  volumeNum=50) for c in small + dropped]
+
+        def get_json(self, url, params):
+            end_ts = params["endTs"]
+            return {"history": [{"t": t, "p": 0.6} for t in range(int(end_ts) - 8 * 86400, int(end_ts) + 1, 3600)]}
+
+    db = str(tmp_path / "s.sqlite")
+    Study(C(), db).collect(days_back=4, now=END + 3600)
+    import sqlite3
+    rows = {r[0]: r[1:] for r in sqlite3.connect(db).execute("SELECT condition_id, p_7d, p_1d, p_6h, p_1h, v FROM markets")}
+    assert rows["hit"][0] == 0.6 and rows["hit"][1:4] == (None, None, None) and rows["hit"][4] == 2
+    assert set(small) <= set(rows) and not set(dropped) & set(rows)  # small markets only as the random sample
+
+
+def test_full_listing_is_split_and_old_rows_are_collected_again(tmp_path):
+    class C(StudyClient):
+        def __init__(self):
+            super().__init__(3)
+            self.spans = []
+
+        def paged(self, path, params, max_items=1000):
+            if path == "/events":
+                return []
+            from arb.kalshi import _ts
+            lo, hi = _ts(params["end_date_min"]), _ts(params["end_date_max"])
+            self.spans.append(hi - lo)
+            return self.markets * 1000 if hi - lo > 3 * 3600 else self.markets  # "full" until 3 h windows
+
+    cl = C()
+    db = str(tmp_path / "s.sqlite")
+    st = Study(cl, db)
+    stats = st.collect(days_back=1, recent_days=0.5, window_days=0.5, now=END + 3600)
+    assert stats["split_windows"] >= 2 and min(cl.spans) <= 3 * 3600 and stats["new"] == 3
+    # a row of the old version is collected anew, a current one is not
+    st.db.execute("UPDATE markets SET v=NULL, p_1d=0.1 WHERE condition_id='c1'")
+    st.db.commit()
+    assert Study(cl, db).collect(days_back=1, recent_days=0.5, window_days=0.5, now=END + 3600)["new"] == 1
+    import sqlite3
+    assert sqlite3.connect(db).execute("SELECT p_1d, v FROM markets WHERE condition_id='c1'").fetchone() == (0.95, 2)
+
+
+def test_old_database_gets_new_columns_and_export_reads_it(tmp_path):
+    import sqlite3
+    db = str(tmp_path / "old.sqlite")
+    con = sqlite3.connect(db)
+    con.executescript("""CREATE TABLE markets(condition_id TEXT PRIMARY KEY, question TEXT, category TEXT, neg_risk INT,
+        sports INT, volume REAL, end_ts REAL, close_ts REAL, outcome INT, p_7d REAL, p_1d REAL, p_6h REAL, p_1h REAL,
+        n_points INT, collected_ts REAL);
+        INSERT INTO markets VALUES('old','Q','Sport',0,1,2000,1,1,1,NULL,0.5,0.5,0.5,10,1);""")
+    con.commit()
+    from dashboard import STUDY_MARKET_HEADER, study_market_rows
+    row = next(study_market_rows(db))  # before any migration: new columns read as empty
+    assert len(row) == len(STUDY_MARKET_HEADER) and row[13] is None and row[-1] == 1
+    Study(StudyClient(0), db)
+    from arb.study import sample_bucket
+    assert con.execute("SELECT sample, v FROM markets").fetchone() == (sample_bucket("old"), None)

@@ -34,9 +34,22 @@ Widerlegt / kein Edge: echte Arbitrage (praktisch nie erreichbar), Endgame, Long
 Sieg-Markt-Außenseiter, Finanz-Außenseiter, Wettermodell, Wetter-Messwerte nachträglich (Markt preist in Minuten ein),
 Kalshi (effizient, am echten Ask ≈ 0 oder negativ), Inverse verlierender Regeln.
 
+Fallen in den Studiendaten (Walk-forward-Analyse 03.10.) – bei jedem Backtest beachten:
+- `volume` ist das **Endvolumen** (nach Schluss). Überraschungen ziehen spät Handel an, ein Filter darauf schaut in
+  die Zukunft. Wetter-NO 55–97 % ohne den 5k-Filter: Studie +0,2 % statt +8 % (passt zu den Live-Verlusten).
+  Kalshi Sport-Außenseiter: Endvolumen klein −45 %, groß +35 %. Stattdessen Kalshi `vol_*` (24 h vor dem Zeitpunkt).
+- Aufnahme nach Endvolumen verzerrt ebenso (Polymarket ≥ 1.000 $, Kalshi ≥ 100 Kontrakte). Unverzerrt ist nur die
+  Zufalls-Stichprobe `sample < 20` (Spalte „Stichprobe“, ab Zeilen-Version 2).
+- Bis Zeilen-Version 2 zählten Zeitpunkte vom tatsächlichen Schluss: „Erreicht X $Y?“ schließt beim Treffer
+  (Finanz JA 65–80 % gewann 97 %). Jetzt vom geplanten Ende, Zeitpunkte nach dem Schluss bleiben leer.
+- Preise ohne Handel: Startwert 0,50 und veraltete 7-Tage-Preise (Fußball O/U: JA und NEIN beide „profitabel“).
+  Spalten `a_*` = Stunden seit der letzten Preisänderung.
+- Kalshi letzter Preis + 2 ct ist im Schnitt ~8 Punkte zu optimistisch gegenüber dem echten Ask.
+
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
-  max. 1.000 $/Tag. Studie +8,2 % (OOS +5,8 %); Stations-Filter streng +10,7 % (n≈5.200).
+  max. 1.000 $/Tag. Studie +8,2 % (OOS +5,8 %); Stations-Filter streng +10,7 % (n≈5.200) – beides mit dem
+  Endvolumen-Filter, ohne ihn ≈ 0 % (siehe oben). Live bisher Treffer ≈ Preis oder darunter.
   Kapazität: Orderbücher deutlich tiefer als das Tageslimit.
 - `fussball_dog`: Außenseiter 3–25 % in Über/Unter, Spread, Remis, Halbzeit. Studie +8,8 %, phasenabhängig.
   Bekannte Lücke: `sport_kind` fällt auf „Fussball“ zurück, daher landen auch NHL/NFL/College/WNBA und

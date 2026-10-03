@@ -151,3 +151,35 @@ def test_runtime_limit_and_unsupported_mve_filter(tmp_path):
     assert stats["windows"] == 0 and stats["out_of_time"]
     from arb.kalshi import diag_rows
     assert "stats" in dict(diag_rows(str(tmp_path / "k2.sqlite"))[1])
+
+
+def test_volume_before_checkpoint_and_random_sample(tmp_path):
+    from arb.kalshi import SAMPLE_PCT, sample_bucket, volume_before
+    cs = [dict(c, volume_fp="10.00") for c in _candles(CLOSE, 20, 19, 21)]  # 31 hourly candles, 10 contracts each
+    assert volume_before(cs, CLOSE - 3600) == 240.0  # 24 candles in the day before
+    assert volume_before(cs, CLOSE - 86400) is None   # candles do not reach 24 h further back
+
+    small = [f"KXHIGHNY-S{i}" for i in range(400) if sample_bucket(f"KXHIGHNY-S{i}") < SAMPLE_PCT][:2]
+    dropped = [f"KXHIGHNY-S{i}" for i in range(400) if sample_bucket(f"KXHIGHNY-S{i}") >= SAMPLE_PCT][:2]
+
+    class C(KalshiClient):
+        def __init__(self):
+            super().__init__()
+            self.markets = [dict(ticker=t, event_ticker="KXHIGHNY-26SEP23", market_type="binary", title="NYC high?",
+                                 result="no", volume=5, close_time=CLOSE) for t in small + dropped]
+
+        def get_json(self, url, params):
+            path = url[len(BASE):]
+            if path.endswith("/candlesticks"):
+                return {"candlesticks": [dict(c, volume=2) for c in _candles(CLOSE, 20, 19, 21)]}
+            return super().get_json(url, params)
+
+    db = str(tmp_path / "k.sqlite")
+    st = KalshiStudy(C(), db)
+    st.collect(days_back=3, recent_days=3, window_days=3, min_volume=100, now=NOW)
+    rows = {r[0]: r[1:] for r in st.db.execute("SELECT ticker, sample, vol_6h, v FROM kalshi_markets")}
+    assert set(rows) == set(small)  # below min_volume only the random sample
+    assert all(r[0] < SAMPLE_PCT and r[2] == 2 for r in rows.values())
+    assert all(r[1] == 48 for r in rows.values())  # 6 h checkpoint: 24 candles of 2 contracts in the day before
+    header, out = csv_rows(db)
+    assert len(header) == len(out[0]) == 25

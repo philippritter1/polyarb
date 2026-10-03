@@ -11,6 +11,7 @@ and a bookmark remembers how far back the collection already got.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import re
@@ -35,6 +36,33 @@ CREATE TABLE IF NOT EXISTS markets(
   p_7d REAL, p_1d REAL, p_6h REAL, p_1h REAL, n_points INT, collected_ts REAL);
 CREATE TABLE IF NOT EXISTS skipped(condition_id TEXT PRIMARY KEY, reason TEXT, ts REAL);
 """
+# v2 (03.10.) columns, added to older databases by migrate():
+#   sample  0..99 from a hash of the market id: rows with sample < SAMPLE_PCT are a random sample of ALL
+#           markets, independent of the final volume (which depends on the outcome: upsets draw late trading)
+#   a_*     hours since the price last changed at the checkpoint (0.50 that never moved = no real trade)
+#   v       row version; rows of older versions are collected again when the backfill passes them
+V2_COLUMNS = [("sample", "INT"), ("a_7d", "REAL"), ("a_1d", "REAL"), ("a_6h", "REAL"), ("a_1h", "REAL"), ("v", "INT")]
+COLUMNS = ["condition_id", "question", "category", "neg_risk", "sports", "volume", "end_ts", "close_ts", "outcome",
+           "p_7d", "p_1d", "p_6h", "p_1h", "n_points", "collected_ts"] + [c for c, _ in V2_COLUMNS]
+ROW_VERSION = 2
+SAMPLE_PCT = 20          # share of markets kept regardless of volume (random sample)
+SAMPLE_MIN_VOLUME = 10   # below that nothing ever traded: not even listed
+
+
+def sample_bucket(key: str) -> int:
+    """Stable 0..99 from the market id – the same market always lands in the same bucket."""
+    return int(hashlib.sha1(str(key).encode()).hexdigest()[:8], 16) % 100
+
+
+def migrate(db: sqlite3.Connection) -> None:
+    have = {r[1] for r in db.execute("PRAGMA table_info(markets)")}
+    for name, typ in V2_COLUMNS:
+        if name not in have:
+            db.execute(f"ALTER TABLE markets ADD COLUMN {name} {typ}")
+    if "sample" not in have:
+        db.executemany("UPDATE markets SET sample=? WHERE condition_id=?",
+                       [(sample_bucket(cid), cid) for (cid,) in db.execute("SELECT condition_id FROM markets").fetchall()])
+    db.commit()
 
 # checked BEFORE the sport signals: Polymarket gives weather, crypto, finance and "tweet count" markets a
 # gameStartTime too. Words match whole words only ("rain" must not hit Ukraine or Rainbow Six, "eth" not Elizabeth).
@@ -129,7 +157,7 @@ def market_type(question: str) -> str:
 
 
 CATEGORIES_VERSION = 2
-LISTING_VERSION = 2
+LISTING_VERSION = 3
 
 
 def fix_categories(db: sqlite3.Connection) -> int:
@@ -169,16 +197,26 @@ def outcome_yes(m: dict) -> Optional[int]:
 
 def price_at(history: List[dict], ts: float, max_age: float) -> Optional[float]:
     """Last traded price at or before ts, if it is not older than max_age."""
+    return price_age_at(history, ts, max_age)[0]
+
+
+def price_age_at(history: List[dict], ts: float, max_age: float) -> tuple:
+    """(price, hours since the price last changed) at ts; (None, None) if there is no point within max_age."""
     best = None
-    for h in history:
-        t = float(h.get("t", 0))
-        if t <= ts:
-            best = h
+    for i, h in enumerate(history):
+        if float(h.get("t", 0)) <= ts:
+            best = i
         else:
             break
-    if best is None or ts - float(best["t"]) > max_age:
-        return None
-    return float(best["p"])
+    if best is None or ts - float(history[best]["t"]) > max_age:
+        return None, None
+    p = float(history[best]["p"])
+    since = float(history[best]["t"])
+    for h in reversed(history[:best]):
+        if abs(float(h["p"]) - p) > 1e-9:
+            break
+        since = float(h["t"])
+    return p, (ts - since) / 3600
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple:
@@ -197,16 +235,21 @@ class Study:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path)
         self.db.executescript(SCHEMA)
+        migrate(self.db)
         fix_categories(self.db)
         if (self._meta("listing_version") or 0) < LISTING_VERSION:
             # v2 (02.10.): 12-hour windows instead of 2 days (a window lists at most 2,000 markets, so busy
             # days were cut off) – walk the whole history once more; known markets cost no price request
+            # v3 (03.10.): random sample below the volume filter, checkpoints from the planned end, price age:
+            # walk again, rows of version < 2 are collected anew
             self.db.execute("DELETE FROM meta WHERE key='backfill_until'")
+            self.db.execute("DELETE FROM skipped WHERE reason IN ('no prices', 'no history')")
             self._meta("listing_version", LISTING_VERSION)
             self.db.commit()
 
     def _known(self) -> set:
-        return {r[0] for r in self.db.execute("SELECT condition_id FROM markets UNION SELECT condition_id FROM skipped")}
+        return {r[0] for r in self.db.execute("SELECT condition_id FROM markets WHERE v >= ? UNION "
+                                              "SELECT condition_id FROM skipped", (ROW_VERSION,))}
 
     def _history(self, token: str, start: float, end: float) -> List[dict]:
         """Hourly price history; resolved markets sometimes only serve coarser data -> fall back to 12 h."""
@@ -269,13 +312,30 @@ class Study:
         log.info("study: %s", stats)
         return stats
 
-    def _window(self, t_lo: float, t_hi: float, known: set, stats: dict, max_new: int, min_volume: float,
-                weather_min_volume: float, now: float) -> bool:
-        """Collect one window of closed markets. False if max_new stopped it midway."""
-        stats["windows"] += 1
+    def _listing(self, t_lo: float, t_hi: float, min_volume: float, stats: dict, cap: int = 2000) -> List[dict]:
+        """Closed markets ending in [t_lo, t_hi]. Gamma lists at most ~2,000 per query (ordered by volume), so a
+        full window is split in halves until it fits – otherwise the smallest markets would always be cut."""
         markets = self.client.paged("/markets", {
             "closed": "true", "end_date_min": _iso(t_lo), "end_date_max": _iso(t_hi),
-            "volume_num_min": min_volume, "order": "volume", "ascending": "false"}, max_items=2000)
+            "volume_num_min": min_volume, "order": "volume", "ascending": "false"}, max_items=cap)
+        if len(markets) >= cap and t_hi - t_lo > 1800:
+            stats["split_windows"] = stats.get("split_windows", 0) + 1
+            mid = (t_lo + t_hi) / 2
+            return self._listing(t_lo, mid, min_volume, stats, cap) + self._listing(mid, t_hi, min_volume, stats, cap)
+        if len(markets) >= cap:
+            stats["full_windows"] = stats.get("full_windows", 0) + 1
+        return markets
+
+    def _window(self, t_lo: float, t_hi: float, known: set, stats: dict, max_new: int, min_volume: float,
+                weather_min_volume: float, now: float) -> bool:
+        """Collect one window of closed markets. False if max_new stopped it midway.
+        Kept: every market from min_volume (as before) plus a random SAMPLE_PCT % of the smaller ones."""
+        stats["windows"] += 1
+        listed = self._listing(t_lo, t_hi, min(min_volume, SAMPLE_MIN_VOLUME), stats)
+        markets = [m for m in listed if float(m.get("volumeNum") or m.get("volume") or 0) >= min_volume
+                   or sample_bucket(str(m.get("conditionId") or m.get("id"))) < SAMPLE_PCT]
+        stats["sample_small"] = stats.get("sample_small", 0) + sum(
+            float(m.get("volumeNum") or m.get("volume") or 0) < min_volume for m in markets)
         weather = self._weather_markets(t_lo, t_hi, weather_min_volume) if weather_min_volume else []
         stats["weather"] += len(weather)
         for m in markets + weather:
@@ -296,7 +356,7 @@ class Study:
                 self.db.execute("INSERT OR REPLACE INTO skipped VALUES(?,?,?)", (cid, row, now))
                 stats["skipped"] += 1
             else:
-                self.db.execute("INSERT OR REPLACE INTO markets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                self.db.execute(f"INSERT OR REPLACE INTO markets({','.join(COLUMNS)}) VALUES({','.join('?' * len(COLUMNS))})", row)
                 stats["new"] += 1
             if (stats["new"] + stats["skipped"]) % 50 == 0:
                 self.db.commit()
@@ -312,18 +372,25 @@ class Study:
             return "unresolved"
         end = _parse_ts(m.get("endDate"))
         closed = _parse_ts(m.get("closedTime")) or end
-        ref = min(t for t in (end, closed) if t) if (end or closed) else None
+        # checkpoints count back from the PLANNED end (what the live scenarios use), not from the actual close:
+        # "Will X hit $Y?" closes the moment it hits, so "6 h before the close" would mean "6 h before the hit".
+        # A checkpoint after the actual close is left empty – the market could no longer be bought then.
+        ref = end or closed
         if not ref:
             return "no dates"
-        hist = self._history(str(toks[0]), ref - 8 * DAY, ref)
+        last = min(ref, closed) if closed else ref
+        hist = self._history(str(toks[0]), ref - 8 * DAY, last)
         if not hist:
             return "no history"
-        prices = {k: price_at(hist, ref - dt, max_age=max(dt / 2, 12 * 3600)) for k, dt in CHECKPOINTS.items()}
+        pa = {k: price_age_at(hist, ref - dt, max_age=max(dt / 2, 12 * 3600)) if ref - dt < last else (None, None)
+              for k, dt in CHECKPOINTS.items()}
+        prices = {k: v[0] for k, v in pa.items()}
         if all(v is None for v in prices.values()):
             return "no prices"
         return (cid, (m.get("question") or "")[:300], categorize(m), int(bool(m.get("negRisk"))),
                 int(categorize(m) == "Sport"), float(m.get("volumeNum") or m.get("volume") or 0), end, closed, out,
-                prices["p_7d"], prices["p_1d"], prices["p_6h"], prices["p_1h"], len(hist), now)
+                prices["p_7d"], prices["p_1d"], prices["p_6h"], prices["p_1h"], len(hist), now,
+                sample_bucket(cid), pa["p_7d"][1], pa["p_1d"][1], pa["p_6h"][1], pa["p_1h"][1], ROW_VERSION)
 
 
 def _iso(ts: float) -> str:

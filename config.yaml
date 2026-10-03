@@ -250,6 +250,38 @@ scenarios:
     max_day_usd: 1000            # 02.10.: höchstens so viel auf einen Messtag (alle Städte zusammen)
     max_new_per_step: 10
     max_open_positions: 200
+  wetter_no_maker:
+    enabled: true
+    title: Wetter-NO Maker
+    strategy: band
+    # 03.10.: wie wetter_no_mess (gleiche Auswahl), aber als Maker: Limit-Kauf 1 Tick über dem Bid statt den Ask
+    # zu zahlen, keine Gebühr. Studie ohne Endvolumen-Filter: Auswahl nur ~+1,5 % – Spread + Gebühr (2-3 %)
+    # entscheiden. Strenge Simulation: gefüllt erst, wenn der Ask UNTER das Limit fällt (Verkäufer kreuzt
+    # unseren Preis). Gefüllt wird also eher, wenn der Bucket wahrscheinlicher wird – genau das soll der Test zeigen.
+    maker: true
+    order_ttl_h: 12              # Limit nach so vielen Stunden streichen
+    category: Wetter
+    outcome: "No"
+    tag_slugs: [weather]
+    obs_skip: ["Maximum liegt im Bucket"]
+    obs_delay_min: 15
+    side: "NO"
+    capital_usd: 2500
+    interval_min: 10
+    min_price: 0.55
+    max_price: 0.97
+    max_volume: 5000             # Volumen beim Kauf, wie wetter_no_mess
+    min_hours_to_end: 2          # offene Limits werden 2 h vor Schluss gestrichen
+    max_hours_to_end: 12
+    max_spread: 0.02
+    max_slippage: 0.01
+    assumed_edge: 0.05
+    min_liquidity: 100
+    max_position_usd: 25
+    max_event_usd: 100
+    max_day_usd: 1000            # zählt offene Limits mit
+    max_new_per_step: 10
+    max_open_positions: 200      # Positionen + offene Limits
   finanz_dog:
     enabled: false               # abgeschaltet 02.10.: widerlegt – Studie mit 1.011 Wetten -7,6 % (2. Hälfte -23,5 %)
     title: Finanz-Außenseiter

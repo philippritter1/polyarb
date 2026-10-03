@@ -76,10 +76,17 @@ class ScenarioPortfolio:
     realized_pnl: float = 0.0
     marks: Dict[str, float] = field(default_factory=dict)
     seen: List[str] = field(default_factory=list)   # tokens already traded once
+    # maker mode: resting limit buys, token -> {group, title, label, price, qty, fair, end_ts, placed_ts, reason}
+    orders: Dict[str, dict] = field(default_factory=dict)
 
     @property
     def cost(self) -> float:
         return sum(p.cost for p in self.positions.values())
+
+    @property
+    def reserved(self) -> float:
+        """Cash promised to resting orders (a fill pays price x qty, makers pay no fee)."""
+        return sum(o["price"] * o["qty"] for o in self.orders.values())
 
     @property
     def value(self) -> float:
@@ -90,13 +97,15 @@ class ScenarioPortfolio:
         return self.cash + self.value
 
     def exposure(self, group: str) -> float:
-        return sum(p.cost for p in self.positions.values() if p.group == group)
+        return (sum(p.cost for p in self.positions.values() if p.group == group)
+                + sum(o["price"] * o["qty"] for o in self.orders.values() if o["group"] == group))
 
     def save(self, path: str) -> None:
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"cash": self.cash, "realized_pnl": self.realized_pnl, "marks": self.marks,
-                       "seen": self.seen, "positions": [asdict(p) for p in self.positions.values()]}, f)
+                       "seen": self.seen, "positions": [asdict(p) for p in self.positions.values()],
+                       "orders": self.orders}, f)
         os.replace(tmp, path)
 
     @classmethod
@@ -106,7 +115,7 @@ class ScenarioPortfolio:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
         pf = cls(cash=d["cash"], realized_pnl=d.get("realized_pnl", 0.0), marks=d.get("marks", {}),
-                 seen=d.get("seen", []))
+                 seen=d.get("seen", []), orders=d.get("orders", {}))
         for p in d.get("positions", []):
             pf.positions[p["token_id"]] = Position(**p)
         return pf
@@ -477,12 +486,14 @@ class ScenarioEngine:
     def _budget(self, s: Signal, ask: float) -> tuple:
         sc, eq = self.sc, self.pf.equity
         caps = {"position": float(sc.get("max_position_usd", 50)),
-                "cash": self.pf.cash - float(sc.get("cash_buffer_pct", 0.10)) * eq,
+                "cash": self.pf.cash - self.pf.reserved - float(sc.get("cash_buffer_pct", 0.10)) * eq,
                 "event": float(sc.get("max_event_usd", 100)) - self.pf.exposure(s.group)}
         if sc.get("max_day_usd") and s.end_ts:  # all markets ending on one (UTC) day: one weather day, one risk
             day = int(s.end_ts // DAY)
-            caps["day"] = float(sc["max_day_usd"]) - sum(p.cost for p in self.pf.positions.values()
-                                                         if p.end_ts and int(p.end_ts // DAY) == day)
+            caps["day"] = (float(sc["max_day_usd"]) - sum(p.cost for p in self.pf.positions.values()
+                                                          if p.end_ts and int(p.end_ts // DAY) == day)
+                           - sum(o["price"] * o["qty"] for o in self.pf.orders.values()
+                                 if o.get("end_ts") and int(o["end_ts"] // DAY) == day))
         if s.kelly:  # binary bet at price a with win prob p: f* = (p - a) / (1 - a)
             caps["kelly"] = max(0.0, (s.fair - ask) / (1 - ask)) * float(sc.get("kelly_fraction", 0.25)) * eq
         binding = min(caps, key=caps.get)
@@ -496,9 +507,11 @@ class ScenarioEngine:
         except Exception as e:  # noqa
             log.error("%s: candidates failed (%s: %s)", self.name, type(e).__name__, e)
             signals = []
-        seen = set(self.pf.seen)
+        maker = bool(self.sc.get("maker"))
+        live_ids = {s.token_id for s in signals}  # maker: an order whose market left the rule is cancelled
+        seen = set(self.pf.seen) | set(self.pf.orders)
         signals = [s for s in signals if s.token_id not in seen and self._cooldown.get(s.token_id, 0) <= now]
-        tokens = list(dict.fromkeys([s.token_id for s in signals] + list(self.pf.positions)))
+        tokens = list(dict.fromkeys([s.token_id for s in signals] + list(self.pf.positions) + list(self.pf.orders)))
         books = self.client.books(tokens) if tokens else {}
         n_open = int(self.sc.get("max_open_positions", 20))
         n_new = int(self.sc.get("max_new_per_step", 3))  # spread entries over time, not all in one scan
@@ -509,6 +522,8 @@ class ScenarioEngine:
         opened = 0
         n_opps = 0
         full = False
+        if maker:
+            opened += self._maker_fills(books, live_ids, now)
         for s in ranked:
             ob = books[s.token_id]
             if ob.best_ask > s.max_price + 1e-9:
@@ -524,8 +539,11 @@ class ScenarioEngine:
             s.max_price = min(s.max_price, round(ob.best_ask + self.max_slippage, 4))
             n_opps += 1
             self._capacity(s, ob, band_max, now)  # also when a limit stops the trade: what the market offered
-            full = full or len(self.pf.positions) >= n_open or opened >= n_new
+            full = full or len(self.pf.positions) + len(self.pf.orders) >= n_open or opened >= n_new
             if full:
+                continue
+            if maker:
+                opened += self._place(s, ob, now)
                 continue
             before = len(self.pf.positions)
             self._trade(s, ob, now)
@@ -614,6 +632,79 @@ class ScenarioEngine:
         self.pf.seen.append(s.token_id)
         log.info("%s: %s %.1f x %s @ %.3f (fair %.3f) %s", self.name, status, got, s.label[:30],
                  notional / got, s.fair, s.title[:50])
+
+    # ------------------------------------------------------------ maker mode
+    def _place(self, s: Signal, ob: OrderBook, now: float) -> int:
+        """Maker mode: instead of paying the ask, rest a limit buy one tick above the best bid (or at the bid
+        when the spread is one tick). No fill now – see _maker_fills."""
+        if ob.best_bid is None:
+            return 0
+        tick = float(self.sc.get("tick", 0.01))
+        price = round(ob.best_bid + tick, 4) if ob.best_ask - ob.best_bid > tick + 1e-9 else ob.best_bid
+        if not s.min_ask - 1e-9 <= price <= s.max_price + 1e-9:
+            return 0
+        budget, binding = self._budget(s, price)
+        qty = math.floor(budget / price * 100) / 100 if price > 0 else 0.0
+        if qty < max(ob.min_order_size, 1.0):
+            self._cooldown[s.token_id] = now + 1800
+            return 0
+        self.pf.orders[s.token_id] = dict(group=s.group, title=s.title, label=s.label, price=price, qty=qty,
+                                          fair=s.fair, end_ts=s.end_ts, placed_ts=now, ask=ob.best_ask,
+                                          bid=ob.best_bid, reason=s.reason)
+        log.info("%s: limit buy %.1f x %s @ %.3f (bid %.3f ask %.3f) %s", self.name, qty, s.label[:30], price,
+                 ob.best_bid, ob.best_ask, s.title[:50])
+        return 1
+
+    def _maker_fills(self, books: Dict[str, OrderBook], live_ids: set, now: float) -> int:
+        """Strict fill rule for resting orders: filled only when the ask has dropped BELOW the limit – a seller
+        crossed every order at our price, ours included (at the limit itself the queue in front might take
+        it all). Filled size = what the book shows up to the limit, at the limit price, no maker fee.
+        Cancelled when the market no longer passes the rule (price band, station reading), when it ends
+        within min_hours_to_end, or after order_ttl_h."""
+        filled = 0
+        h_min = float(self.sc.get("min_hours_to_end", 2)) * 3600
+        ttl = float(self.sc.get("order_ttl_h", 24)) * 3600
+        tick = float(self.sc.get("tick", 0.01))
+        for t, o in list(self.pf.orders.items()):
+            ob = books.get(t)
+            if ob and ob.asks and ob.best_ask <= o["price"] - tick + 1e-9:
+                avail = sum(lv.size * self.haircut for lv in ob.asks if lv.price <= o["price"] + 1e-9)
+                got = math.floor(min(o["qty"], avail) * 100) / 100
+                if got > 0:
+                    self._book_maker_fill(t, o, got, now)
+                    filled += 1
+                    continue
+            why = ("Markt fällt aus der Regel" if t not in live_ids else
+                   "kurz vor Schluss" if o.get("end_ts") and now > o["end_ts"] - h_min else
+                   "zu alt" if now - o["placed_ts"] > ttl else None)
+            if why:
+                del self.pf.orders[t]
+                self.pf.seen.append(t)  # one chance per market, like the taker scenarios
+                log.info("%s: limit order cancelled (%s): %s", self.name, why, o["title"][:50])
+        return filled
+
+    def _book_maker_fill(self, t: str, o: dict, got: float, now: float) -> None:
+        cost = got * o["price"]
+        basket = Basket(f"{self.name}:{t}", self.name, o["title"], [t], [o["label"]], [FeeSpec()],
+                        end_ts=o.get("end_ts"), category="", delay_s=0.0)
+        leg = Leg(t, o["label"], "BUY", o["price"], got, o["price"], 0.0)
+        opp = Opportunity(basket, "buy", got, [leg], gross_usd=cost, fees_usd=0.0,
+                          net_profit_usd=got * o["fair"] - cost, capital_usd=cost,
+                          edge_bps=(got * o["fair"] - cost) / cost * 1e4 if cost else 0.0,
+                          lockup_days=max(((o.get("end_ts") or now) - now) / DAY, 0.0), detected_ts=o["placed_ts"])
+        status = "filled" if got >= o["qty"] - 1e-6 else "partial"
+        waited = (now - o["placed_ts"]) / 60
+        note = (f"maker limit={o['price']:.3f} (bid {o['bid']:.3f} ask {o['ask']:.3f} beim Setzen) "
+                f"gefüllt nach {waited:.0f} min fair={o['fair']:.3f} {o['reason']}")
+        res = ExecutionResult(opp, status, got, [Fill(t, "BUY", got, o["price"], 0.0)], locked_capital=cost,
+                              expected_payout=got * o["fair"], note=note)
+        self.store.execution(now, res, 0.0)
+        del self.pf.orders[t]
+        self.pf.cash -= cost
+        self.pf.positions[t] = Position(t, o["group"], o["title"], o["label"], got, cost, o["fair"], now, o.get("end_ts"))
+        self.pf.seen.append(t)
+        log.info("%s: maker %s %.1f x %s @ %.3f after %.0f min %s", self.name, status, got, o["label"][:30],
+                 o["price"], waited, o["title"][:50])
 
     def _settle(self, now: float) -> None:
         every = float(self.sc.get("resolution_check_min", 30)) * 60

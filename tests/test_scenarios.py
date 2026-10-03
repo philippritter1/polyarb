@@ -648,3 +648,46 @@ def test_ladder_reads_trillions_and_skips_too_good_baskets():
         sc = Scanner(dict(cfg, max_edge_bps=cap) if cap else cfg, dict(merge_gas_usd=0), {})
         assert len(sc.scan([basket], books, now=NOW)) == n  # 0.72 for a sure $1 = 39 % "edge"
     assert sc.stats["too_good"] == 1
+
+
+def _maker_engine(tmp_path, books, **extra):
+    kw = dict(end="2026-09-21T20:00:00Z", volumeNum=1800)
+    ms = [_market("w1", "Will the highest temperature in Paris be 24°C on September 21?", ["0.20", "0.80"],
+                  ["Y1", "N1"], **kw)]
+    cfg = _cfg(tmp_path, "wetter_no_maker", strategy="band", category="Wetter", outcome="No", min_price=0.55,
+               max_price=0.97, max_hours_to_end=12, max_spread=0.02, max_position_usd=25, maker=True, **extra)
+    cl = FakeClient(markets=ms, books=books)
+    return ScenarioEngine("wetter_no_maker", cfg, cl, SimClock(NOW)), cl
+
+
+def test_maker_rests_a_limit_and_fills_only_when_the_ask_drops_below_it(tmp_path):
+    eng, cl = _maker_engine(tmp_path, {"N1": ob("N1", [(0.78, 500)], [(0.80, 500)])})
+    eng.step()
+    o = eng.pf.orders["N1"]
+    assert not eng.pf.positions and abs(o["price"] - 0.79) < 1e-9  # one tick above the bid, nothing paid yet
+    assert abs(o["qty"] * o["price"] - 25) < 0.01 and eng.pf.reserved > 24.9
+    cl.bk["N1"] = ob("N1", [(0.78, 500)], [(0.79, 500)])  # ask AT the limit: the queue may be in front – no fill
+    eng.clock.sleep(600)
+    eng.step()
+    assert "N1" in eng.pf.orders and not eng.pf.positions
+    cl.bk["N1"] = ob("N1", [(0.77, 500)], [(0.78, 500)])  # ask below the limit: a seller crossed our price
+    eng.clock.sleep(600)
+    eng.step()
+    p = eng.pf.positions["N1"]
+    assert not eng.pf.orders and abs(p.cost - p.qty * 0.79) < 1e-9  # filled at the limit, no maker fee
+    note = eng.store.db.execute("SELECT note, status FROM executions").fetchone()
+    assert note[0].startswith("maker limit=0.790") and note[1] == "filled"
+    assert abs(eng.pf.cash - (500 - p.cost)) < 1e-9
+
+
+def test_maker_cancels_when_the_market_leaves_the_rule_and_counts_orders_in_the_day_cap(tmp_path):
+    eng, cl = _maker_engine(tmp_path, {"N1": ob("N1", [(0.78, 500)], [(0.80, 500)])}, max_day_usd=30)
+    eng.step()
+    assert "N1" in eng.pf.orders
+    # the day cap already counts the resting order: a second market of that day gets only the rest
+    s = eng.strategy.candidates(NOW)[0]
+    assert eng._budget(s, 0.79)[0] < 5.1
+    cl.data["/markets"][0]["outcomePrices"] = json.dumps(["0.50", "0.50"])  # NO left the 55-97 % band
+    eng.clock.sleep(600)
+    eng.step()
+    assert not eng.pf.orders and not eng.pf.positions and "N1" in eng.pf.seen

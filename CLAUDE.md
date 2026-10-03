@@ -51,6 +51,9 @@ Aktive Kandidaten im Live-Test:
   max. 1.000 $/Tag. Studie +8,2 % (OOS +5,8 %); Stations-Filter streng +10,7 % (n≈5.200) – beides mit dem
   Endvolumen-Filter, ohne ihn ≈ 0 % (siehe oben). Live bisher Treffer ≈ Preis oder darunter.
   Kapazität: Orderbücher deutlich tiefer als das Tageslimit.
+- `wetter_no_maker` (ab 03.10.): Auswahl wie `wetter_no_mess`, aber Limit-Kauf 1 Tick über dem Bid, ohne Gebühr
+  (`maker: true` in der Szenario-Engine). Streng simuliert: gefüllt erst, wenn der Ask unter das Limit fällt.
+  Frage: Reicht der gesparte Spread (+ ~1 % Gebühr), oder füllen nur die Limits, die verlieren?
 - `fussball_dog`: Außenseiter 3–25 % in Über/Unter, Spread, Remis, Halbzeit. Studie +8,8 %, phasenabhängig.
   Bekannte Lücke: `sport_kind` fällt auf „Fussball“ zurück, daher landen auch NHL/NFL/College/WNBA und
   E-Sports-Handicaps/„Games Total“ darin (Backtest nutzt dieselbe Einteilung). Nicht ändern während des Tests;

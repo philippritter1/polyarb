@@ -84,6 +84,10 @@ def test_export_section(tmp_path):
     with zipfile.ZipFile(exp / "polyarb-export.zip") as z:
         names = set(z.namelist())
     assert {"arbitrage/trades.csv", "arbitrage/equity.csv", "studie/maerkte.csv", "studie/kalibrierung.csv"} <= names
+    assert 'href="polyarb-kompakt.zip"' in page
+    with zipfile.ZipFile(exp / "polyarb-kompakt.zip") as z:
+        small = set(z.namelist())
+    assert {"arbitrage/trades.csv", "studie/kalibrierung.csv"} <= small and "studie/maerkte.csv" not in small
     markets = (exp / "studie-maerkte.csv").read_text(encoding="utf-8-sig").splitlines()
     assert len(markets) == 21 and markets[0].startswith("Ende geplant;Geschlossen;Frage")
     study = (tmp_path / "www" / "study" / "index.html").read_text(encoding="utf-8")

@@ -400,12 +400,8 @@ def build_all(cfg: dict, out: str) -> list:
                exp / "wetter-stationen.csv", "wetter-messwerte/stationen.csv"),
               ("Kalshi", "Diagnose des letzten Laufs (Anfragen, Fehler, Felder der API)", "kalshi-diagnose.csv",
                exp / "kalshi-diagnose.csv", "kalshi/diagnose.csv")]
-    tmp = exp / "polyarb-export.zip.tmp"
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-        for *_, disk, arc in files:
-            if disk.exists():
-                z.write(disk, arc)
-    os.replace(tmp, exp / "polyarb-export.zip")
+    _zip(exp / "polyarb-export.zip", files)
+    _zip(exp / "polyarb-kompakt.zip", compact_files(files))
     _write(exp / "index.html", export_page(files, exp / "polyarb-export.zip", nav_for("export")), "utf-8")
     built.append(str(exp / "index.html"))
     return built
@@ -752,6 +748,25 @@ def study_csvs(study_db: str) -> tuple:
     return markets, calib
 
 
+# the raw study tables grow without bound; the compact ZIP leaves them out so it stays small enough to upload
+RAW_ARCS = {"studie/maerkte.csv", "studie/buchmacher.csv", "kalshi/maerkte.csv", "wetter-messwerte/maerkte.csv"}
+COMPACT_MAX_BYTES = 5_000_000
+
+
+def compact_files(files: list) -> list:
+    return [f for f in files if f[4] not in RAW_ARCS
+            and not (f[3].exists() and f[3].stat().st_size > COMPACT_MAX_BYTES)]
+
+
+def _zip(path: Path, files: list) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for *_, disk, arc in files:
+            if disk.exists():
+                z.write(disk, arc)
+    os.replace(tmp, path)
+
+
 def export_page(files: list, zip_path: Path, nav: list) -> str:
     def meta(p: Path) -> str:
         if not p.exists():
@@ -767,7 +782,11 @@ def export_page(files: list, zip_path: Path, nav: list) -> str:
             f'<a class="btn" href="{href}" download>CSV</a></div>')
     body = [f'<p class="sub">Stand {datetime.now().strftime("%d.%m.%Y %H:%M")} · wird alle 10 Minuten neu erzeugt. '
             'Alle CSVs im Format für deutsches Excel (Semikolon, Dezimalkomma).</p>',
-            f'<div class="card"><div class="dl"><div><div><b>Alles auf einmal</b></div><div class="m">ZIP mit allen '
+            f'<div class="card"><div class="dl"><div><div><b>Kompakt (zum Hochladen)</b></div><div class="m">Szenarien, '
+            f'Zusammenfassungen und Diagnosen, ohne die großen Rohdaten der Studien · '
+            f'{meta(zip_path.with_name("polyarb-kompakt.zip"))}</div></div>'
+            '<a class="btn" href="polyarb-kompakt.zip" download>ZIP</a></div>'
+            f'<div class="dl"><div><div><b>Alles auf einmal</b></div><div class="m">ZIP mit allen '
             f'Dateien unten · {meta(zip_path)}</div></div><a class="btn" href="polyarb-export.zip" download>ZIP</a>'
             '</div></div>']
     body += [f'<div class="card"><h2>{html.escape(g)}</h2>{"".join(items)}</div>' for g, items in groups.items()]

@@ -88,6 +88,9 @@ def test_export_section(tmp_path):
     with zipfile.ZipFile(exp / "polyarb-kompakt.zip") as z:
         small = set(z.namelist())
     assert {"arbitrage/trades.csv", "studie/kalibrierung.csv"} <= small and "studie/maerkte.csv" not in small
+    assert 'href="studie.zip"' in page and 'href="kalshi.zip"' in page
+    with zipfile.ZipFile(exp / "studie.zip") as z:
+        assert "studie/maerkte.csv" in z.namelist()
     markets = (exp / "studie-maerkte.csv").read_text(encoding="utf-8-sig").splitlines()
     assert len(markets) == 21 and markets[0].startswith("Ende geplant;Geschlossen;Frage")
     study = (tmp_path / "www" / "study" / "index.html").read_text(encoding="utf-8")
@@ -260,3 +263,28 @@ def test_crypto_is_not_collected_and_listing_v2_rewalks(tmp_path):
     st2._window(0, 1, set(), stats, 10, 1000, 0, END)
     assert stats["skipped"] == 1 and stats["new"] == 0
     assert st2.db.execute("SELECT reason FROM skipped").fetchone()[0] == "Krypto (nicht gesammelt)"
+
+
+def test_study_zip_split(tmp_path):
+    from dashboard import _zip_split
+    import random
+    rnd = random.Random(1)
+    big = tmp_path / "big.csv"
+    big.write_text("a;b\n" + "".join(f"{rnd.random()};{rnd.random()}\n" for _ in range(20000)))
+    small = tmp_path / "small.csv"
+    small.write_text("x\n1\n")
+    files = [("S", "", "", big, "s/big.csv"), ("S", "", "", small, "s/small.csv")]
+    parts = _zip_split(tmp_path, "s", files, limit=60_000)
+    assert len(parts) > 1 and not (tmp_path / "s.zip").exists()
+    rows = []
+    for p in parts:
+        assert p.stat().st_size <= 60_000
+        with zipfile.ZipFile(p) as z:
+            for n in z.namelist():
+                lines = z.read(n).decode().splitlines()
+                if n.startswith("s/big"):
+                    assert lines[0] == "a;b"
+                    rows += lines[1:]
+    assert len(rows) == 20000
+    assert _zip_split(tmp_path, "s", files[1:], limit=60_000) == [tmp_path / "s.zip"]
+    assert not list(tmp_path.glob("s-teil*.zip"))

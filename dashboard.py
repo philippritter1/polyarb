@@ -402,7 +402,8 @@ def build_all(cfg: dict, out: str) -> list:
                exp / "kalshi-diagnose.csv", "kalshi/diagnose.csv")]
     _zip(exp / "polyarb-export.zip", files)
     _zip(exp / "polyarb-kompakt.zip", compact_files(files))
-    _write(exp / "index.html", export_page(files, exp / "polyarb-export.zip", nav_for("export")), "utf-8")
+    study_zips = {g: _zip_split(exp, slug, [f for f in files if f[0] == g]) for g, slug in STUDY_ZIPS.items()}
+    _write(exp / "index.html", export_page(files, exp / "polyarb-export.zip", nav_for("export"), study_zips), "utf-8")
     built.append(str(exp / "index.html"))
     return built
 
@@ -767,7 +768,58 @@ def _zip(path: Path, files: list) -> None:
     os.replace(tmp, path)
 
 
-def export_page(files: list, zip_path: Path, nav: list) -> str:
+STUDY_ZIPS = {"Studie": "studie", "Wetter-Messwerte": "wetter-messwerte", "Kalshi": "kalshi"}
+UPLOAD_LIMIT = 25_000_000  # chat uploads stop at 30 MB
+
+
+def _zip_split(exp: Path, slug: str, files: list, limit: int = UPLOAD_LIMIT) -> list:
+    """One ZIP per study; if it gets too big for an upload, the CSVs are cut into row chunks
+    (header repeated) and spread over <slug>-teil1.zip, -teil2.zip, ... each below the limit."""
+    for old in exp.glob(f"{slug}-teil*.zip"):
+        old.unlink()
+    path = exp / f"{slug}.zip"
+    _zip(path, files)
+    if path.stat().st_size <= limit:
+        return [path]
+    raw = sum(f[3].stat().st_size for f in files if f[3].exists()) or 1
+    target = max(1, int(limit * 0.8 * raw / path.stat().st_size))  # raw bytes per part at the observed ratio
+    parts, cur, size = [], [], 0
+
+    def flush():
+        nonlocal cur, size
+        if cur:
+            part = exp / f"{slug}-teil{len(parts) + 1}.zip"
+            tmp = part.with_name(part.name + ".tmp")
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+                for arc, data in cur:
+                    z.writestr(arc, data)
+            os.replace(tmp, part)
+            parts.append(part)
+        cur, size = [], 0
+
+    for *_, disk, arc in files:
+        if not disk.exists():
+            continue
+        with open(disk, "rb") as fh:
+            header = fh.readline()
+            chunk, n, k = [header], len(header), 0
+            for line in fh:
+                if size + n + len(line) > target and len(chunk) > 1:
+                    k += 1
+                    cur.append((arc.replace(".csv", f"-{k}.csv"), b"".join(chunk)))
+                    flush()
+                    chunk, n = [header], len(header)
+                chunk.append(line)
+                n += len(line)
+            name = arc if k == 0 else arc.replace(".csv", f"-{k + 1}.csv")
+            cur.append((name, b"".join(chunk)))
+            size += n
+    flush()
+    path.unlink()
+    return parts
+
+
+def export_page(files: list, zip_path: Path, nav: list, study_zips: dict | None = None) -> str:
     def meta(p: Path) -> str:
         if not p.exists():
             return "noch keine Daten"
@@ -789,6 +841,15 @@ def export_page(files: list, zip_path: Path, nav: list) -> str:
             f'<div class="dl"><div><div><b>Alles auf einmal</b></div><div class="m">ZIP mit allen '
             f'Dateien unten · {meta(zip_path)}</div></div><a class="btn" href="polyarb-export.zip" download>ZIP</a>'
             '</div></div>']
+    if study_zips:
+        rows = []
+        for g, paths in study_zips.items():
+            for i, p in enumerate(paths):
+                name = g + (f" · Teil {i + 1} von {len(paths)}" if len(paths) > 1 else "")
+                rows.append(f'<div class="dl"><div><div>{html.escape(name)}</div><div class="m">{meta(p)}</div></div>'
+                            f'<a class="btn" href="{p.name}" download>ZIP</a></div>')
+        body.append('<div class="card"><h2>Studien einzeln</h2><div class="m">Jede Studie als eigenes ZIP, '
+                    'große werden in Teile unter 25 MB geschnitten.</div>' + "".join(rows) + '</div>')
     body += [f'<div class="card"><h2>{html.escape(g)}</h2>{"".join(items)}</div>' for g, items in groups.items()]
     return _page("Export", nav, "".join(body))
 

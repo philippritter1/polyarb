@@ -107,6 +107,9 @@ class OddsFeed:
                         self.stats["Fehler Quoten"] = self.stats.get("Fehler Quoten", 0) + 1
                         log.warning("odds %s: %s", lg, e)
             out += [dict(m, odds_ts=st["odds_ts"]) for m in st["matches"] if m["start"] > now]
+        nxt = [t for st in self.state["leagues"].values() for t in st.get("next", []) if t > now]
+        if nxt:
+            self.stats["nächstes Spiel in h"] = round((min(nxt) - now) / 3600, 1)
         self.stats["Credits Monat"] = self.used(now)
         self.stats["Credits heute"] = self.used(now, day=True)
         self._save()

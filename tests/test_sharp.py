@@ -67,6 +67,7 @@ def test_feed_spends_credits_only_when_a_match_is_near_and_respects_the_daily_bu
     ms = f.matches(NOW)
     assert len(ms) == 1 and f.used(NOW) == 1  # second league: no credit left today
     assert f.stats["Credit-Budget erreicht"] == 1
+    assert 0 < f.stats["nächstes Spiel in h"] < 4  # kick-off 18:00, now 14:13
     cl.calls.clear()
     f.matches(NOW + 600)  # cached: no new odds call, schedule not due either
     assert not any(c.endswith("/odds") for c in cl.calls)

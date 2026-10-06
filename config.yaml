@@ -312,7 +312,10 @@ scenarios:
     # Abweichungen > 10 Punkte +25-39 %, aber Schlusskurs = Blick in die Zukunft. Key über Dashboard /admin/.
     leagues: [soccer_epl, soccer_germany_bundesliga, soccer_spain_la_liga, soccer_italy_serie_a,
               soccer_france_ligue_one, soccer_uefa_champs_league, soccer_netherlands_eredivisie,
-              soccer_portugal_primeira_liga]
+              soccer_portugal_primeira_liga,
+              # 06.10.: spielen auch in Länderspielpausen (Spielplan-Abfrage kostet nichts, Quoten nur bei Spielen)
+              soccer_uefa_nations_league, soccer_efl_champ, soccer_usa_mls, soccer_brazil_campeonato,
+              soccer_argentina_primera_division, soccer_japan_j_league]
     odds_monthly_cap: 450        # Gratis-Plan 500 Credits/Monat, Rest als Puffer; höchstens cap/30 pro Tag
     odds_refresh_h: 4            # je Liga höchstens alle 4 h neue Quoten
     odds_lookahead_h: 8          # nur wenn ein Spiel der Liga in den nächsten 8 h beginnt

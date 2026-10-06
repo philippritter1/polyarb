@@ -46,6 +46,15 @@ Fallen in den Studiendaten (Walk-forward-Analyse 03.10.) – bei jedem Backtest 
   Spalten `a_*` = Stunden seit der letzten Preisänderung.
 - Kalshi letzter Preis + 2 ct ist im Schnitt ~8 Punkte zu optimistisch gegenüber dem echten Ask.
 
+Saubere Stichprobe (Auswertung 06.10., PM Aug–Okt n≈82k, Kalshi 14.9.–6.10. n≈71k):
+- Polymarket: fast alles negativ nach Kosten (alle Käufe −5,5 %). fussball_dog −5 % (reiner Fußball −10 %),
+  Endgame/Longshot-NO −2,5 %, mlb_spread zu wenig Daten. 7-Tage-Preise weiterhin unbrauchbar (beide Seiten „profitabel“).
+- Einzige Auffälligkeit: Wetter-NO 50–65 % (NO auf das wahrscheinlichste Bucket), aber stark phasenabhängig:
+  Apr–Jul −4 bis −8 %, Aug–Sep +10 bis +22 % (fast nur °C-Märkte), Okt live 42–57 % Treffer bei ~60 % Preis.
+- Kalshi am echten Ask: nichts besteht die Walk-forward-Hürde; alles −18 %, nur enge Bücher (≤ 4 ct) −4 %.
+- Live-Wetter kauft praktisch immer ~11,5 h vor Ende (beim Eintritt ins 12-h-Fenster, 2 Uhr MESZ), die Studie
+  misst bei 6 h – live testet also einen anderen Zeitpunkt als die Studie.
+
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
   max. 1.000 $/Tag. Studie +8,2 % (OOS +5,8 %); Stations-Filter streng +10,7 % (n≈5.200) – beides mit dem

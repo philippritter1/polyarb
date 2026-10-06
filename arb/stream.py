@@ -4,6 +4,7 @@ wss://ws-subscriptions-clob.polymarket.com/ws/market
   -> subscribe {"assets_ids": [...], "type": "market"}
   <- "book"          full snapshot per asset (sent on subscribe and after trades)
   <- "price_change"  level updates: price_changes[{asset_id, price, size, side}] (size = new total, 0 = removed)
+  <- "last_trade_price"  a trade: {asset_id, price, size, side, fee_rate_bps, timestamp}
 Keep-alive: send text "PING" every 10 s.
 
 BookStore keeps the local books; every update marks the touched tokens dirty so the
@@ -16,6 +17,7 @@ import logging
 import random
 import threading
 import time
+from collections import deque
 from typing import Callable, Dict, Iterable, List, Optional, Set
 
 from .models import Level, OrderBook
@@ -35,6 +37,8 @@ class BookStore:
         self._dirty: Set[str] = set()
         self.meta: Dict[str, tuple] = {}   # token -> (min_order_size, tick_size)
         self.updates = 0
+        # trades ("last_trade_price"): (asset_id, price, size, ts) – read by the market-making simulation
+        self.trades: deque = deque(maxlen=50_000)
 
     # ---------------------------------------------------------------- writes (WS threads)
     def snapshot(self, tid: str, bids, asks, ts: Optional[float] = None) -> None:
@@ -111,6 +115,11 @@ def handle_message(store: BookStore, raw: str) -> None:
             for ch in changes:
                 tid = str(ch.get("asset_id") or ev.get("asset_id"))
                 store.change(tid, float(ch["price"]), float(ch["size"]), ch.get("side", ""), ts)
+        elif et == "last_trade_price":
+            try:
+                store.trades.append((str(ev["asset_id"]), float(ev["price"]), float(ev["size"]), ts or time.time()))
+            except (KeyError, TypeError, ValueError):
+                pass
         elif et == "tick_size_change":
             tid = str(ev.get("asset_id"))
             mn, _ = store.meta.get(tid, (5.0, 0.01))

@@ -26,6 +26,7 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
 - `arb/study.py` – Polymarket-Studie aufgelöster Märkte (Kategorien, sport_kind, market_type)
 - `arb/backtest.py` – Regeln/Stresstest auf den Studiendaten
 - `arb/wxobs.py` – Wetter-Messwert-Studie (METAR-Stationen) und `LiveObs` für den Stations-Filter
+- `arb/mm.py` – Market-Making-Simulation mit Rewards (Strategie `mm`)
 - `arb/kalshi.py` – Kalshi-Studie; `arb/ladder.py` + `arb/scanner.py` – Arbitrage
 - `dashboard.py` – statisches Dashboard + Exporte; `deploy/notify.py` – 4-h-Bericht per Push
 
@@ -63,6 +64,10 @@ Aktive Kandidaten im Live-Test:
 - `wetter_no_maker` (ab 03.10.): Auswahl wie `wetter_no_mess`, aber Limit-Kauf 1 Tick über dem Bid, ohne Gebühr
   (`maker: true` in der Szenario-Engine). Streng simuliert: gefüllt erst, wenn der Ask unter das Limit fällt.
   Frage: Reicht der gesparte Spread (+ ~1 % Gebühr), oder füllen nur die Limits, die verlieren?
+- `mm_rewards` (ab 06.10., `arb/mm.py`): Market Making in ruhigen Märkten mit Liquidity Rewards (ohne Sport/Krypto),
+  Gebote auf JA und NEIN um die Mitte, JA+NEIN-Paare werden zu 1 $ zusammengelegt. Ertrag getrennt ausgewiesen:
+  Spread/Auflösung, Rewards (geschätzt nach Polymarkets Formel, Anteil am Buch), Rebates. Ausführung über
+  WebSocket-Trades: nur Trades UNTER unserem Gebot zählen. Frage: Decken Spread + Rewards die Verluste an Informierte?
 - `fussball_dog`: Außenseiter 3–25 % in Über/Unter, Spread, Remis, Halbzeit. Studie +8,8 %, phasenabhängig.
   Bekannte Lücke: `sport_kind` fällt auf „Fussball“ zurück, daher landen auch NHL/NFL/College/WNBA und
   E-Sports-Handicaps/„Games Total“ darin (Backtest nutzt dieselbe Einteilung). Nicht ändern während des Tests;

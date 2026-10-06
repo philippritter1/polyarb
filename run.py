@@ -97,6 +97,9 @@ def main():
         duration = args.hours * 3600 if args.hours else None
         if cfg["scenarios"][args.name].get("strategy", args.name) == "ladder":
             ladder_engine(args.name, cfg, client).run(duration_s=duration, exit_on_code_change=True)
+        elif cfg["scenarios"][args.name].get("strategy") == "mm":
+            from arb.mm import MarketMaker
+            MarketMaker(args.name, cfg, client).run(duration_s=duration, exit_on_code_change=True)
         else:
             ScenarioEngine(args.name, cfg, client).run(duration_s=duration, exit_on_code_change=True)
         return

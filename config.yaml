@@ -282,6 +282,27 @@ scenarios:
     max_day_usd: 1000            # zählt offene Limits mit
     max_new_per_step: 10
     max_open_positions: 200      # Positionen + offene Limits
+  mm_rewards:
+    enabled: true
+    title: Market Making (Rewards)
+    strategy: mm                 # arb/mm.py: beidseitig quotieren statt auf eine Seite wetten (06.10.)
+    # Verdient Spread (JA-Gebot + NEIN-Gebot = 1 $ beim Zusammenlegen), Liquidity Rewards (geschätzt aus den
+    # Büchern nach Polymarkets Formel) und Maker-Rebates; verliert an besser Informierte. Ausführung streng:
+    # nur durch einen Trade UNTER unserem Gebot (bzw. über 1 - Gebot auf der Gegenseite), nicht AM Preis.
+    capital_usd: 2500
+    max_markets: 15              # die größten Reward-Pools
+    min_daily_rate: 5            # $/Tag Reward-Pool mindestens
+    skip_categories: [Sport, Krypto]   # Preise springen bei Nachrichten/Spielverlauf
+    min_days_to_end: 3
+    stop_hours_before_end: 24    # Gebote vor dem Ende ziehen
+    min_mid: 0.15
+    max_mid: 0.85
+    min_liquidity: 1000
+    quote_frac: 0.5              # Abstand zur Mitte = Hälfte der Reward-Spanne
+    quote_usd: 50                # je Gebot
+    max_inventory_usd: 150       # einseitiger Bestand je Markt, darüber nur noch die Gegenseite
+    latency_s: 1
+    step_s: 2
   finanz_dog:
     enabled: false               # abgeschaltet 02.10.: widerlegt – Studie mit 1.011 Wetten -7,6 % (2. Hälfte -23,5 %)
     title: Finanz-Außenseiter

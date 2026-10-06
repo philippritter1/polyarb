@@ -130,7 +130,8 @@ def collect(db_path: str, start_capital: float) -> dict:
 
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
-                  "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell"}
+                  "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell",
+                  "mm_rewards_mm": "Market Making (Rewards)"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -141,7 +142,8 @@ CSV_COLUMNS = [
     ("Notiz", "note"), ("Fills (JSON)", "fills"),
 ]
 SETTLE_TYPES = {"basket": "Auszahlung Korb", "residual": "Rest aufgelöst", "unwind": "Rest verkauft",
-                "position": "Auszahlung Position"}
+                "position": "Auszahlung Position", "merge": "JA+NEIN zusammengelegt (Spread)",
+                "reward": "Liquidity Rewards (geschätzt)"}
 EXEC_FIELDS = ["ts", "basket_id", "title", "strategy", "status", "target_qty", "matched_qty", "capital",
                "expected_profit", "realized_pnl", "locked", "expected_payout", "residual", "latency_ms",
                "note", "fills"]

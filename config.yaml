@@ -303,6 +303,31 @@ scenarios:
     max_inventory_usd: 150       # einseitiger Bestand je Markt, darüber nur noch die Gegenseite
     latency_s: 1
     step_s: 2
+  sharp_fussball:
+    enabled: true
+    title: Fußball vs. Pinnacle
+    strategy: sharp              # arb/sharp.py (06.10.): Pinnacle-Quoten (The Odds API) als fairer Preis
+    # Kauft auf Polymarket "Will X win on DATE?" / "Will A vs. B end in a draw?", wenn der Ask mindestens
+    # min_edge unter Pinnacles Wahrscheinlichkeit (ohne Marge) liegt, vor Anpfiff. Studie mit Schlusskursen:
+    # Abweichungen > 10 Punkte +25-39 %, aber Schlusskurs = Blick in die Zukunft. Ohne ODDS_API_KEY tut es nichts.
+    leagues: [soccer_epl, soccer_germany_bundesliga, soccer_spain_la_liga, soccer_italy_serie_a,
+              soccer_france_ligue_one, soccer_uefa_champs_league, soccer_netherlands_eredivisie,
+              soccer_portugal_primeira_liga]
+    odds_monthly_cap: 450        # Gratis-Plan 500 Credits/Monat, Rest als Puffer; höchstens cap/30 pro Tag
+    odds_refresh_h: 4            # je Liga höchstens alle 4 h neue Quoten
+    odds_lookahead_h: 8          # nur wenn ein Spiel der Liga in den nächsten 8 h beginnt
+    max_odds_age_h: 6            # ältere Quoten nicht mehr nutzen
+    min_hours_to_start: 0.25     # bis 15 min vor Anpfiff
+    min_edge: 0.05               # Ask mindestens 5 Punkte unter Pinnacle
+    max_gap: 0.25                # mehr Abweichung = vermutlich falsch verknüpft -> auslassen
+    capital_usd: 2500
+    interval_min: 10
+    max_spread: 0.03
+    max_slippage: 0.01
+    max_position_usd: 25
+    max_event_usd: 50            # pro Spiel
+    max_new_per_step: 10
+    max_open_positions: 100
   finanz_dog:
     enabled: false               # abgeschaltet 02.10.: widerlegt – Studie mit 1.011 Wetten -7,6 % (2. Hälfte -23,5 %)
     title: Finanz-Außenseiter

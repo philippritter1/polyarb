@@ -465,7 +465,13 @@ class ScenarioEngine:
         self.name, self.cfg, self.client = name, cfg, client
         self.sc = cfg["scenarios"][name]
         self.clock = clock or RealClock()
-        self.strategy = strategy or STRATEGIES[self.sc.get("strategy", name)](self.sc, client)
+        kind = self.sc.get("strategy", name)
+        if strategy is None and kind == "sharp":  # bookmaker comparison (arb/sharp.py), imported on demand
+            from .sharp import SharpStrategy
+            data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
+            strategy = SharpStrategy(dict(self.sc, odds_state_path=self.sc.get(
+                "odds_state_path", os.path.join(data_dir, "odds-api.json"))), client)
+        self.strategy = strategy or STRATEGIES[kind](self.sc, client)
         self.start_capital = float(self.sc.get("capital_usd", 2500))
         data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
         prepare_scenario_dir(data_dir, name, self.start_capital, str(self.sc.get("reset", "")))

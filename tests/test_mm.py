@@ -124,3 +124,21 @@ def test_inventory_cap_stops_buying_the_long_side_and_resolution_pays(tmp_path):
     mm.step()
     assert "a" not in mm.st.markets and abs(mm.st.cash - cash - 41) < 0.01  # + a few estimated reward cents
     assert abs(mm.st.realized - 41 * (1 - 0.48)) < 1e-6
+
+
+def test_dashboard_builds_with_merges_and_rewards(tmp_path):
+    """A reward settlement belongs to no execution: the trades CSV must still build (broke the dashboard)."""
+    from dashboard import build, trades_csv
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path), Client([_m("a", "Will the Fed cut rates?", 0.50)]),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.extend([("aY", 0.47, 10, NOW + 5), ("aY", 0.53, 30, NOW + 6)])
+    for _ in range(2):
+        mm.clock.sleep(400)
+        mm.step()
+    db = str(tmp_path / "scenario-mm_rewards.sqlite")
+    lines = trades_csv(db).splitlines()
+    assert any("Liquidity Rewards" in l for l in lines) and any("zusammengelegt" in l for l in lines)
+    build(db, str(tmp_path / "www" / "index.html"), 1000, title="MM", kind="mm")

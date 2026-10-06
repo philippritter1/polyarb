@@ -164,9 +164,10 @@ def trades_csv(db_path: str) -> str:
     rows = [dict(zip(EXEC_FIELDS, r), typ="Ausführung")
             for r in _q(db, f"SELECT {', '.join(EXEC_FIELDS)} FROM executions")]
     by_basket = {r["basket_id"]: r for r in rows}
+    execs = list(rows)  # settlement rows appended below have no fills (e.g. rewards belong to no trade)
     for ts, ref, kind, qty, payout, pnl in _q(db, "SELECT ts, ref, kind, qty, payout, pnl FROM settlements"):
         # basket settlements reference the event id, leftovers the token id (found in the fills)
-        src = by_basket.get(ref) or next((r for r in rows if ref and ref in (r["fills"] or "")), {})
+        src = by_basket.get(ref) or next((r for r in execs if ref and ref in (r["fills"] or "")), {})
         rows.append(dict(ts=ts, typ=SETTLE_TYPES.get(kind, kind), basket_id=src.get("basket_id", ref),
                          title=src.get("title", ""), strategy=src.get("strategy", ""), matched_qty=qty,
                          realized_pnl=pnl, payout=None if kind == "unwind" else payout,

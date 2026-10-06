@@ -1,0 +1,13 @@
+[Unit]
+Description=Polyarb settings page (/admin/ behind the dashboard password)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=polyarb
+WorkingDirectory=/opt/polyarb
+ExecStart=/opt/polyarb/.venv/bin/python deploy/admin.py 8787
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target

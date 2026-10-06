@@ -309,7 +309,7 @@ scenarios:
     strategy: sharp              # arb/sharp.py (06.10.): Pinnacle-Quoten (The Odds API) als fairer Preis
     # Kauft auf Polymarket "Will X win on DATE?" / "Will A vs. B end in a draw?", wenn der Ask mindestens
     # min_edge unter Pinnacles Wahrscheinlichkeit (ohne Marge) liegt, vor Anpfiff. Studie mit Schlusskursen:
-    # Abweichungen > 10 Punkte +25-39 %, aber Schlusskurs = Blick in die Zukunft. Ohne ODDS_API_KEY tut es nichts.
+    # Abweichungen > 10 Punkte +25-39 %, aber Schlusskurs = Blick in die Zukunft. Key über Dashboard /admin/.
     leagues: [soccer_epl, soccer_germany_bundesliga, soccer_spain_la_liga, soccer_italy_serie_a,
               soccer_france_ligue_one, soccer_uefa_champs_league, soccer_netherlands_eredivisie,
               soccer_portugal_primeira_liga]

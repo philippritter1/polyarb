@@ -9,7 +9,9 @@ validieren, bevor echtes Geld (später 1–2k €) eingesetzt wird. Der Nutzer s
 - Vor jedem Push `python -m pytest -q` (alle Tests müssen grün sein).
 - **Regeln der laufenden Szenarien nicht ändern**, solange der Live-Test läuft (seit Anfang Oktober 2026, 2–3 Wochen).
   Verbesserungen als *neues* Szenario daneben bauen, nicht das bestehende umschreiben.
-- Geheimnisse (Odds-API-Key etc.) liegen in `/etc/polyarb.env` auf dem Server, nie im Repo oder Chat.
+- Geheimnisse liegen in `/etc/polyarb.env` auf dem Server, nie im Repo oder Chat. Den Odds-API-Key trägt der Nutzer
+  über die Einstellungsseite `$POLYARB_URL/admin/` ein (`deploy/admin.py`, gleiches Passwort wie das Dashboard,
+  speichert nach `data/secrets.env`, Modus 600, wirkt ohne Neustart). Die Seite kann nur das – keine Befehle.
 
 ## Daten abholen
 Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Agent-Proxy eingefügt
@@ -70,8 +72,8 @@ Aktive Kandidaten im Live-Test:
   Spread/Auflösung, Rewards (geschätzt nach Polymarkets Formel, Anteil am Buch), Rebates. Ausführung über
   WebSocket-Trades: nur Trades UNTER unserem Gebot zählen. Frage: Decken Spread + Rewards die Verluste an Informierte?
 - `sharp_fussball` (ab 06.10., `arb/sharp.py`): kauft Polymarket-Fußball (Sieg/Remis), wenn der Ask ≥ 5 Punkte unter
-  Pinnacles Wahrscheinlichkeit liegt (live über The Odds API, Gratis-Plan 500 Credits/Monat, Key `ODDS_API_KEY` in
-  `/etc/polyarb.env`, Verbrauch in `data/odds-api.json`). Ohne Key passiert nichts (Scan zeigt den Hinweis).
+  Pinnacles Wahrscheinlichkeit liegt (live über The Odds API, Gratis-Plan 500 Credits/Monat, Key über `/admin/`
+  oder `ODDS_API_KEY` in `/etc/polyarb.env`, Verbrauch in `data/odds-api.json`). Ohne Key passiert nichts.
 - `fussball_dog`: Außenseiter 3–25 % in Über/Unter, Spread, Remis, Halbzeit. Studie +8,8 %, phasenabhängig.
   Bekannte Lücke: `sport_kind` fällt auf „Fussball“ zurück, daher landen auch NHL/NFL/College/WNBA und
   E-Sports-Handicaps/„Games Total“ darin (Backtest nutzt dieselbe Einteilung). Nicht ändern während des Tests;

@@ -31,14 +31,24 @@ if ! grep -q '^DASH_URL=' /etc/polyarb.env; then
   echo "DASH_URL=https://${IP//./-}.sslip.io" >> /etc/polyarb.env
 fi
 source /etc/polyarb.env
-if [ ! -f /etc/caddy/.polyarb ]; then
+# v2 (06.10.): /admin* goes to the settings page (deploy/admin.py, 127.0.0.1:8787), same password as the dashboard.
+# The new file is validated first; if caddy rejects it, the old one stays and the dashboard keeps running.
+if [ ! -f /etc/caddy/.polyarb2 ]; then
   HOST=${DASH_URL#https://}
   HASH=$(caddy hash-password --plaintext "$DASH_PASS")
-  printf '%s {\n  basicauth {\n    %s %s\n  }\n  root * /var/www/polyarb\n  file_server\n}\n' "$HOST" "$DASH_USER" "$HASH" > /etc/caddy/Caddyfile
-  touch /etc/caddy/.polyarb
-  systemctl restart caddy
+  printf '%s {\n  basicauth {\n    %s %s\n  }\n  handle /admin* {\n    reverse_proxy 127.0.0.1:8787\n  }\n  handle {\n    root * /var/www/polyarb\n    file_server\n  }\n}\n' "$HOST" "$DASH_USER" "$HASH" > /etc/caddy/Caddyfile.new
+  if caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile; then
+    [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak
+    mv /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
+    touch /etc/caddy/.polyarb /etc/caddy/.polyarb2
+    systemctl restart caddy
+  else
+    echo "Caddyfile v2 ungültig – alte Konfiguration bleibt" >&2
+  fi
 fi
 systemctl daemon-reload
+systemctl enable polyarb-admin.service
+systemctl restart polyarb-admin.service
 systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-wxobs.timer
 systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-wxobs.timer
 # seit 01.10.: nur noch der 4-h-Bericht (08 Uhr gehört jetzt dazu), kein eigener Tagesbericht

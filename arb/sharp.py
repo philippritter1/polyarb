@@ -7,7 +7,9 @@ Polymarket prices that may have been stale. This scenario tests the idea live: c
 The Odds API, the real Polymarket ask, buy before kick-off when the ask lies at least `min_edge` below
 the bookmaker probability.
 
-The Odds API (https://the-odds-api.com, key in ODDS_API_KEY from /etc/polyarb.env): the free plan has
+The Odds API (https://the-odds-api.com): the key comes from ODDS_API_KEY in /etc/polyarb.env or from
+data/secrets.env, which the settings page of the dashboard (/admin/, deploy/admin.py) writes – read again on
+every step, so a new key works without a restart. The free plan has
 500 credits a month. /sports/{league}/events is free; /sports/{league}/odds costs 1 credit per region and
 market (here bookmakers=pinnacle, markets=h2h -> 1 credit), an empty answer costs nothing. Odds are fetched
 per league only when one of its matches starts within `odds_lookahead_h`, at most every `odds_refresh_h`
@@ -153,22 +155,51 @@ def link(question: str, end_ts: Optional[float], matches: List[dict], min_score:
     return (best[1], best[2]) if best else None
 
 
+def read_key(secrets_path: str, env_name: str = "ODDS_API_KEY") -> str:
+    """The Odds API key: environment first, else the KEY=value file the settings page writes."""
+    key = os.environ.get(env_name, "")
+    if key:
+        return key
+    try:
+        with open(secrets_path, encoding="utf-8") as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k == env_name and v:
+                    return v.strip()
+    except OSError:
+        pass
+    return ""
+
+
 class SharpStrategy(Strategy):
     """Buys the Polymarket side whose ask is at least `min_edge` below Pinnacle's probability, before kick-off."""
 
     def __init__(self, cfg: dict, client, feed: Optional[OddsFeed] = None):
         super().__init__(cfg, client)
-        key = os.environ.get(cfg.get("odds_key_env", "ODDS_API_KEY"), "")
-        state = cfg.get("odds_state_path") or os.path.join("data", "odds-api.json")
-        self.feed = feed or (OddsFeed(client.get_json, key, state, list(cfg.get("leagues") or LEAGUES),
-                                      int(cfg.get("odds_monthly_cap", 450)), float(cfg.get("odds_refresh_h", 4)),
-                                      float(cfg.get("odds_lookahead_h", 8))) if key else None)
+        self.state_path = cfg.get("odds_state_path") or os.path.join("data", "odds-api.json")
+        self.secrets_path = cfg.get("secrets_path") or os.path.join(os.path.dirname(self.state_path) or ".",
+                                                                     "secrets.env")
+        self.feed, self._injected = feed, feed is not None
         self.scan: dict = {}
+
+    def _feed(self) -> Optional[OddsFeed]:
+        if self._injected:
+            return self.feed
+        key = read_key(self.secrets_path, self.cfg.get("odds_key_env", "ODDS_API_KEY"))
+        if not key:
+            return None
+        if self.feed is None:
+            c = self.cfg
+            self.feed = OddsFeed(self.client.get_json, key, self.state_path, list(c.get("leagues") or LEAGUES),
+                                 int(c.get("odds_monthly_cap", 450)), float(c.get("odds_refresh_h", 4)),
+                                 float(c.get("odds_lookahead_h", 8)))
+        self.feed.key = key  # a new key from the settings page takes effect at once
+        return self.feed
 
     def candidates(self, now: float) -> List[Signal]:
         c = self.cfg
-        if self.feed is None:
-            self.scan = {"kein ODDS_API_KEY in /etc/polyarb.env": 1}
+        if self._feed() is None:
+            self.scan = {"kein Odds-API-Key (Dashboard -> /admin/ eintragen)": 1}
             return []
         matches = self.feed.matches(now)
         st = self.scan = dict(self.feed.stats, **{"Spiele mit Quote": len(matches)})

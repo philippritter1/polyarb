@@ -97,4 +97,8 @@ def test_without_key_nothing_is_called(tmp_path, monkeypatch):
     monkeypatch.delenv("ODDS_API_KEY", raising=False)
     cl = Client()
     s = SharpStrategy({"odds_state_path": str(tmp_path / "o.json")}, cl)
-    assert s.candidates(NOW) == [] and not cl.calls and "kein ODDS_API_KEY" in next(iter(s.scan))
+    assert s.candidates(NOW) == [] and not cl.calls and "kein Odds-API-Key" in next(iter(s.scan))
+    # the settings page writes data/secrets.env: picked up on the next step, no restart
+    (tmp_path / "secrets.env").write_text("ODDS_API_KEY=abc123\n")
+    s.candidates(NOW)
+    assert s.feed is not None and s.feed.key == "abc123" and any(c.endswith("/events") for c in cl.calls)

@@ -445,30 +445,37 @@ def station_rows(db_path: str) -> tuple:
     return header, [[*r[:5], datetime.fromtimestamp(r[5]).strftime("%Y-%m-%d %H:%M") if r[5] else "", r[6] or ""] for r in rows]
 
 
-def csv_rows(db_path: str) -> tuple:
+def csv_iter(db_path: str) -> tuple:
+    """(header, rows) with the rows read one at a time."""
     header = ["Markt-ID", "Frage", "Stadt", "Station", "Art", "Bucket von", "Bucket bis", "Einheit", "Messtag",
               "Geschlossen", "Ergebnis", "max. Preis Studie", "unmöglich ab (Rand 0)", "unmöglich ab (Rand 1)",
               "unmöglich ab (Rand 2)", "YES Rand 0 +15 min", "YES Rand 0 +60 min", "YES Rand 1 +15 min",
               "YES Rand 1 +60 min", "YES Rand 2 +15 min", "YES Rand 2 +60 min", "Grund"]
-    if not Path(db_path).exists():
-        return header, []
-    db = sqlite3.connect(db_path)
-    try:
-        rows = db.execute("SELECT * FROM wx_markets ORDER BY close_ts").fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    db.close()
     fmt = lambda t: datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else ""  # noqa: E731
-    out = []
-    for r in rows:
-        r = list(r[:22])
-        for i in (9, 12, 13, 14):
-            r[i] = fmt(r[i])
-        r[10] = "" if r[10] is None else ("YES" if r[10] else "NO")
-        for i in (5, 6):
-            r[i] = "" if r[i] in (math.inf, -math.inf) else r[i]
-        out.append(r)
-    return header, out
+
+    def rows():
+        if not Path(db_path).exists():
+            return
+        db = sqlite3.connect(db_path)
+        try:
+            for r in db.execute("SELECT * FROM wx_markets ORDER BY close_ts"):
+                r = list(r[:22])
+                for i in (9, 12, 13, 14):
+                    r[i] = fmt(r[i])
+                r[10] = "" if r[10] is None else ("YES" if r[10] else "NO")
+                for i in (5, 6):
+                    r[i] = "" if r[i] in (math.inf, -math.inf) else r[i]
+                yield r
+        except sqlite3.OperationalError:
+            return
+        finally:
+            db.close()
+    return header, rows()
+
+
+def csv_rows(db_path: str) -> tuple:
+    header, rows = csv_iter(db_path)
+    return header, list(rows)
 
 
 # ====================================================================== Wetter-NO with station readings

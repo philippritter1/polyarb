@@ -523,30 +523,37 @@ def diag_rows(db_path: str) -> tuple:
     return header, rows
 
 
-def csv_rows(db_path: str) -> tuple:
+def csv_iter(db_path: str) -> tuple:
+    """(header, rows) with the rows read one at a time – the table has hundreds of thousands of rows."""
     header = ["Ticker", "Event", "Serie", "Frage", "Bucket/Untertitel", "Kategorie", "Kalshi-Kategorie",
               "Volumen (Kontrakte)", "Schluss", "Ergebnis", "Preis 1 Tag vorher", "Preis 6 h vorher",
               "Preis 1 h vorher", "Ask YES 1 Tag", "Ask NO 1 Tag", "Ask YES 6 h", "Ask NO 6 h", "Ask YES 1 h",
               "Ask NO 1 h", "Stichprobe (0-99)", "Kontrakte 24 h vor 1 Tag", "… vor 6 h", "… vor 1 h",
               "Ablauf erwartet", "Version"]
-    if not Path(db_path).exists():
-        return header, []
-    db = sqlite3.connect(db_path)
-    try:
-        have = {r[1] for r in db.execute("PRAGMA table_info(kalshi_markets)")}
-        cols = [c for c in COLUMNS if c != "collected_ts"]
-        sel = ", ".join(c if c in have else f"NULL AS {c}" for c in cols)
-        rows = db.execute(f"SELECT {sel} FROM kalshi_markets ORDER BY close_ts").fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    db.close()
-    out = []
-    for r in rows:
-        r = list(r)
-        r[8] = datetime.fromtimestamp(r[8]).strftime("%Y-%m-%d %H:%M") if r[8] else ""
-        r[9] = "YES" if r[9] == 1 else "NO"
-        r[23] = datetime.fromtimestamp(r[23]).strftime("%Y-%m-%d %H:%M") if r[23] else ""
-        r[24] = r[24] or 1
-        out.append(r)
-    return header, out
+
+    def rows():
+        if not Path(db_path).exists():
+            return
+        db = sqlite3.connect(db_path)
+        try:
+            have = {r[1] for r in db.execute("PRAGMA table_info(kalshi_markets)")}
+            cols = [c for c in COLUMNS if c != "collected_ts"]
+            sel = ", ".join(c if c in have else f"NULL AS {c}" for c in cols)
+            for r in db.execute(f"SELECT {sel} FROM kalshi_markets ORDER BY close_ts"):
+                r = list(r)
+                r[8] = datetime.fromtimestamp(r[8]).strftime("%Y-%m-%d %H:%M") if r[8] else ""
+                r[9] = "YES" if r[9] == 1 else "NO"
+                r[23] = datetime.fromtimestamp(r[23]).strftime("%Y-%m-%d %H:%M") if r[23] else ""
+                r[24] = r[24] or 1
+                yield r
+        except sqlite3.OperationalError:
+            return
+        finally:
+            db.close()
+    return header, rows()
+
+
+def csv_rows(db_path: str) -> tuple:
+    header, rows = csv_iter(db_path)
+    return header, list(rows)
 

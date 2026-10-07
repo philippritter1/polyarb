@@ -352,14 +352,14 @@ def build_all(cfg: dict, out: str) -> list:
     _write(root / "study" / "index.html", study_page(calib, nav_for("study"), stress, books), "utf-8")
     built.append(str(root / "study" / "index.html"))
 
-    from arb.kalshi import analysis as kalshi_analysis, csv_rows as kalshi_csv_rows
+    from arb.kalshi import analysis as kalshi_analysis, csv_iter as kalshi_csv_rows
     kalshi_db = str(data_dir / "kalshi.sqlite")
     kal = kalshi_analysis(kalshi_db)
     (root / "kalshi").mkdir(parents=True, exist_ok=True)
     _write(root / "kalshi" / "index.html", kalshi_page(kal, nav_for("kalshi")), "utf-8")
     built.append(str(root / "kalshi" / "index.html"))
 
-    from arb.wxobs import analysis as wx_analysis, csv_rows as wx_csv_rows
+    from arb.wxobs import analysis as wx_analysis, csv_iter as wx_csv_rows
     wx_db = str(data_dir / "wxobs.sqlite")
     (root / "wxobs").mkdir(parents=True, exist_ok=True)
     _write(root / "wxobs" / "index.html", wxobs_page(wx_analysis(wx_db), nav_for("wxobs")), "utf-8")
@@ -367,8 +367,41 @@ def build_all(cfg: dict, out: str) -> list:
 
     exp = root / "export"
     exp.mkdir(parents=True, exist_ok=True)
+    stage = _Stage(exp / "stand.txt")
+    try:
+        built.append(_export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress, calib,
+                             kalshi_csv_rows, wx_csv_rows, wx_analysis))
+    except BaseException as e:  # noqa – record where and why the export stopped (readable via the dashboard)
+        stage.fail(e)
+        raise
+    return built
+
+
+class _Stage:
+    """export/stand.txt: the step the export is at, with time and peak memory – shows where a run dies."""
+
+    def __init__(self, path: Path):
+        self.path, self.log = path, []
+
+    def __call__(self, name: str) -> None:
+        import resource
+        mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        self.log.append(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {name}  (Spitze {mb:.0f} MB)")
+        _write(self.path, "\n".join(self.log) + "\n", "utf-8")
+
+    def fail(self, e: BaseException) -> None:
+        import traceback
+        self.log.append("FEHLER: " + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-3000:])
+        _write(self.path, "\n".join(self.log) + "\n", "utf-8")
+
+
+def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress, calib,
+            kalshi_csv_rows, wx_csv_rows, wx_analysis) -> str:
+    stage("kalshi-maerkte.csv")
     _write_csv(exp / "kalshi-maerkte.csv", *kalshi_csv_rows(kalshi_db))
+    stage("wetter-messwerte.csv")
     _write_csv(exp / "wetter-messwerte.csv", *wx_csv_rows(wx_db))
+    stage("wetter-no-filter.csv")
     wxa = wx_analysis(wx_db)
     variants = (("Endvolumen < 5k (wie gefunden)", "no_filter"), ("alle Volumen", "no_filter_allvol"),
                 ("alle Volumen, Zufalls-Stichprobe", "no_filter_clean"))
@@ -384,6 +417,7 @@ def build_all(cfg: dict, out: str) -> list:
     from arb.wxobs import station_rows as wx_station_rows
     _write(exp / "kalshi-diagnose.csv", _csv(*kalshi_diag_rows(kalshi_db)), "utf-8-sig")
     _write(exp / "wetter-stationen.csv", _csv(*wx_station_rows(wx_db)), "utf-8-sig")
+    stage("studie-maerkte.csv")
     _write_csv(exp / "studie-maerkte.csv", STUDY_MARKET_HEADER, study_market_rows(study_db))
     _write_csv(exp / "studie-kalibrierung.csv", ["Zeitpunkt", "Preisbereich", "n", "Ø Preis", "gewonnen", "95% von", "95% bis",
                                                   "Differenz"],
@@ -422,12 +456,15 @@ def build_all(cfg: dict, out: str) -> list:
                exp / "wetter-stationen.csv", "wetter-messwerte/stationen.csv"),
               ("Kalshi", "Diagnose des letzten Laufs (Anfragen, Fehler, Felder der API)", "kalshi-diagnose.csv",
                exp / "kalshi-diagnose.csv", "kalshi/diagnose.csv")]
+    stage("polyarb-export.zip")
     _zip(exp / "polyarb-export.zip", files)
+    stage("polyarb-kompakt.zip")
     _zip(exp / "polyarb-kompakt.zip", compact_files(files))
+    stage("Studien-ZIPs")
     study_zips = {g: _zip_split(exp, slug, [f for f in files if f[0] == g]) for g, slug in STUDY_ZIPS.items()}
     _write(exp / "index.html", export_page(files, exp / "polyarb-export.zip", nav_for("export"), study_zips), "utf-8")
-    built.append(str(exp / "index.html"))
-    return built
+    stage("fertig")
+    return str(exp / "index.html")
 
 
 # ====================================================================== study & export pages (static)

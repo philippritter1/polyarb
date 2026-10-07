@@ -276,6 +276,9 @@ class MarketMaker:
             if not by or not bn or not by.bids or not by.asks:
                 st["kein Buch"] = st.get("kein Buch", 0) + 1
                 continue
+            if by.best_ask - by.best_bid > 2 * v:
+                st["Buch zu breit"] = st.get("Buch zu breit", 0) + 1  # quote() would not place bids there
+                continue
             mid = (by.best_bid + by.best_ask) / 2
             qy, qn = self.planned_quotes(mid, v, size)
             scored.append((rate * reward_share(by, bn, qy, qn, mid, v, size), c))

@@ -155,8 +155,9 @@ def test_new_markets_ranked_by_expected_share(tmp_path):
         def books(self, tids):
             crowd = [Level(0.49, 5000)]  # big pool: lots of size already resting near the mid
             out = {"bigY": OrderBook("bigY", crowd, [Level(0.51, 5000)]), "bigN": OrderBook("bigN", crowd, [Level(0.51, 5000)]),
-                   "smallY": OrderBook("smallY", [Level(0.45, 10)], [Level(0.55, 10)]),
-                   "smallN": OrderBook("smallN", [Level(0.45, 10)], [Level(0.55, 10)])}
+                   "smallY": OrderBook("smallY", [Level(0.47, 10)], [Level(0.53, 10)]),
+                   "smallN": OrderBook("smallN", [Level(0.47, 10)], [Level(0.53, 10)]),
+                   "oldY": OrderBook("oldY", [Level(0.10, 10)], [Level(0.90, 10)])}
             return {t: out[t] for t in tids if t in out}
 
     mm = MarketMaker("mm_rewards", _cfg(tmp_path, max_age_days=3, rank="share", max_markets=1), C(ms), SimClock(NOW),
@@ -164,3 +165,16 @@ def test_new_markets_ranked_by_expected_share(tmp_path):
     mm.select(NOW)
     assert list(mm.st.markets) == ["small"]
     assert mm.scan["älter als max_age_days"] == 1 and mm.scan["erwarteter Reward $/Tag"] > 10
+    # a book far wider than the qualifying spread gets no quotes, so it cannot rank first
+    ms.append(_m("wide", "Will D happen?", 0.50, rate=1000, startDate=started))
+
+    class W(C):
+        def books(self, tids):
+            out = C.books(self, [t for t in tids if not t.startswith("wide")])
+            out.update({t: OrderBook(t, [Level(0.20, 10)], [Level(0.80, 10)]) for t in tids if t.startswith("wide")})
+            return out
+
+    mm2 = MarketMaker("mm_rewards", _cfg(tmp_path / "w", max_age_days=3, rank="share", max_markets=1), W(ms),
+                      SimClock(NOW), books=BookStore(), pool=None)
+    mm2.select(NOW)
+    assert list(mm2.st.markets) == ["small"] and mm2.scan["Buch zu breit"] == 1

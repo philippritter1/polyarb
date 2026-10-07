@@ -71,6 +71,8 @@ Aktive Kandidaten im Live-Test:
   Gebote auf JA und NEIN um die Mitte, JA+NEIN-Paare werden zu 1 $ zusammengelegt. Ertrag getrennt ausgewiesen:
   Spread/Auflösung, Rewards (geschätzt nach Polymarkets Formel, Anteil am Buch), Rebates. Ausführung über
   WebSocket-Trades: nur Trades UNTER unserem Gebot zählen. Frage: Decken Spread + Rewards die Verluste an Informierte?
+- `mm_neu` (ab 07.10.): wie `mm_rewards`, aber nur Märkte < 3 Tage alt und Auswahl nach erwartetem Reward
+  (Pool × unser Anteil gegen die Gebote im Buch, `rank: share`). Recherche: frühe Märkte zahlen am meisten Rewards.
 - `sharp_fussball` (ab 06.10., `arb/sharp.py`): kauft Polymarket-Fußball (Sieg/Remis), wenn der Ask ≥ 5 Punkte unter
   Pinnacles Wahrscheinlichkeit liegt (live über The Odds API, Gratis-Plan 500 Credits/Monat, Key über `/admin/`
   oder `ODDS_API_KEY` in `/etc/polyarb.env`, Verbrauch in `data/odds-api.json`). Ohne Key passiert nichts.

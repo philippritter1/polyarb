@@ -142,3 +142,25 @@ def test_dashboard_builds_with_merges_and_rewards(tmp_path):
     lines = trades_csv(db).splitlines()
     assert any("Liquidity Rewards" in l for l in lines) and any("zusammengelegt" in l for l in lines)
     build(db, str(tmp_path / "www" / "index.html"), 1000, title="MM", kind="mm")
+
+
+def test_new_markets_ranked_by_expected_share(tmp_path):
+    """mm_neu: only recently started markets; a smaller pool with an empty book beats a big crowded one."""
+    started = "2026-09-20T12:00:00Z"   # a day before NOW
+    ms = [_m("big", "Will A happen?", 0.50, rate=100, startDate=started),
+          _m("small", "Will B happen?", 0.50, rate=30, startDate=started),
+          _m("old", "Will C happen?", 0.50, rate=500, startDate="2026-08-01T00:00:00Z")]
+
+    class C(Client):
+        def books(self, tids):
+            crowd = [Level(0.49, 5000)]  # big pool: lots of size already resting near the mid
+            out = {"bigY": OrderBook("bigY", crowd, [Level(0.51, 5000)]), "bigN": OrderBook("bigN", crowd, [Level(0.51, 5000)]),
+                   "smallY": OrderBook("smallY", [Level(0.45, 10)], [Level(0.55, 10)]),
+                   "smallN": OrderBook("smallN", [Level(0.45, 10)], [Level(0.55, 10)])}
+            return {t: out[t] for t in tids if t in out}
+
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, max_age_days=3, rank="share", max_markets=1), C(ms), SimClock(NOW),
+                     books=BookStore(), pool=None)
+    mm.select(NOW)
+    assert list(mm.st.markets) == ["small"]
+    assert mm.scan["älter als max_age_days"] == 1 and mm.scan["erwarteter Reward $/Tag"] > 10

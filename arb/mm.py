@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .client import FeeResolver, _parse_json_list, _parse_ts
+from .scenarios import _iso
 from .models import Basket, ExecutionResult, FeeSpec, Fill, Leg, Opportunity, OrderBook
 from .storage import Store
 
@@ -187,15 +188,19 @@ class MarketMaker:
     # ------------------------------------------------------------------ market choice
     def select(self, now: float) -> None:
         """Quiet two-way markets that pay rewards: no sport or crypto (prices jump on news), far from the end,
-        mid 0.15-0.85, a qualifying spread of at least 2 ticks. The largest pools first."""
+        mid 0.15-0.85, a qualifying spread of at least 2 ticks. The largest pools first – or, with
+        rank: share, the largest EXPECTED reward: pool x our share against the orders already in the book.
+        max_age_days keeps only markets started within that many days (early, little competition)."""
         sc = self.sc
         min_days = float(sc.get("min_days_to_end", 3))
         skip = set(sc.get("skip_categories", ["Sport", "Krypto"]))
         lo, hi = float(sc.get("min_mid", 0.15)), float(sc.get("max_mid", 0.85))
-        markets = self.client.paged("/markets", {"active": "true", "closed": "false",
-                                                 "liquidity_num_min": sc.get("min_liquidity", 1000),
-                                                 "order": "volume", "ascending": "false"},
-                                    max_items=int(sc.get("max_listed", 2000)))
+        max_age = sc.get("max_age_days")
+        params = {"active": "true", "closed": "false", "liquidity_num_min": sc.get("min_liquidity", 1000),
+                  "order": "volume", "ascending": "false"}
+        if max_age:
+            params["start_date_min"] = _iso(now - float(max_age) * DAY)
+        markets = self.client.paged("/markets", params, max_items=int(sc.get("max_listed", 2000)))
         from .study import categorize
         st = {"gelistet": len(markets)}
         cands = []
@@ -215,11 +220,15 @@ class MarketMaker:
                 why = "Kategorie ausgelassen"
             elif not lo <= float(prices[0]) <= hi:
                 why = "Preis zu extrem"
+            elif max_age and (_parse_ts(m.get("startDate") or m.get("createdAt")) or 0) < now - float(max_age) * DAY:
+                why = "älter als max_age_days"
             if why:
                 st[why] = st.get(why, 0) + 1
                 continue
             cands.append((rate, m, v, size, end, toks))
         cands.sort(key=lambda x: -x[0])
+        if sc.get("rank") == "share" and cands:
+            cands = self._rank_by_share(cands[:int(sc.get("prefilter", 60))], st)
         want = int(sc.get("max_markets", 15))
         keep = {cid for cid, mk in self.st.markets.items() if mk.qty_yes > 1e-9 or mk.qty_no > 1e-9}
         chosen = {}
@@ -245,6 +254,35 @@ class MarketMaker:
         self.scan = st
         if self.pool is not None:
             self.pool.set_assets([t for m in chosen.values() for t in (m.yes, m.no)])
+
+    def planned_quotes(self, mid: float, v: float, min_size: float) -> Tuple[dict, dict]:
+        """The two bids quote() would place at this mid (see there)."""
+        d = max(self.tick, v * float(self.sc.get("quote_frac", 0.5)))
+        usd = float(self.sc.get("quote_usd", 50))
+        out = []
+        for price in (math.floor((mid - d) / self.tick + 1e-9) * self.tick,
+                      math.floor((1 - mid - d) / self.tick + 1e-9) * self.tick):
+            out.append(dict(price=round(price, 4), size=float(max(min_size, math.floor(usd / price)))) if price >= self.tick
+                       else None)
+        return out[0], out[1]
+
+    def _rank_by_share(self, cands: list, st: dict) -> list:
+        """Expected reward $/day = pool x our share of the score against the orders already resting (REST books)."""
+        books = self.client.books([t for c in cands for t in c[5]])
+        scored = []
+        for c in cands:
+            rate, m, v, size, end, toks = c
+            by, bn = books.get(str(toks[0])), books.get(str(toks[1]))
+            if not by or not bn or not by.bids or not by.asks:
+                st["kein Buch"] = st.get("kein Buch", 0) + 1
+                continue
+            mid = (by.best_bid + by.best_ask) / 2
+            qy, qn = self.planned_quotes(mid, v, size)
+            scored.append((rate * reward_share(by, bn, qy, qn, mid, v, size), c))
+        scored.sort(key=lambda x: -x[0])
+        want = int(self.sc.get("max_markets", 15))
+        st["erwarteter Reward $/Tag"] = round(sum(e for e, _ in scored[:want]), 2)
+        return [c for _, c in scored]
 
     # ------------------------------------------------------------------ fills
     def _fill(self, mk: MMMarket, q: dict, side: str, qty: float, now: float) -> None:

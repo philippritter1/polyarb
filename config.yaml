@@ -303,6 +303,29 @@ scenarios:
     max_inventory_usd: 150       # einseitiger Bestand je Markt, darüber nur noch die Gegenseite
     latency_s: 1
     step_s: 2
+  mm_neu:
+    enabled: true
+    title: Market Making (neue Märkte)
+    strategy: mm                 # wie mm_rewards (arb/mm.py), aber (07.10.):
+    # nur Märkte, die in den letzten 3 Tagen gestartet sind (früh = wenig Konkurrenz um den Reward-Pool), und
+    # Auswahl nach ERWARTETEM Reward: Pool x unser Anteil gegen die Gebote, die schon im Buch stehen.
+    max_age_days: 3
+    rank: share
+    prefilter: 60                # so viele Kandidaten (größte Pools) werden per Orderbuch bewertet
+    min_liquidity: 0             # neue Märkte haben noch wenig Liquidität
+    capital_usd: 2500
+    max_markets: 15
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 50
+    max_inventory_usd: 150
+    latency_s: 1
+    step_s: 2
   sharp_fussball:
     enabled: true
     title: Fußball vs. Pinnacle

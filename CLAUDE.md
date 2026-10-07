@@ -29,6 +29,8 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
 - `arb/backtest.py` – Regeln/Stresstest auf den Studiendaten
 - `arb/wxobs.py` – Wetter-Messwert-Studie (METAR-Stationen) und `LiveObs` für den Stations-Filter
 - `arb/mm.py` – Market-Making-Simulation mit Rewards (Strategie `mm`)
+- `arb/orders.py` – Order-Modul: aus / Trockenlauf (echt noch nicht gebaut). Schalter `data/live.json` über `/admin/`,
+  harte Grenzen je Szenario (`live:` in config.yaml), Protokoll in Tabelle `live_orders`, Status `data/live-status-*.json`
 - `arb/sharp.py` – Pinnacle-Quoten (The Odds API) vs. Polymarket-Fußball (Strategie `sharp`)
 - `arb/kalshi.py` – Kalshi-Studie; `arb/ladder.py` + `arb/scanner.py` – Arbitrage
 - `dashboard.py` – statisches Dashboard + Exporte; `deploy/notify.py` – 4-h-Bericht per Push

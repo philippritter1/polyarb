@@ -1,9 +1,10 @@
 """Settings page of the dashboard: enter secrets from the phone instead of an SSH console.
 
 Runs as polyarb on 127.0.0.1:8787 (deploy/systemd/polyarb-admin.service); Caddy forwards /admin* to it behind the
-dashboard's basic auth. It can do exactly one thing – store the Odds API key in data/secrets.env (mode 600,
-read by arb/sharp.py on every step, no restart). It never shows a stored key (only its last 4 characters),
-runs no commands and accepts nothing else. A new key is first checked against The Odds API's free /sports
+dashboard's basic auth. It can do exactly two things – store the Odds API key in data/secrets.env (mode 600,
+read by arb/sharp.py on every step, no restart), and switch the order gateway (arb/orders.py) between
+"off" (emergency stop) and "dry" (dry run) in data/live.json. Live trading cannot be switched on here. It never
+shows a stored key (only its last 4 characters), runs no commands and accepts nothing else. A new key is first checked against The Odds API's free /sports
 endpoint (costs no credit).
 """
 from __future__ import annotations
@@ -66,6 +67,34 @@ def check_key(key: str, fetch=None) -> str:
         return f"nicht prüfbar ({type(e).__name__})"
 
 
+def live_section() -> str:
+    import glob
+    try:
+        with open(os.path.join(DATA, "live.json"), encoding="utf-8") as f:
+            mode = json.load(f).get("mode", "off")
+    except (OSError, ValueError):
+        mode = "off"
+    rows = []
+    for path in sorted(glob.glob(os.path.join(DATA, "live-status-*.json"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                st = json.load(f)
+        except (OSError, ValueError):
+            continue
+        rows.append(f"<li><b>{html.escape(str(st.get('scenario')))}</b>: {html.escape(str(st.get('mode')))} · "
+                    f"offen {st.get('open_orders', 0)} Orders / {st.get('open_usd', 0)} $ · gesetzt {st.get('gesetzt', 0)}"
+                    f" · storniert {st.get('storniert', 0)} · abgelehnt {st.get('abgelehnt', 0)}</li>")
+    label = {"off": "Aus (Not-Aus)", "dry": "Trockenlauf", "live": "Echt"}.get(mode, mode)
+    radios = "".join(
+        f'<label style="display:block;margin:6px 0"><input type="radio" name="mode" value="{v}"'
+        f'{" checked" if mode == v else ""}{" disabled" if v == "live" else ""}> {t}</label>'
+        for v, t in (("off", "Aus – Not-Aus, alle Orders stornieren"), ("dry", "Trockenlauf – Orders nur protokollieren"),
+                     ("live", "Echt – noch nicht verfügbar")))
+    return (f"<h2>Order-Modul (Market Making)</h2><p>Modus: <b>{label}</b></p>"
+            f"<ul>{''.join(rows) or '<li>noch kein Lauf</li>'}</ul>"
+            f'<form method="post" action="/admin/live-mode">{radios}<button type="submit">Übernehmen</button></form>')
+
+
 def page(msg: str = "", ok: bool = True) -> str:
     sec = read_secrets()
     key = sec.get("ODDS_API_KEY", "")
@@ -93,6 +122,7 @@ button{{font-size:16px;padding:10px 16px}} .ok{{color:#0a7a2f}} .err{{color:#b00
 <input name="key" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Key einfügen"></label>
 <button type="submit">Prüfen und speichern</button></form>
 <p>Wirkt ohne Neustart beim nächsten Durchlauf (alle 10 Minuten). Der Key wird nie angezeigt.</p>
+{live_section()}
 <p><a href="/sharp_fussball/">→ Tab Fußball vs. Pinnacle</a> · <a href="/">→ Dashboard</a></p>
 </body></html>"""
 
@@ -116,12 +146,24 @@ class Handler(BaseHTTPRequestHandler):
         self._send("not found", 404)
 
     def do_POST(self):  # noqa: N802
-        if self.path.rstrip("/") != "/admin/odds-key":
+        path = self.path.rstrip("/")
+        if path not in ("/admin/odds-key", "/admin/live-mode"):
             return self._send("not found", 404)
         n = int(self.headers.get("Content-Length") or 0)
         if n > 4096:
             return self._send(page("Zu viele Daten.", False), 413)
         form = urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+        if path == "/admin/live-mode":
+            mode = (form.get("mode") or [""])[0]
+            if mode not in ("off", "dry"):  # "live" cannot be switched on from here
+                return self._send(page("Dieser Modus ist nicht erlaubt.", False), 400)
+            tmp = os.path.join(DATA, "live.json.tmp")
+            os.makedirs(DATA, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"mode": mode, "ts": time.time()}, f)
+            os.replace(tmp, os.path.join(DATA, "live.json"))
+            return self._send(page("Order-Modul: " + ("aus – alle Orders werden storniert." if mode == "off"
+                                                       else "Trockenlauf – Orders werden nur protokolliert.")))
         key = (form.get("key") or [""])[0].strip()
         if not KEY_RE.match(key):
             return self._send(page("Das sieht nicht wie ein Odds-API-Key aus (16–64 Buchstaben/Ziffern).", False), 400)

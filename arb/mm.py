@@ -183,6 +183,11 @@ class MarketMaker:
         self.latency = float(sc.get("latency_s", 1.0))
         self.tick = float(sc.get("tick", 0.01))
         self._last = dict(select=-1e18, sample=None, equity=-1e18, settle=-1e18, book=-1e18)
+        self.gw = None  # order gateway (arb/orders.py): mirrors the quotes at pilot size, dry run only for now
+        if sc.get("live"):
+            from .orders import Gateway
+            self.gw = Gateway(name, self.store.db, os.path.join(data_dir, "live.json"),
+                              os.path.join(data_dir, f"live-status-{name}.json"), sc["live"])
         self.scan: dict = {}
 
     # ------------------------------------------------------------------ market choice
@@ -404,6 +409,21 @@ class MarketMaker:
                 else:
                     mk.bid_no = new
 
+    def sync_orders(self, now: float) -> None:
+        """The quotes the paper strategy holds, at pilot size (live.quote_usd, at least the reward minimum),
+        handed to the order gateway, which places/cancels/replaces – in dry run only logged."""
+        usd = float(self.sc["live"].get("quote_usd", 25))
+        want = {}
+        for mk in self.st.markets.values():
+            for tok, q, lbl in ((mk.yes, mk.bid_yes, "JA"), (mk.no, mk.bid_no, "NEIN")):
+                if q and q["size"] > 0:
+                    size = float(max(mk.min_size, math.floor(usd / q["price"])))
+                    want[tok] = (q["price"], size, f"{mk.title[:80]} – {lbl}")
+        before = sum(self.gw.counts.values())
+        self.gw.sync(now, want)
+        if sum(self.gw.counts.values()) != before:
+            self.store.commit()
+
     # ------------------------------------------------------------------ rewards
     def sample_rewards(self, now: float, books: Dict[str, OrderBook]) -> None:
         last = self._last["sample"]
@@ -460,6 +480,8 @@ class MarketMaker:
         self.process_trades(now)
         self.sample_rewards(now, books)
         self.quote(now, books)
+        if self.gw is not None:
+            self.sync_orders(now)
         if now - self._last["settle"] >= 1800:
             self._last["settle"] = now
             self.settle(now)
@@ -478,6 +500,11 @@ class MarketMaker:
 
     def _write_scan(self, now: float) -> None:
         st = self.st
+        if self.gw is not None:
+            self.scan.update({"Order-Modul": self.gw.mode, "Orders gesetzt": self.gw.counts["gesetzt"],
+                              "Orders storniert": self.gw.counts["storniert"],
+                              "Orders abgelehnt (Limits)": self.gw.counts["abgelehnt"],
+                              "Orders offen $": round(self.gw.open_usd(), 2)})
         scan = dict(self.scan, **{"Gebote aktiv": sum(bool(m.bid_yes) + bool(m.bid_no) for m in st.markets.values()),
                                   "Ausführungen": st.fills, "Spread/Auflösung $": round(st.realized, 2),
                                   "Rewards geschätzt $": round(st.rewards, 2), "Rebates $": round(st.rebates, 2),

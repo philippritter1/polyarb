@@ -303,6 +303,11 @@ scenarios:
     max_inventory_usd: 150       # einseitiger Bestand je Markt, darüber nur noch die Gegenseite
     latency_s: 1
     step_s: 2
+    live:                        # 07.10.: Order-Modul (arb/orders.py) spiegelt die Gebote in Pilot-Größe.
+      quote_usd: 15              # Modus auf /admin/: aus (Standard, Not-Aus) | Trockenlauf; echt ist gesperrt.
+      max_order_usd: 30          # harte Grenzen, unabhängig von der Strategie
+      max_market_usd: 60
+      max_total_usd: 300
   mm_neu:
     enabled: true
     title: Market Making (neue Märkte)

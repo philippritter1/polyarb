@@ -38,8 +38,18 @@ def test_dry_run_places_replaces_cancels_and_enforces_limits(tmp_path):
     gw.sync(NOW + 4, {"A": (0.47, 50, "A JA"), "C": (0.45, 60, "C JA")})  # price change -> replace; C: 24 + 27 > 50 total
     assert _actions(db) == ["place", "reject", "cancel", "place", "reject"]
     assert gw.counts == {"gesetzt": 2, "storniert": 1, "abgelehnt": 2}
+    for i in range(3):  # C still wanted, still too big: re-checked but logged only once
+        gw.sync(NOW + 5 + i * 0.1, {"A": (0.47, 50, "A JA"), "C": (0.45, 60, "C JA")})
+    assert _actions(db).count("reject") == 2 and gw.counts["abgelehnt"] == 2
+    gw.sync(NOW + 5.5, {"C": (0.45, 60, "C JA")})  # A no longer wanted: room for C, placed now
+    assert "C" in gw.orders and gw.counts["abgelehnt"] == 2
     gw.sync(NOW + 6, {})  # strategy wants nothing
     assert not gw.orders and _actions(db)[-1] == "cancel"
+    # repeated rejections already in the table are pruned on start, the first of each kept
+    db.executemany("INSERT INTO live_orders VALUES(?,?,?,?,?,?,?,?,?)",
+                   [(NOW, "dry", "reject", "B", "", 0.40, 100, "", "Order > max_order_usd")] * 5)
+    Gateway("mm", db, str(tmp_path / "live.json"), str(tmp_path / "s2.json"))
+    assert _actions(db).count("reject") == 2
     st = json.loads((tmp_path / "status.json").read_text())
     assert st["mode"] == "Trockenlauf" and st["open_orders"] == 0
 

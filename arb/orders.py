@@ -12,7 +12,9 @@ Hard limits (per scenario, config `live:`), independent of the strategy:
   max_order_usd    one order (price x size)
   max_market_usd   all orders of one token
   max_total_usd    all open orders together
-An order beyond a limit is rejected and logged, the strategy keeps running.
+An order beyond a limit is rejected and logged, the strategy keeps running. A rejection is logged and counted once
+per (token, price, size, reason): sync runs every few seconds and would otherwise re-log the same rejection each time
+(505k rows in the first day). It is still re-checked on every sync, so it is placed as soon as there is room.
 """
 from __future__ import annotations
 
@@ -54,10 +56,14 @@ class Gateway:
         self.max_total = float(lim.get("max_total_usd", 300))
         self.orders: Dict[str, dict] = {}   # key (token) -> {price, size, oid, ts}
         self.counts = {"gesetzt": 0, "storniert": 0, "abgelehnt": 0}
+        self.rejected: Dict[str, tuple] = {}  # token -> (price, size, reason) of the last logged rejection
         self._seq = 0
         self.mode = "off"
         db.execute("""CREATE TABLE IF NOT EXISTS live_orders(ts REAL, mode TEXT, action TEXT, token TEXT, label TEXT,
                       price REAL, size REAL, oid TEXT, note TEXT)""")
+        # drop the repeated rejections logged before they were deduplicated (keeps the first of each)
+        db.execute("""DELETE FROM live_orders WHERE action='reject' AND rowid NOT IN
+                      (SELECT MIN(rowid) FROM live_orders WHERE action='reject' GROUP BY token, price, size, note)""")
 
     # ------------------------------------------------------------------ helpers
     def _log(self, now: float, action: str, token: str, label: str, price: float, size: float, oid: str, note: str = ""):
@@ -78,9 +84,12 @@ class Gateway:
                "Markt > max_market_usd" if usd > self.max_market + 1e-9 else
                "gesamt > max_total_usd" if self.open_usd() + usd > self.max_total + 1e-9 else None)
         if why:
-            self.counts["abgelehnt"] += 1
-            self._log(now, "reject", token, label, price, size, "", why)
+            if self.rejected.get(token) != (price, size, why):
+                self.rejected[token] = (price, size, why)
+                self.counts["abgelehnt"] += 1
+                self._log(now, "reject", token, label, price, size, "", why)
             return
+        self.rejected.pop(token, None)
         self._seq += 1
         oid = f"{self.mode}-{self.name}-{self._seq}"
         self.orders[token] = dict(price=price, size=size, oid=oid, ts=now, label=label)
@@ -105,6 +114,8 @@ class Gateway:
                 self._cancel(now, t, "nicht mehr gewollt")
             elif abs(w[0] - self.orders[t]["price"]) > 1e-9:
                 self._cancel(now, t, f"Preis {self.orders[t]['price']:.3f} -> {w[0]:.3f}")
+        for t in [t for t in self.rejected if t not in want]:
+            del self.rejected[t]
         for t, (price, size, label) in want.items():
             if t not in self.orders and size > 0:
                 self._place(now, t, label, price, size)

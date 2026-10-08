@@ -251,6 +251,28 @@ def book_stats(b: dict, since: float) -> dict:
                 n=res[0][0] if res else 0, won=(res[0][1] or 0) if res else 0)
 
 
+def mm_trend(b: dict, now: float = None):
+    """Market making books: last 24 h vs the 24 h before – pool, our share, estimated rewards/day. None otherwise."""
+    import sqlite3
+    now = now or time.time()
+    try:
+        db = sqlite3.connect(b["db"])
+        rows = [db.execute("""SELECT AVG(pool_quoted), AVG(share_pct), AVG(rewards_per_day), COUNT(*) FROM mm_metrics
+                              WHERE ts > ? AND ts <= ?""", (now - (k + 1) * 86400, now - k * 86400)).fetchone()
+                for k in (0, 1)]
+        db.close()
+    except sqlite3.Error:
+        return None
+    cur, old = rows
+    if not cur or not cur[3]:
+        return None
+
+    def chg(i):
+        return f" ({(cur[i] / old[i] - 1) * 100:+.0f} %)" if old and old[3] and old[i] and cur[i] is not None else ""
+    return (f"MM {b['label']}: Pool {usd(cur[0] or 0)}/Tag{chg(0)} · Anteil {cur[1] or 0:.2f} %{chg(1)}"
+            f" · Rewards ~{usd(cur[2] or 0)}/Tag{chg(2)}")
+
+
 def overview(hours: float, title: str):
     """One message for all strategies: realized result in total and over the last `hours`."""
     since = time.time() - hours * 3600
@@ -269,6 +291,9 @@ def overview(hours: float, title: str):
         lines.append(f"{arrow} {x['label']}: {usd(x['real'])} ({x['real'] / x['start'] * 100:+.2f} %)"
                      f" | {hours:g}h {usd(x['delta'])}{res}")
     lines += [f"• {x['label']}: noch keine Daten" for x in stats if not x["ok"]]
+    trend = [t for t in (mm_trend(x) for x in live) if t]
+    if trend:
+        lines += ["", "Trend 24 h (Vortag):"] + trend
     push(title, "\n".join(lines), tags="bar_chart", click=URL)
 
 

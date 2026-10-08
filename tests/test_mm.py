@@ -178,3 +178,28 @@ def test_new_markets_ranked_by_expected_share(tmp_path):
                       SimClock(NOW), books=BookStore(), pool=None)
     mm2.select(NOW)
     assert list(mm2.st.markets) == ["small"] and mm2.scan["Buch zu breit"] == 1
+
+
+def test_hourly_metrics_feed_the_daily_trend_and_report(tmp_path):
+    """Pool, our share and the estimated reward rate are recorded; dashboard and report show the trend."""
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, metrics_every_s=600), Client([_m("a", "Will the Fed cut rates?", 0.50)]),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    for _ in range(8):
+        mm.clock.sleep(400)
+        mm.step()
+    rows = mm.store.db.execute("SELECT pool_selected, pool_quoted, rewards_per_day, share_pct FROM mm_metrics").fetchall()
+    assert len(rows) >= 2
+    pool, pool_q, per_day, share = rows[-1]
+    assert pool == 50 and pool_q == 50 and 0 < share < 100 and abs(per_day - 50 * share / 100) < 0.05
+    mm.store.commit()
+    from dashboard import mm_daily
+    db = str(tmp_path / "scenario-mm_rewards.sqlite")
+    day = mm_daily(db)
+    assert len(day) == 1 and day[0][1] == 50 and 0 < day[0][4] < 100 and day[0][11] == len(rows)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
+    import notify
+    line = notify.mm_trend(dict(label="MM", db=db), now=mm.clock.now())
+    assert line.startswith("MM MM: Pool $50.00/Tag") and "Anteil" in line
+    assert notify.mm_trend(dict(label="x", db=str(tmp_path / "scenario-none.sqlite"))) is None

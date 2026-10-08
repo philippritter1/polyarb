@@ -182,7 +182,13 @@ class MarketMaker:
         self.books, self.pool = books, pool
         self.latency = float(sc.get("latency_s", 1.0))
         self.tick = float(sc.get("tick", 0.01))
-        self._last = dict(select=-1e18, sample=None, equity=-1e18, settle=-1e18, book=-1e18)
+        self._last = dict(select=-1e18, sample=None, equity=-1e18, settle=-1e18, book=-1e18, metrics=self.clock.now())
+        # hourly trend of the reward business (does the pool shrink? does competition eat our share?) – only
+        # measured, it changes nothing in the trading; dashboard: "Kennzahlen je Tag", report: one line each
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_metrics(ts REAL, pool_selected REAL, pool_quoted REAL,
+            rewards_per_day REAL, share_pct REAL, realized REAL, rewards REAL, rebates REAL, inventory REAL,
+            markets INTEGER, quotes INTEGER, fills INTEGER)""")
+        self._acc = dict(dt=0.0, rew=0.0, pool_dt=0.0)
         self.gw = None  # order gateway (arb/orders.py): mirrors the quotes at pilot size, dry run only for now
         if sc.get("live"):
             from .orders import Gateway
@@ -431,6 +437,7 @@ class MarketMaker:
         if last is None:
             return
         dt = min(now - last, 600.0)
+        self._acc["dt"] += dt
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
             if not by or not bn or mk.mid is None or not (mk.bid_yes or mk.bid_no):
@@ -439,6 +446,21 @@ class MarketMaker:
             r = mk.daily_rate * share * dt / DAY
             self.st.rewards += r
             self.st.rewards_unbooked += r
+            self._acc["rew"] += r
+            self._acc["pool_dt"] += mk.daily_rate * dt
+
+    def write_metrics(self, now: float) -> None:
+        """One row per hour: the pools we quoted in, our estimated reward rate and share of those pools."""
+        a, st = self._acc, self.st
+        if a["dt"] <= 0:
+            return
+        pool_q = a["pool_dt"] / a["dt"]
+        self.store.db.execute("INSERT INTO mm_metrics VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (
+            now, float(self.scan.get("Reward-Pool $/Tag", 0) or 0), round(pool_q, 2), round(a["rew"] / a["dt"] * DAY, 2),
+            round(a["rew"] / a["pool_dt"] * DAY * 100, 3) if a["pool_dt"] > 0 else None,
+            round(st.realized, 2), round(st.rewards, 2), round(st.rebates, 2), round(st.inventory_value(), 2),
+            len(st.markets), sum(bool(m.bid_yes) + bool(m.bid_no) for m in st.markets.values()), st.fills))
+        self._acc = dict(dt=0.0, rew=0.0, pool_dt=0.0)
 
     def book_rewards(self, now: float) -> None:
         if self.st.rewards_unbooked > 0:
@@ -488,6 +510,9 @@ class MarketMaker:
         if now - self._last["equity"] >= float(sc.get("equity_every_s", 300)):
             self._last["equity"] = now
             self.book_rewards(now)
+            if now - self._last["metrics"] >= float(sc.get("metrics_every_s", 3600)):
+                self._last["metrics"] = now
+                self.write_metrics(now)
             st = self.st
             self.store.equity(now, st.equity, st.cash, st.inventory_cost(), 0.0, st.realized + st.rewards + st.rebates, None)
             self.store.commit()

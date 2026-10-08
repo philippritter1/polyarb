@@ -231,6 +231,37 @@ def _write(path: Path, text: str, encoding: str) -> None:
     os.replace(tmp, path)  # the web server never sees a half-written file
 
 
+MM_DAILY_HEADER = ["Tag", "Reward-Pool ausgewählt $/Tag", "Pool unserer Gebote $/Tag", "Rewards geschätzt $/Tag",
+                   "Anteil am Pool %", "Spread/Auflösung $ (Tag)", "Rewards $ (Tag)", "Rebates $ (Tag)", "Bestand $",
+                   "Märkte", "Ausführungen (Tag)", "Stunden"]
+
+
+def mm_daily(db_path: str) -> list:
+    """Market making trend per day from the hourly mm_metrics rows: pool size, our share, the day's result."""
+    try:
+        db = sqlite3.connect(db_path)
+        rows = db.execute("""SELECT date(ts, 'unixepoch', 'localtime'), pool_selected, pool_quoted, rewards_per_day,
+                                    share_pct, realized, rewards, rebates, inventory, markets, fills
+                             FROM mm_metrics ORDER BY ts""").fetchall()
+        db.close()
+    except sqlite3.Error:
+        return []
+    days, prev = {}, None
+    for r in rows:
+        days.setdefault(r[0], []).append(r)
+    out = []
+    for day, rs in days.items():
+        base = prev or rs[0]
+        last = rs[-1]
+        avg = lambda i: round(sum(x[i] or 0 for x in rs) / len(rs), 2)  # noqa: E731
+        shares = [x[4] for x in rs if x[4] is not None]
+        out.append([day, avg(1), avg(2), avg(3), round(sum(shares) / len(shares), 3) if shares else None,
+                    round(last[5] - base[5], 2), round(last[6] - base[6], 2), round(last[7] - base[7], 2), last[8],
+                    round(avg(9)), last[10] - base[10], len(rs)])
+        prev = last
+    return out[::-1]
+
+
 def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
           kind: str = "arb", nav: list | None = None, overview: list | None = None, scan: dict | None = None) -> str:
     data = collect(db_path, float(start_capital))
@@ -243,7 +274,11 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
             ["Markttag (UTC)", "Gelegenheiten", "gekauft $", "im Buch bis Kaufgrenze $", "bis Ask + 2 ct $",
              "bis Preisgrenze der Regel $"], [[c["day"], c["n"], c["bought"], c["slip"], c["c2"], c["band"]] for c in cap]),
             "utf-8-sig")
+    metrics = mm_daily(db_path) if kind == "mm" else []
+    if metrics:
+        _write(Path(out).with_name("kennzahlen.csv"), _csv(MM_DAILY_HEADER, metrics), "utf-8-sig")
     data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
+                metrics=metrics,
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -447,6 +482,9 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
         if (folder / "kapazitaet.csv").exists():
             files.append((p["label"], "Kapazität je Markttag: Gelegenheiten, gekauft, Geld im Orderbuch", rel + "kapazitaet.csv",
                           folder / "kapazitaet.csv", f"{slug}/kapazitaet.csv"))
+        if (folder / "kennzahlen.csv").exists():
+            files.append((p["label"], "Market Making je Tag: Pool, unser Anteil, Spread, Rewards (Trend)", rel + "kennzahlen.csv",
+                          folder / "kennzahlen.csv", f"{slug}/kennzahlen.csv"))
         if (folder / "scan.csv").exists():
             files.append((p["label"], "Letzter Scan: wo Märkte am Filter hängen bleiben", rel + "scan.csv",
                           folder / "scan.csv", f"{slug}/scan.csv"))
@@ -992,6 +1030,7 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <div id="halt"></div>
 <div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
 <div class="kpis" id="kpis"></div>
+<div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
 <div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
 <div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i>Vermögen realisiert (Start + realisierter PnL)</span></div><div id="eq"></div></div>
 <div class="grid2">
@@ -1037,6 +1076,10 @@ const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Pos
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
 if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[6]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[7][2]="Preis unter der Strategie-Grenze"}
+if(D.metrics&&D.metrics.length){
+ $("mmtbl").innerHTML=`<tr><th>Tag</th><th class="num">Pool ausgewählt</th><th class="num">Pool unserer Gebote</th><th class="num">Rewards/Tag (geschätzt)</th><th class="num">Anteil am Pool</th><th class="num">Spread/Auflösung</th><th class="num">Rewards</th><th class="num">Rebates</th><th class="num">Bestand</th><th class="num">Märkte</th><th class="num">Ausführungen</th><th class="num">Std.</th></tr>`+
+  D.metrics.map(m=>`<tr><td>${m[0]}</td><td class="num">${usd(m[1])}</td><td class="num">${usd(m[2])}</td><td class="num">${usd(m[3])}</td><td class="num">${m[4]==null?"–":fmt(m[4],2)+" %"}</td><td class="num ${m[5]>0?"pos":m[5]<0?"neg":""}">${usd(m[5])}</td><td class="num">${usd(m[6])}</td><td class="num">${usd(m[7])}</td><td class="num">${usd(m[8])}</td><td class="num">${m[9]}</td><td class="num">${m[10]}</td><td class="num">${m[11]}</td></tr>`).join("");
+ $("mmcard").style.display=""}
 if(D.capacity&&D.capacity.length){const C=D.capacity,avg=f=>C.reduce((a,c)=>a+c[f],0)/C.length;
  $("captbl").innerHTML=`<tr><th>Markttag</th><th class="num">Gelegenheiten</th><th class="num">gekauft</th><th class="num">im Buch bis Kaufgrenze</th><th class="num">bis Ask + 2 ct</th><th class="num">bis Regelgrenze</th></tr>`+
   C.map(c=>`<tr><td>${c.day}</td><td class="num">${c.n}</td><td class="num">${usd(c.bought)}</td><td class="num">${usd(c.slip)}</td><td class="num">${usd(c.c2)}</td><td class="num">${usd(c.band)}</td></tr>`).join("")+

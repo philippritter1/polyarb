@@ -4,7 +4,9 @@ Runs as polyarb on 127.0.0.1:8787 (deploy/systemd/polyarb-admin.service); Caddy 
 dashboard's basic auth. It can do exactly two things – store the Odds API key in data/secrets.env (mode 600,
 read by arb/sharp.py on every step, no restart), and switch the order gateway (arb/orders.py) between
 "off" (emergency stop) and "dry" (dry run) in data/live.json. Live trading cannot be switched on here. It never
-shows a stored key (only its last 4 characters), runs no commands and accepts nothing else. A new key is first checked against The Odds API's free /sports
+shows a stored key (only its last 4 characters) and accepts nothing else. Read-only: /admin/diag (and
+/admin/diag.json) shows service state, memory, disk and redacted log tails (deploy/diag.py – fixed read-only
+queries only, nothing can be started, stopped or changed). A new key is first checked against The Odds API's free /sports
 endpoint (costs no credit).
 """
 from __future__ import annotations
@@ -19,6 +21,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import diag  # noqa: E402
 
 DATA = os.environ.get("POLYARB_DATA", "data")
 SECRETS = os.path.join(DATA, "secrets.env")
@@ -123,27 +128,95 @@ button{{font-size:16px;padding:10px 16px}} .ok{{color:#0a7a2f}} .err{{color:#b00
 <button type="submit">Prüfen und speichern</button></form>
 <p>Wirkt ohne Neustart beim nächsten Durchlauf (alle 10 Minuten). Der Key wird nie angezeigt.</p>
 {live_section()}
-<p><a href="/sharp_fussball/">→ Tab Fußball vs. Pinnacle</a> · <a href="/">→ Dashboard</a></p>
+<p><a href="/admin/diag">→ Server-Diagnose</a> · <a href="/sharp_fussball/">→ Tab Fußball vs. Pinnacle</a> ·
+<a href="/">→ Dashboard</a></p>
 </body></html>"""
+
+
+STYLE = """<style>body{font-family:system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#111}
+table{border-collapse:collapse;font-size:14px;width:100%} td,th{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left}
+pre{background:#f4f4f4;padding:8px;overflow-x:auto;font-size:12px;white-space:pre-wrap;word-break:break-all}
+.bad{color:#b00020;font-weight:bold} a{color:#0645ad}
+@media (prefers-color-scheme: dark){body{background:#111;color:#eee} pre{background:#222} a{color:#8ab4f8}
+td,th{border-color:#333}}</style>"""
+
+
+def _head(title: str) -> str:
+    return (f'<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" '
+            f'content="width=device-width,initial-scale=1"><title>{title}</title>{STYLE}</head><body>')
+
+
+def diag_page(d: "diag.Diag") -> str:
+    s = d.summary()
+    e = html.escape
+    sy = s["system"]
+    mem = sy["mem_mb"]
+    disk = " · ".join(f"{k}: {v['free_gb']} GB frei ({v['used_pct']} % belegt)" for k, v in sy["disk"].items())
+    rows = "".join(
+        f"<tr><td><a href=\"/admin/diag/log?unit={urllib.parse.quote(u['unit'])}\">{e(u['unit'])}</a></td>"
+        f"<td class=\"{'bad' if u['unit'] in s['failed'] else ''}\">{e(u['active'])}/{e(u['sub'])}</td>"
+        f"<td>{e(str(u.get('result', '')))}</td><td>{e(str(u.get('restarts', '')))}</td>"
+        f"<td>{e(str(u.get('mem_mb') if u.get('mem_mb') is not None else ''))}</td><td>{e(str(u.get('since', '')))}</td></tr>"
+        for u in s["units"])
+    files = "".join(f"<tr><td>{e(f['file'])}</td><td>{f['mb']}</td><td>{f['age_min']}</td></tr>" for f in s["files"])
+    failed = (f'<p class="bad">Fehlgeschlagen: {e(", ".join(s["failed"]))}</p>' if s["failed"] else "<p>Keine Unit fehlgeschlagen.</p>")
+    return (_head("polyarb – Diagnose") + f"<h1>Server-Diagnose</h1><p>Stand {e(s['ts'])} · nur lesend · "
+            f'<a href="/admin/diag.json">JSON</a> · <a href="/admin/">← Einstellungen</a></p>'
+            f"<p>RAM verfügbar {mem.get('MemAvailable', '?')} von {mem.get('MemTotal', '?')} MB · Swap frei "
+            f"{mem.get('SwapFree', '?')} MB · Last {e(str(sy['load']))} ({sy['cpus']} CPUs) · läuft seit "
+            f"{sy['uptime_h']} h<br>Platte {e(disk)}</p>{failed}"
+            f"<h2>Dienste</h2><table><tr><th>Unit (→ Log)</th><th>Status</th><th>Ergebnis</th><th>Neustarts</th>"
+            f"<th>RAM MB</th><th>aktiv seit</th></tr>{rows}</table>"
+            f"<h2>Warnungen und Fehler (24 h)</h2><pre>{e(s['problems']) or '–'}</pre>"
+            f"<h2>Timer</h2><pre>{e(s['timers'])}</pre>"
+            f"<h2>Größte Dateien in data/</h2><table><tr><th>Datei</th><th>MB</th><th>geändert vor min</th></tr>{files}</table>"
+            "</body></html>")
+
+
+def log_page(d: "diag.Diag", query: str) -> str:
+    q = urllib.parse.parse_qs(query)
+    unit = (q.get("unit") or [""])[0]
+    try:
+        n = int((q.get("n") or ["80"])[0])
+    except ValueError:
+        n = 80
+    warn = (q.get("warn") or [""])[0] == "1"
+    e, qu = html.escape, urllib.parse.quote(unit)
+    return (_head("polyarb – Log") + f"<h1>Log {e(unit)}</h1><p>"
+            f'<a href="/admin/diag/log?unit={qu}&n=80">80 Zeilen</a> · <a href="/admin/diag/log?unit={qu}&n=300">300</a> · '
+            f'<a href="/admin/diag/log?unit={qu}&n=300&warn=1">nur Warnungen</a> · <a href="/admin/diag">← Diagnose</a>'
+            f"</p><pre>{e(d.logs(unit, n, warn))}</pre></body></html>")
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "polyarb-admin"
     fetch = None  # tests: replaces the key check
+    run = None    # tests: replaces systemctl/journalctl
 
-    def _send(self, body: str, code: int = 200) -> None:
+    def _send(self, body: str, code: int = 200, ctype: str = "text/html") -> None:
         data = body.encode("utf-8")
         self.send_response(code)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", f"{ctype}; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
     def do_GET(self):  # noqa: N802
-        if self.path.split("?")[0].rstrip("/") in ("/admin", ""):
+        path, _, query = self.path.partition("?")
+        path = path.rstrip("/")
+        if path in ("/admin", ""):
             return self._send(page())
+        if path == "/admin/diag":
+            return self._send(diag_page(self.diag()))
+        if path == "/admin/diag.json":
+            return self._send(json.dumps(self.diag().summary(), ensure_ascii=False, indent=1), ctype="application/json")
+        if path == "/admin/diag/log":
+            return self._send(log_page(self.diag(), query))
         self._send("not found", 404)
+
+    def diag(self) -> "diag.Diag":
+        return diag.Diag(DATA, run=self.run) if self.run else diag.Diag(DATA)
 
     def do_POST(self):  # noqa: N802
         path = self.path.rstrip("/")

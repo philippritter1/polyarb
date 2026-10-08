@@ -12,6 +12,9 @@ validieren, bevor echtes Geld (später 1–2k €) eingesetzt wird. Der Nutzer s
 - Geheimnisse liegen in `/etc/polyarb.env` auf dem Server, nie im Repo oder Chat. Den Odds-API-Key trägt der Nutzer
   über die Einstellungsseite `$POLYARB_URL/admin/` ein (`deploy/admin.py`, gleiches Passwort wie das Dashboard,
   speichert nach `data/secrets.env`, Modus 600, wirkt ohne Neustart). Die Seite kann nur das – keine Befehle.
+- Server-Diagnose ohne SSH: `$POLYARB_URL/admin/diag` bzw. `/admin/diag.json` (`deploy/diag.py`, nur lesend):
+  Dienst-Status, Neustarts, RAM/Platte, größte Dateien, Warnungen 24 h; Log je Unit unter
+  `/admin/diag/log?unit=polyarb-scenario@mm_rewards.service&n=300` (`&warn=1` nur Warnungen). Geheimnisse geschwärzt.
 
 ## Daten abholen
 Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Agent-Proxy eingefügt

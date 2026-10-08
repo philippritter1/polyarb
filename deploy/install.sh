@@ -5,6 +5,8 @@ source /etc/polyarb.env
 cd /opt/polyarb
 timedatectl set-timezone Europe/Vienna || true
 id polyarb || useradd -r -m -d /home/polyarb -s /usr/sbin/nologin polyarb
+# the diagnostics page (/admin/diag, read-only) shows the polyarb service logs: journal read access
+usermod -aG systemd-journal polyarb || true
 chgrp polyarb /etc/polyarb.env && chmod 640 /etc/polyarb.env
 [ -x .venv/bin/python ] || python3 -m venv .venv
 .venv/bin/pip install -q --disable-pip-version-check -r requirements.txt

@@ -5,6 +5,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=polyarb
+OOMScoreAdjust=-300
 WorkingDirectory=/opt/polyarb
 EnvironmentFile=/etc/polyarb.env
 ExecStart=/opt/polyarb/.venv/bin/python run.py paper

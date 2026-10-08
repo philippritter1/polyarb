@@ -691,3 +691,18 @@ def test_maker_cancels_when_the_market_leaves_the_rule_and_counts_orders_in_the_
     eng.clock.sleep(600)
     eng.step()
     assert not eng.pf.orders and not eng.pf.positions and "N1" in eng.pf.seen
+
+
+def test_dashboard_heavy_part_at_most_hourly(tmp_path):
+    """Studies + export only when the last export is older than heavy_every_s; scenario pages every run."""
+    import os
+    from dashboard import build_all
+    cfg = _cfg(tmp_path, "endgame", max_position_usd=40)
+    out = tmp_path / "www" / "index.html"
+    first = build_all(cfg, str(out))
+    exp = tmp_path / "www" / "export" / "index.html"
+    assert exp.exists() and any("study" in b for b in first)
+    again = build_all(cfg, str(out))
+    assert not any("study" in b or "export" in b for b in again) and any("endgame" in b for b in again)
+    os.utime(exp, (0, 0))  # an hour later (or after a failed export): everything again
+    assert any("export" in b for b in build_all(cfg, str(out)))

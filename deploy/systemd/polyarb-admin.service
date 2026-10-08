@@ -5,6 +5,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=polyarb
+OOMScoreAdjust=-300
 WorkingDirectory=/opt/polyarb
 ExecStart=/opt/polyarb/.venv/bin/python deploy/admin.py 8787
 Restart=always

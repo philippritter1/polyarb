@@ -11,6 +11,13 @@ chgrp polyarb /etc/polyarb.env && chmod 640 /etc/polyarb.env
 [ -x .venv/bin/python ] || python3 -m venv .venv
 .venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
 mkdir -p data /var/www/polyarb
+# 2 GB RAM and no swap: the kernel killed services (OOM, 08.10.). A 2 GB swap file absorbs the peaks.
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+swapon --show | grep -q /swapfile || swapon /swapfile || true
+echo "vm.swappiness=10" > /etc/sysctl.d/99-polyarb.conf && sysctl -q vm.swappiness=10 || true
 # Paper reset: a new value in deploy/RESET_ID archives the paper data once and the bot starts fresh
 # with its starting capital. Nothing is deleted – old data moves to data/archive-<timestamp>/.
 if [ -f deploy/RESET_ID ] && [ "$(cat deploy/RESET_ID)" != "$(cat data/.reset_id 2>/dev/null || true)" ]; then

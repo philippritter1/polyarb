@@ -301,6 +301,9 @@ def _cached_stress(study_db: str, stress_test) -> list:
     return stress
 
 
+import time as _time
+
+
 def build_all(cfg: dict, out: str) -> list:
     """Arbitrage page at `out`, every enabled scenario at <dir>/<name>/, the market study at <dir>/study/
     and the export section at <dir>/export/ – all linked by one tab bar."""
@@ -340,6 +343,15 @@ def build_all(cfg: dict, out: str) -> list:
             sc = dict(scans[p["key"]])
             sc["ts"] = datetime.fromtimestamp(sc["ts"]).strftime("%Y-%m-%d %H:%M") if sc.get("ts") else ""
             _write(p["out"].parent / "scan.csv", _csv(["Schritt", "Anzahl"], [[k, v] for k, v in sc.items()]), "utf-8-sig")
+
+    # Studies, Kalshi, weather and the export take ~10 min and up to 500 MB on the 1-CPU / 2-GB server; every
+    # 10 minutes they overlapped with the study run and the kernel killed processes (OOM, 08.10.). Scenario
+    # pages stay every run, the heavy part at most once per `dashboard.heavy_every_s` (after a failed export
+    # export/index.html is old, so the next run retries).
+    done = root / "export" / "index.html"
+    every = float((cfg.get("dashboard") or {}).get("heavy_every_s", 3300))
+    if done.exists() and _time.time() - done.stat().st_mtime < every:
+        return built
 
     from arb.backtest import stress_test
     from arb.odds import compare

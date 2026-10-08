@@ -5,6 +5,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=polyarb
+# out of memory: the kernel kills these batch jobs first, never the trading (08.10.)
+OOMScoreAdjust=500
 WorkingDirectory=/opt/polyarb
 EnvironmentFile=/etc/polyarb.env
 ExecStart=/opt/polyarb/.venv/bin/python run.py study --days 240 --max-new 3000

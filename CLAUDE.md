@@ -76,6 +76,12 @@ Aktive Kandidaten im Live-Test:
   Gebote auf JA und NEIN um die Mitte, JA+NEIN-Paare werden zu 1 $ zusammengelegt. Ertrag getrennt ausgewiesen:
   Spread/Auflösung, Rewards (geschätzt nach Polymarkets Formel, Anteil am Buch), Rebates. Ausführung über
   WebSocket-Trades: nur Trades UNTER unserem Gebot zählen. Frage: Decken Spread + Rewards die Verluste an Informierte?
+- **Bugfix 10.10. (mm_rewards/mm_neu):** bis dahin wurden auch abgewählte Märkte mit Restbestand weiter bespielt,
+  `max_markets` 15 galt also nicht (mm_neu zuletzt ~100 Märkte, Bestand 3.200 $ > Startkapital, finanziert aus
+  geschätzten Rewards). Zahlen bis 10.10. sind dadurch aufgebläht – für die Bewertung ab 10.10. getrennt auswerten.
+- **Bugfix 10.10. (sharp_fussball):** Sieg-Märkte wurden über ein gemeinsames Wort mit fremden Vereinen verknüpft
+  (Yokohama FC → Yokohama F. Marinos, Athletic Club → Charlton Athletic); 3 von 5 Käufen bis dahin falsch.
+  Jetzt muss auch der Gegner (Event-Titel „A vs. B“) passen, ohne Titel nur exakter Name.
 - Trend des Reward-Geschäfts (ab 08.10., nur gemessen): Tabelle `mm_metrics` stündlich (Pool, unser Anteil, Rewards/Tag),
   Dashboard-Karte „Kennzahlen je Tag“ + `kennzahlen.csv`, Zeile „Trend 24 h“ im 4-h-Bericht. Pool sinkt = Kürzung,
   Anteil sinkt bei gleichem Pool = Konkurrenz.

@@ -203,3 +203,26 @@ def test_hourly_metrics_feed_the_daily_trend_and_report(tmp_path):
     line = notify.mm_trend(dict(label="MM", db=db), now=mm.clock.now())
     assert line.startswith("MM MM: Pool $50.00/Tag") and "Anteil" in line
     assert notify.mm_trend(dict(label="x", db=str(tmp_path / "scenario-none.sqlite"))) is None
+
+
+def test_markets_kept_for_inventory_are_not_quoted(tmp_path):
+    """max_markets limits the quoted markets; a deselected market with inventory only waits for resolution."""
+    store = BookStore()
+    cl = Client([_m("a", "Will the Fed cut rates?", 0.50, rate=50)])
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, max_markets=1), cl, SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    _book(store, "b", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 10, NOW + 5))  # inventory in a
+    mm.clock.sleep(10)
+    mm.step()
+    assert mm.st.markets["a"].qty_yes == 10
+    cl.markets = [_m("b", "Will B happen?", 0.50, rate=500)]  # b now pays more: a is dropped from the quotes
+    mm._last["select"] = -1e18
+    for _ in range(3):
+        mm.clock.sleep(10)
+        mm.step()
+    a, b = mm.st.markets["a"], mm.st.markets["b"]
+    assert a.bid_yes is None and a.bid_no is None and a.qty_yes == 10  # kept, not quoted
+    assert b.bid_yes and b.bid_no
+    assert mm.scan["ausgewählt"] == 1 and mm.scan["nur Bestand (keine Gebote)"] == 1

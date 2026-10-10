@@ -27,7 +27,7 @@ class Client:
         m = dict(question="Will Arsenal win on 2026-09-21?", clobTokenIds=json.dumps(["AY", "AN"]),
                  outcomePrices=json.dumps([str(pm_yes), str(round(1 - pm_yes, 3))]), enableOrderBook=True,
                  endDate="2026-09-21T20:00:00Z")
-        self.pm = [{"id": "ev1", "endDate": "2026-09-21T20:00:00Z", "markets": [m]}]
+        self.pm = [{"id": "ev1", "title": "Arsenal FC vs. Chelsea FC", "endDate": "2026-09-21T20:00:00Z", "markets": [m]}]
         self.bk = {"AY": OrderBook("AY", [Level(ask - 0.01, 500)], [Level(ask, 500)]),
                    "AN": OrderBook("AN", [Level(round(1 - ask - 0.01, 3), 500)], [Level(round(1 - ask + 0.01, 3), 500)])}
 
@@ -52,8 +52,18 @@ class Client:
 def test_parse_and_link():
     m = parse_match(_event(), "soccer_epl")
     assert abs(m["p_home"] + m["p_draw"] + m["p_away"] - 1) < 1e-9 and m["p_home"] > 0.45
-    mt, p = link("Will Arsenal FC win on 2026-09-21?", None, [m])
+    mt, p = link("Will Arsenal FC win on 2026-09-21?", None, [m], title="Arsenal FC vs. Chelsea FC")
     assert p == m["p_home"]
+    assert link("Will Arsenal FC win on 2026-09-21?", None, [m])[1] == m["p_home"]  # no title: exact name only
+    # 10.10.: one shared word linked other clubs – the opponent must match too
+    y = parse_match(_event("Cerezo Osaka", "Yokohama F Marinos"), "soccer_japan_j_league")
+    assert link("Will Yokohama FC win on 2026-09-21?", None, [y], title="Yokohama FC vs. Iwaki FC") is None
+    assert link("Will Yokohama FC win on 2026-09-21?", None, [y]) is None
+    c = parse_match(_event("Charlton Athletic", "Bristol City"), "soccer_efl_champ")
+    assert link("Will Athletic Club win on 2026-09-21?", None, [c], title="Athletic Club vs. Real Oviedo") is None
+    g = parse_match(_event("Remo", "Grêmio"), "soccer_brazil_campeonato")
+    assert link("Will Grêmio Novorizontino win on 2026-09-21?", None, [g], title="Novorizontino vs. Avaí") is None
+    assert link("Will Grêmio win on 2026-09-21?", None, [g], title="Remo vs. Grêmio")[1] == g["p_away"]
     assert link("Will Chelsea FC vs. Arsenal end in a draw?", None, [m]) is None  # home/away the other way round
     assert link("Will Arsenal vs. Chelsea end in a draw?", None, [m])[1] == m["p_draw"]
     assert link("Will Arsenal Women win on 2026-09-21?", None, [m]) is None

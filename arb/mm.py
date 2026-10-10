@@ -195,6 +195,7 @@ class MarketMaker:
             self.gw = Gateway(name, self.store.db, os.path.join(data_dir, "live.json"),
                               os.path.join(data_dir, f"live-status-{name}.json"), sc["live"])
         self.scan: dict = {}
+        self.quoted: Optional[set] = None  # market ids select() chose to quote (None until the first selection)
 
     # ------------------------------------------------------------------ market choice
     def select(self, now: float) -> None:
@@ -253,15 +254,20 @@ class MarketMaker:
                                  categorize(m), fee.rate, fee.exponent)
             mk.daily_rate, mk.max_spread, mk.min_size, mk.end_ts = rate, v, size, end
             chosen[cid] = mk
+        picked = set(chosen)
         for cid in list(self.st.markets):
             if cid not in chosen:
                 mk = self.st.markets[cid]
                 mk.bid_yes = mk.bid_no = None  # no longer quoted
                 if cid in keep:
                     chosen[cid] = mk  # holds inventory: keep until resolution
+        # only the chosen ones are quoted; markets kept for their inventory just wait for resolution (until 10.10.
+        # quote() bid in every kept market too, so the book grew past max_markets: mm_neu ~100 markets)
+        self.quoted = picked
         self.st.markets = chosen
-        st["ausgewählt"] = len(chosen)
-        st["Reward-Pool $/Tag"] = round(sum(m.daily_rate for m in chosen.values()), 2)
+        st["ausgewählt"] = len(picked)
+        st["nur Bestand (keine Gebote)"] = len(chosen) - len(picked)
+        st["Reward-Pool $/Tag"] = round(sum(chosen[c].daily_rate for c in picked), 2)
         self.scan = st
         if self.pool is not None:
             self.pool.set_assets([t for m in chosen.values() for t in (m.yes, m.no)])
@@ -380,7 +386,8 @@ class MarketMaker:
         cash_free = self.st.cash - float(sc.get("cash_buffer_pct", 0.10)) * self.st.equity
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
-            if not by or not by.bids or not by.asks or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0:
+            if (self.quoted is not None and mk.cid not in self.quoted) or not by or not by.bids or not by.asks \
+                    or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0:
                 mk.bid_yes = mk.bid_no = None
                 continue
             mid = (by.best_bid + by.best_ask) / 2

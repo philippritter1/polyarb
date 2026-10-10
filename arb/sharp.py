@@ -35,6 +35,7 @@ LEAGUES = ["soccer_epl", "soccer_germany_bundesliga", "soccer_spain_la_liga", "s
            "soccer_portugal_primeira_liga"]
 WIN_RE = re.compile(r"^Will (.+) win on (\d{4}-\d{2}-\d{2})\?$")
 DRAW_RE = re.compile(r"^Will (.+) vs\.? (.+) end in a draw\?$")
+TITLE_RE = re.compile(r"^(.+?) vs\.? (.+?)(?: - .*)?$")  # Polymarket event title "Home vs. Away"
 
 
 class OddsFeed:
@@ -134,8 +135,14 @@ def parse_match(ev: dict, league: str) -> Optional[dict]:
     return None
 
 
-def link(question: str, end_ts: Optional[float], matches: List[dict], min_score: float = 0.85):
-    """(match, probability that YES wins) for "Will X win on DATE?" / "Will A vs. B end in a draw?"."""
+def link(question: str, end_ts: Optional[float], matches: List[dict], min_score: float = 0.85, title: str = ""):
+    """(match, probability that YES wins) for "Will X win on DATE?" / "Will A vs. B end in a draw?".
+
+    A win market is linked only if the OPPONENT matches too (from the event title "A vs. B"): one team name alone
+    linked other clubs ("Yokohama FC" -> Yokohama F. Marinos, "Athletic Club" -> Charlton Athletic, 10.10.).
+    Without a usable title only an exact name match counts."""
+    t = TITLE_RE.match(title or "")
+    pair = (t.group(1), t.group(2)) if t else None
     if OTHER_TEAM.search(question or ""):
         return None
     m_win, m_draw = WIN_RE.match(question or ""), DRAW_RE.match(question or "")
@@ -145,9 +152,14 @@ def link(question: str, end_ts: Optional[float], matches: List[dict], min_score:
         if m_win:
             if abs((datetime.strptime(m_win.group(2), "%Y-%m-%d") - datetime.strptime(day, "%Y-%m-%d")).days) > 1:
                 continue
+            if pair:
+                fit = max(min(similar(pair[0], mt["home"]), similar(pair[1], mt["away"])),
+                          min(similar(pair[1], mt["home"]), similar(pair[0], mt["away"])))
+                if fit < min_score:
+                    continue  # the other team is a different club: another game
             for team, p in ((mt["home"], mt["p_home"]), (mt["away"], mt["p_away"])):
                 s = similar(m_win.group(1), team)
-                if s >= min_score and (best is None or s > best[0]):
+                if s >= (min_score if pair else 1.0) and (best is None or s > best[0]):
                     best = (s, mt, p)
         elif m_draw:
             if end_ts and abs(end_ts - mt["start"]) > 2 * 86400:
@@ -222,7 +234,8 @@ class SharpStrategy(Strategy):
             for m in ev.get("markets") or []:
                 if m.get("closed") or not m.get("enableOrderBook") or not m.get("acceptingOrders", True):
                     continue
-                hit = link(m.get("question") or "", _parse_ts(m.get("endDate") or ev.get("endDate")), matches)
+                hit = link(m.get("question") or "", _parse_ts(m.get("endDate") or ev.get("endDate")), matches,
+                           title=ev.get("title") or "")
                 if not hit:
                     continue
                 st["verknüpft"] = st.get("verknüpft", 0) + 1

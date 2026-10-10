@@ -731,3 +731,7 @@ def test_wind_down_buys_nothing_but_still_settles_and_archive_keeps_the_page(tmp
     built = build_all(cfg, str(tmp_path / "www" / "index.html"))
     assert any("endgame" in b for b in built)
     assert "(beendet)" in (tmp_path / "www" / "endgame" / "index.html").read_text(encoding="utf-8")
+    archive = (tmp_path / "www" / "archiv" / "index.html").read_text(encoding="utf-8")
+    assert "../endgame/" in archive and "Archiv (1)" in archive
+    root = (tmp_path / "www" / "index.html").read_text(encoding="utf-8")
+    assert '"href": "endgame/"' not in root and "Archiv (1)" in root  # out of the tab bar and the overview

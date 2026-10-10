@@ -349,21 +349,37 @@ def build_all(cfg: dict, out: str) -> list:
                   title="Polymarket Arbitrage – Paper Trading")]
     for name, sc in (cfg.get("scenarios") or {}).items():
         if sc.get("enabled") or sc.get("archive"):  # archive: stopped, page and export stay
-            done = sc.get("wind_down") or not sc.get("enabled")
-            pages.append(dict(key=name, label=sc.get("title", name) + (" (beendet)" if done else ""), db=str(data_dir / f"scenario-{name}.sqlite"),
+            done = bool(sc.get("wind_down") or not sc.get("enabled"))
+            pages.append(dict(key=name, label=sc.get("title", name) + (" (beendet)" if done else ""), done=done, db=str(data_dir / f"scenario-{name}.sqlite"),
                               kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
     extra = [("study", "Studie"), ("wxobs", "Wetter-Messwerte"), ("kalshi", "Kalshi"), ("export", "Export")]
 
+    archived = [p for p in pages if p.get("done")]
+    if archived:  # finished scenarios leave the tab bar (10.10.): one "Archiv" tab lists them
+        extra = extra + [("archiv", f"Archiv ({len(archived)})")]
+
     def nav_for(active: str) -> list:
         up = "../" if active else ""  # every page except the arbitrage one lives one folder down
         nav = [dict(label=q["label"], href=up + q["key"] + "/" if q["key"] else up or "./",
                     ret=rets[q["key"]]["ret"], real=rets[q["key"]]["real_ret"], active=q["key"] == active)
-               for q in pages]
+               for q in pages if not q.get("done") or q["key"] == active]
         return nav + [dict(label=l, href=up + k + "/", ret=None, active=k == active) for k, l in extra]
 
-    overview = [dict(rets[p["key"]], label=p["label"], href=(p["key"] + "/") if p["key"] else "./") for p in pages]
+    overview = [dict(rets[p["key"]], label=p["label"], href=(p["key"] + "/") if p["key"] else "./")
+                for p in pages if not p.get("done")]
+    if archived:
+        rows = "".join(
+            f'<div class="dl"><div><div><a href="../{p["key"]}/">{html.escape(p["label"])}</a></div>'
+            f'<div class="m">Equity {_de(rets[p["key"]]["equity"], 2)} $ · realisiert {_de(rets[p["key"]]["real"], 2)} $ · '
+            f'{rets[p["key"]]["won"]} von {rets[p["key"]]["n"]} gewonnen · offen {rets[p["key"]]["open"]}</div></div>'
+            f'<span class="{"pos" if rets[p["key"]]["ret"] > 0 else "neg"}">{_de(rets[p["key"]]["ret"] * 100)} %</span></div>'
+            for p in archived)
+        (root / "archiv").mkdir(parents=True, exist_ok=True)
+        _write(root / "archiv" / "index.html", _page("Archiv: beendete Szenarien", nav_for("archiv"),
+               '<p class="sub">Widerlegt und beendet – keine neuen Käufe, offene Positionen laufen noch aus. '
+               'Seiten und Export bleiben erhalten.</p><div class="card">' + rows + "</div>"), "utf-8")
     def scan_of(p: dict) -> dict:
         try:
             return json.loads((data_dir / f"scenario-{p['key']}.scan.json").read_text("utf-8")) if p["key"] else {}

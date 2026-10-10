@@ -509,7 +509,8 @@ class ScenarioEngine:
     def step(self) -> None:
         now = self.clock.now()
         try:
-            signals = self.strategy.candidates(now)
+            # wind_down: the scenario is finished – no new entries, open positions are still settled
+            signals = [] if self.sc.get("wind_down") else self.strategy.candidates(now)
         except Exception as e:  # noqa
             log.error("%s: candidates failed (%s: %s)", self.name, type(e).__name__, e)
             signals = []

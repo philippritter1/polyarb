@@ -64,6 +64,11 @@ Saubere Stichprobe (Auswertung 06.10., PM Aug–Okt n≈82k, Kalshi 14.9.–6.10
 - Live-Wetter kauft praktisch immer ~11,5 h vor Ende (beim Eintritt ins 12-h-Fenster, 2 Uhr MESZ), die Studie
   misst bei 6 h – live testet also einen anderen Zeitpunkt als die Studie.
 
+Beendet (10.10., Nutzer-Entscheidung): `fussball_dog`, `wetter_no_breit`, `wetter_no_mess`, `wetter_no_streng`
+mit `wind_down: true` – keine neuen Käufe, offene Positionen werden noch abgerechnet. Danach `enabled: false` +
+`archive: true` (Dienst gestoppt, Seite und Export bleiben). Kontrollgruppen `weather_no`, `mlb_spread`, `ladder`
+laufen weiter, ebenso `wetter_no_maker` (live ≈ 0, Treffer ≈ Preis).
+
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
   max. 1.000 $/Tag. Studie +8,2 % (OOS +5,8 %); Stations-Filter streng +10,7 % (n≈5.200) – beides mit dem

@@ -706,3 +706,28 @@ def test_dashboard_heavy_part_at_most_hourly(tmp_path):
     assert not any("study" in b or "export" in b for b in again) and any("endgame" in b for b in again)
     os.utime(exp, (0, 0))  # an hour later (or after a failed export): everything again
     assert any("export" in b for b in build_all(cfg, str(out)))
+
+
+def test_wind_down_buys_nothing_but_still_settles_and_archive_keeps_the_page(tmp_path):
+    from dashboard import build_all
+    m = _market("c1", "Will X happen?", ["0.97", "0.03"], ["Y1", "N1"])
+    cl = FakeClient(markets=[m], books={"Y1": ob("Y1", [(0.96, 500)], [(0.97, 200)])}, resolutions={"Y1": 1.0})
+    cfg = _cfg(tmp_path, "endgame", max_position_usd=40)
+    clock = SimClock(NOW)
+    eng = ScenarioEngine("endgame", cfg, cl, clock)
+    eng.step()
+    assert eng.pf.positions  # bought while running
+    cfg["scenarios"]["endgame"]["wind_down"] = True
+    eng2 = ScenarioEngine("endgame", cfg, cl, clock)
+    clock.t = NOW + 86_400
+    eng2.step()
+    assert not eng2.pf.positions  # the open one was settled ...
+    m2 = _market("c2", "Will Y happen?", ["0.97", "0.03"], ["Y2", "N2"])
+    cl.data["/markets"].append(m2)
+    cl.bk["Y2"] = ob("Y2", [(0.96, 500)], [(0.97, 200)])
+    eng2.step()
+    assert not eng2.pf.positions  # ... and nothing new is bought
+    cfg["scenarios"]["endgame"].update(enabled=False, archive=True)
+    built = build_all(cfg, str(tmp_path / "www" / "index.html"))
+    assert any("endgame" in b for b in built)
+    assert "(beendet)" in (tmp_path / "www" / "endgame" / "index.html").read_text(encoding="utf-8")

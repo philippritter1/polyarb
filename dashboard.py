@@ -348,8 +348,9 @@ def build_all(cfg: dict, out: str) -> list:
                   start=float(cfg["portfolio"]["starting_capital_usd"]), out=Path(out),
                   title="Polymarket Arbitrage – Paper Trading")]
     for name, sc in (cfg.get("scenarios") or {}).items():
-        if sc.get("enabled"):
-            pages.append(dict(key=name, label=sc.get("title", name), db=str(data_dir / f"scenario-{name}.sqlite"),
+        if sc.get("enabled") or sc.get("archive"):  # archive: stopped, page and export stay
+            done = sc.get("wind_down") or not sc.get("enabled")
+            pages.append(dict(key=name, label=sc.get("title", name) + (" (beendet)" if done else ""), db=str(data_dir / f"scenario-{name}.sqlite"),
                               kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}

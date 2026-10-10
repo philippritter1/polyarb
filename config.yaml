@@ -149,6 +149,7 @@ scenarios:
   # Festgeschrieben – nicht nachjustieren, sondern nach 4-6 Wochen nur die Live-Zahlen bewerten.
   fussball_dog:
     enabled: true
+    wind_down: true              # 10.10.: widerlegt – keine neuen Käufe, offene Positionen laufen aus
     title: Fußball-Außenseiter
     strategy: band               # Studie: +14,5 % nach Kosten; neue Daten (Anfang Juli, WM-Zeit) -18 % -> ungeklärt
     category: Sport
@@ -172,6 +173,7 @@ scenarios:
     max_open_positions: 150
   wetter_no_breit:
     enabled: true
+    wind_down: true              # 10.10.: widerlegt – keine neuen Käufe, offene Positionen laufen aus
     title: Wetter-NO breit
     strategy: band               # Studie: JA-Buckets sind durchweg zu teuer; NO 55-97 % unter 5k $: +8,4 %, neue Daten +5,8 %
     category: Wetter
@@ -196,6 +198,7 @@ scenarios:
     max_open_positions: 200
   wetter_no_mess:
     enabled: true
+    wind_down: true              # 10.10.: widerlegt – keine neuen Käufe, offene Positionen laufen aus
     title: Wetter-NO + Messwerte
     strategy: band               # Studie: JA-Buckets sind durchweg zu teuer; NO 55-97 % unter 5k $: +8,4 %, neue Daten +5,8 %
     category: Wetter
@@ -224,6 +227,7 @@ scenarios:
     max_open_positions: 200
   wetter_no_streng:
     enabled: true
+    wind_down: true              # 10.10.: widerlegt – keine neuen Käufe, offene Positionen laufen aus
     title: Wetter-NO streng
     strategy: band               # Studie: JA-Buckets sind durchweg zu teuer; NO 55-97 % unter 5k $: +8,4 %, neue Daten +5,8 %
     category: Wetter

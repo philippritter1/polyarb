@@ -134,7 +134,9 @@ class WxObsStudy:
         self.study_db = study_db
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(db_path)
+        # WAL: the dashboard export reads for minutes while this run writes ("database is locked", 10.10.)
+        self.db = sqlite3.connect(db_path, timeout=300)
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         if "note" not in [r[1] for r in self.db.execute("PRAGMA table_info(wx_city)")]:
             self.db.execute("ALTER TABLE wx_city ADD COLUMN note TEXT")

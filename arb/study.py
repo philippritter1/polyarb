@@ -233,7 +233,9 @@ class Study:
     def __init__(self, client, db_path: str):
         self.client = client
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(db_path)
+        # WAL: the dashboard export reads for minutes while this run writes ("database is locked", 10.10.)
+        self.db = sqlite3.connect(db_path, timeout=300)
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         migrate(self.db)
         fix_categories(self.db)

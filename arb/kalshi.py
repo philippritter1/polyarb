@@ -190,7 +190,9 @@ class KalshiStudy:
     def __init__(self, client, db_path: str, base: str = BASE):
         self.client, self.base = client, base.rstrip("/")
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(db_path)
+        # WAL: the dashboard export reads for minutes while this run writes ("database is locked", 10.10.)
+        self.db = sqlite3.connect(db_path, timeout=300)
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         have = {r[1] for r in self.db.execute("PRAGMA table_info(kalshi_markets)")}
         for name, typ in V2_COLUMNS:

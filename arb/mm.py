@@ -230,6 +230,9 @@ class MarketMaker:
                 why = "endet zu bald"
             elif categorize(m) in skip:
                 why = "Kategorie ausgelassen"
+            elif sc.get("max_min_size_usd") and size * max(float(prices[0]), 1 - float(prices[0])) \
+                    > float(sc["max_min_size_usd"]):
+                why = "Mindestgröße zu groß"  # small quotes would not qualify for rewards there
             elif not lo <= float(prices[0]) <= hi:
                 why = "Preis zu extrem"
             elif max_age and (_parse_ts(m.get("startDate") or m.get("createdAt")) or 0) < now - float(max_age) * DAY:
@@ -383,6 +386,10 @@ class MarketMaker:
         usd = float(sc.get("quote_usd", 50))          # per side
         max_inv = float(sc.get("max_inventory_usd", 150))
         stop_h = float(sc.get("stop_hours_before_end", 24)) * 3600
+        cap = sc.get("max_total_inventory_usd")   # all markets together: beyond it only bids that reduce a position
+        over = bool(cap) and self.st.inventory_cost() >= float(cap)
+        if cap:
+            self.scan["Bestandsgrenze erreicht"] = int(over)
         cash_free = self.st.cash - float(sc.get("cash_buffer_pct", 0.10)) * self.st.equity
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
@@ -405,7 +412,8 @@ class MarketMaker:
             for side, price in (("yes", want_yes), ("no", want_no)):
                 cur = mk.bid_yes if side == "yes" else mk.bid_no
                 long_this = (side == "yes" and mk.qty_yes > mk.qty_no) or (side == "no" and mk.qty_no > mk.qty_yes)
-                if price < self.tick or (long_this and abs(net) >= max_inv):
+                short_this = (side == "yes" and mk.qty_yes < mk.qty_no) or (side == "no" and mk.qty_no < mk.qty_yes)
+                if price < self.tick or (long_this and abs(net) >= max_inv) or (over and not short_this):
                     new = None  # skew: stop buying the side we already hold too much of
                 else:
                     size = max(mk.min_size, math.floor(usd / price))

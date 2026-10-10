@@ -226,3 +226,21 @@ def test_markets_kept_for_inventory_are_not_quoted(tmp_path):
     assert a.bid_yes is None and a.bid_no is None and a.qty_yes == 10  # kept, not quoted
     assert b.bid_yes and b.bid_no
     assert mm.scan["ausgewählt"] == 1 and mm.scan["nur Bestand (keine Gebote)"] == 1
+
+
+def test_breit_skips_large_min_sizes_and_caps_total_inventory(tmp_path):
+    """mm_breit: no market whose reward minimum is too big for small quotes; past the total inventory cap only
+    bids that reduce a position."""
+    store = BookStore()
+    ms = [_m("a", "Will A happen?", 0.50), dict(_m("b", "Will B happen?", 0.50), rewardsMinSize=200)]
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, max_min_size_usd=25, max_total_inventory_usd=5), Client(ms),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    assert list(mm.st.markets) == ["a"] and mm.scan["Mindestgröße zu groß"] == 1
+    store.trades.append(("aY", 0.47, 20, NOW + 5))  # 20 YES at 0.48 = 9.60 $ > cap 5
+    mm.clock.sleep(10)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.qty_yes == 20 and mk.bid_yes is None and mk.bid_no is not None  # only the side that merges it away
+    assert mm.scan["Bestandsgrenze erreicht"] == 1

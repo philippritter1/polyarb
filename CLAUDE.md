@@ -87,6 +87,9 @@ Aktive Kandidaten im Live-Test:
   Anteil sinkt bei gleichem Pool = Konkurrenz.
 - `mm_neu` (ab 07.10.): wie `mm_rewards`, aber nur Märkte < 3 Tage alt und Auswahl nach erwartetem Reward
   (Pool × unser Anteil gegen die Gebote im Buch, `rank: share`). Recherche: frühe Märkte zahlen am meisten Rewards.
+- `mm_breit` (ab 10.10.): wie `mm_rewards`, aber 40 Märkte nach erwartetem Reward (`rank: share`), 20 $ je Gebot,
+  nur Märkte mit Reward-Mindestgröße ≤ 25 $ (`max_min_size_usd`), Bestand gesamt max. 1.500 $
+  (`max_total_inventory_usd`, darüber nur Gebote, die Positionen abbauen). Frage: breit + klein besser als 15 groß?
 - `sharp_fussball` (ab 06.10., `arb/sharp.py`): kauft Polymarket-Fußball (Sieg/Remis), wenn der Ask ≥ 5 Punkte unter
   Pinnacles Wahrscheinlichkeit liegt (live über The Odds API, Gratis-Plan 500 Credits/Monat, Key über `/admin/`
   oder `ODDS_API_KEY` in `/etc/polyarb.env`, Verbrauch in `data/odds-api.json`). Ohne Key passiert nichts.

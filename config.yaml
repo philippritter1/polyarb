@@ -308,6 +308,31 @@ scenarios:
       max_order_usd: 30          # harte Grenzen, unabhängig von der Strategie
       max_market_usd: 60
       max_total_usd: 300
+  mm_breit:
+    enabled: true
+    title: Market Making (breit)
+    strategy: mm                 # 10.10.: wie mm_rewards, aber breit und kontrolliert – Frage: bringen viele Märkte
+    # mit kleinen Geboten mehr als wenige große? (Anlass: der Fehler bis 10.10. ließ mm_neu ungewollt ~100 Märkte
+    # bespielen.) Auswahl nach ERWARTETEM Reward, nur Märkte, deren Reward-Mindestgröße zu kleinen Geboten passt,
+    # und eine feste Grenze für den Bestand über alle Märkte.
+    capital_usd: 2500
+    max_markets: 40
+    rank: share
+    prefilter: 120               # so viele Kandidaten (größte Pools) werden per Orderbuch bewertet
+    max_min_size_usd: 25         # Mindestgröße x Preis darüber: kleine Gebote zählen dort nicht für Rewards
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    min_liquidity: 1000
+    quote_frac: 0.5
+    quote_usd: 20                # je Gebot (mindestens die Reward-Mindestgröße)
+    max_inventory_usd: 60        # einseitiger Bestand je Markt
+    max_total_inventory_usd: 1500  # Bestand über alle Märkte; darüber nur noch Gebote, die Positionen abbauen
+    latency_s: 1
+    step_s: 2
   mm_neu:
     enabled: true
     title: Market Making (neue Märkte)

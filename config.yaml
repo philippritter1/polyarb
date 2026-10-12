@@ -73,7 +73,7 @@ storage:
   db_path: data/polyarb.sqlite
 
 notify:
-  scenario: wetter_no_breit    # Alarme (Stillstand, Kill-Switch) für dieses Szenario; der 4-h-Bericht umfasst alle
+  scenario: mm_rewards         # Alarme (Stillstand, Kill-Switch) für dieses Szenario; der 4-h-Bericht umfasst alle
 
 api:
   gamma_url: https://gamma-api.polymarket.com

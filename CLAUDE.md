@@ -65,8 +65,8 @@ Saubere Stichprobe (Auswertung 06.10., PM Aug–Okt n≈82k, Kalshi 14.9.–6.10
   misst bei 6 h – live testet also einen anderen Zeitpunkt als die Studie.
 
 Beendet (10.10., Nutzer-Entscheidung): `fussball_dog`, `wetter_no_breit`, `wetter_no_mess`, `wetter_no_streng`
-mit `wind_down: true` – keine neuen Käufe, offene Positionen werden noch abgerechnet. Danach `enabled: false` +
-`archive: true` (Dienst gestoppt, Seite und Export bleiben). Kontrollgruppen `weather_no`, `mlb_spread`, `ladder`
+mit `wind_down: true` ausgelaufen, seit 12.10. `enabled: false` + `archive: true` (Dienst gestoppt, Seite und
+Export bleiben, Reiter „Archiv“). Endstand: fussball_dog −37,7 %, breit −19,6 %, mess −13,1 %, streng −14,8 %. Kontrollgruppen `weather_no`, `mlb_spread`, `ladder`
 laufen weiter, ebenso `wetter_no_maker` (live ≈ 0, Treffer ≈ Preis).
 
 Aktive Kandidaten im Live-Test:

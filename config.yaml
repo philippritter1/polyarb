@@ -364,6 +364,30 @@ scenarios:
     max_inventory_usd: 150
     latency_s: 1
     step_s: 2
+  mm_neu2:
+    enabled: true
+    title: Market Making (neue Märkte 2)
+    strategy: mm                 # 12.10.: wie mm_neu, frisch gestartet – mm_neu ist durch den Fehler bis 10.10.
+    # mit ~3.800 $ Altbestand blockiert (kaum Cash für Gebote) und läuft daneben weiter. Neu: Bestandsgrenze
+    # über alle Märkte (Lehre aus dem Fehler), damit das Kapital nicht wieder festsitzt.
+    max_age_days: 3
+    rank: share
+    prefilter: 60
+    min_liquidity: 0
+    capital_usd: 2500
+    max_markets: 15
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500  # Bestand über alle Märkte; darüber nur noch Gebote, die Positionen abbauen
+    latency_s: 1
+    step_s: 2
   sharp_fussball:
     enabled: true
     title: Fußball vs. Pinnacle

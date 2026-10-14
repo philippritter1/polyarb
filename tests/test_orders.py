@@ -237,3 +237,13 @@ def test_exchange_helpers_without_network(tmp_path):
         raise OSError
     assert geoblock(boom)["blocked"] is None and account_value("0x1", boom) is None
     assert account_value("0x1", lambda *a, **k: [{"user": "0x1", "value": 12.5}]) == 12.5
+
+
+def test_no_scenario_is_released_for_real_orders_by_accident():
+    """allow_real is the owner's decision after the pilot review – changing it must change this test too."""
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8"))
+    released = [n for n, sc in cfg["scenarios"].items() if (sc.get("live") or {}).get("allow_real")]
+    assert released == []
+    pilot = cfg["scenarios"]["mm_pilot"]
+    assert pilot["live"]["quote_usd"] == pilot["quote_usd"] and pilot["live"]["max_daily_loss_usd"] <= 50

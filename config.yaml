@@ -414,6 +414,40 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_pilot:
+    enabled: true
+    title: Market Making (Pilot)
+    strategy: mm                 # 14.10.: Pilot für echtes Geld – Logik wie mm_breit, in genau der Pilotgröße, damit
+    # Simulation und echte Orders 1:1 vergleichbar sind; mit Bestandsabbau. Echte Orders erst, wenn allow_real
+    # (unten) per Commit freigegeben ist, eine Wallet auf /admin/ steht und dort "Echt" gewählt ist.
+    capital_usd: 300
+    max_markets: 10
+    rank: share
+    prefilter: 120
+    max_min_size_usd: 15         # nur Märkte, in denen 15-$-Gebote für Rewards zählen
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    min_liquidity: 1000
+    quote_frac: 0.5
+    quote_usd: 15
+    max_inventory_usd: 40        # einseitiger Bestand je Markt
+    max_total_inventory_usd: 150
+    exit:
+      after_h: 24
+      dump_after_h: 96
+    latency_s: 1
+    step_s: 2
+    live:
+      allow_real: false          # Freigabe für echte Orders – erst nach der Pilot-Entscheidung
+      quote_usd: 15              # = quote_usd oben: echte Orders gleich groß wie die simulierten
+      max_order_usd: 20
+      max_market_usd: 20
+      max_total_usd: 300
+      max_daily_loss_usd: 30     # Kontowert fällt an einem Tag um mehr: Not-Aus für alles
   sharp_fussball:
     enabled: true
     title: Fußball vs. Pinnacle

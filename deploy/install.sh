@@ -10,6 +10,8 @@ usermod -aG systemd-journal polyarb || true
 chgrp polyarb /etc/polyarb.env && chmod 640 /etc/polyarb.env
 [ -x .venv/bin/python ] || python3 -m venv .venv
 .venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
+# Polymarket client for real orders (pilot); optional – the paper bot runs without it
+.venv/bin/pip install -q --disable-pip-version-check -r requirements-live.txt || echo "py-clob-client nicht installiert – echte Orders nicht möglich" >&2
 mkdir -p data /var/www/polyarb
 # 2 GB RAM and no swap: the kernel killed services (OOM, 08.10.). A 2 GB swap file absorbs the peaks.
 if [ ! -f /swapfile ]; then

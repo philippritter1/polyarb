@@ -32,8 +32,13 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
 - `arb/backtest.py` – Regeln/Stresstest auf den Studiendaten
 - `arb/wxobs.py` – Wetter-Messwert-Studie (METAR-Stationen) und `LiveObs` für den Stations-Filter
 - `arb/mm.py` – Market-Making-Simulation mit Rewards (Strategie `mm`)
-- `arb/orders.py` – Order-Modul: aus / Trockenlauf (echt noch nicht gebaut). Schalter `data/live.json` über `/admin/`,
-  harte Grenzen je Szenario (`live:` in config.yaml), Protokoll in Tabelle `live_orders`, Status `data/live-status-*.json`
+- `arb/orders.py` – Order-Modul: aus / Trockenlauf / echt. Schalter `data/live.json` über `/admin/`, harte Grenzen je
+  Szenario (`live:` in config.yaml), Protokoll `live_orders`, Fills `live_fills`, gezahlte Rewards `live_rewards`,
+  Status `data/live-status-*.json`. Echt NUR wenn: Admin-Schalter „Echt“ + `live: allow_real: true` (Commit) + Wallet
+  in `data/secrets.env` + Geoblock frei + Tagesverlust-Limit (`max_daily_loss_usd`) nicht erreicht; sonst Trockenlauf.
+- `arb/exchange.py` – Polymarket-Anbindung (py-clob-client aus `requirements-live.txt`, optional installiert): Post-only-
+  Limitorders, Storno, offene Orders, Fills, Guthaben, Reward-Scoring, gezahlte Rewards, Geoblock, Kontowert.
+  Wallet (POLY_PRIVATE_KEY/POLY_FUNDER/POLY_SIG_TYPE) trägt der Nutzer auf `/admin/` ein, nie im Chat/Repo.
 - `arb/sharp.py` – Pinnacle-Quoten (The Odds API) vs. Polymarket-Fußball (Strategie `sharp`)
 - `arb/kalshi.py` – Kalshi-Studie; `arb/ladder.py` + `arb/scanner.py` – Arbitrage
 - `dashboard.py` – statisches Dashboard + Exporte; `deploy/notify.py` – 4-h-Bericht per Push
@@ -98,6 +103,8 @@ Aktive Kandidaten im Live-Test:
 - `mm_abbau` (ab 14.10.): wie `mm_neu2`, plus aktiver Bestandsabbau (`exit:` in arb/mm.py): einseitige Position
   älter als 24 h bekommt ein Verkaufsgebot zur Mitte + Abstand (gefüllt nur durch Trades darüber), nach 96 h Verkauf
   zum Bid (Taker-Gebühr). Frage: Verluste früh begrenzen und Kapital fürs Bieten freihalten vs. auf Auflösung warten.
+- `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
+  (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_breit` (ab 10.10.): wie `mm_rewards`, aber 40 Märkte nach erwartetem Reward (`rank: share`), 20 $ je Gebot,
   nur Märkte mit Reward-Mindestgröße ≤ 25 $ (`max_min_size_usd`), Bestand gesamt max. 1.500 $
   (`max_total_inventory_usd`, darüber nur Gebote, die Positionen abbauen). Frage: breit + klein besser als 15 groß?

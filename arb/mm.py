@@ -546,10 +546,16 @@ class MarketMaker:
         usd = float(self.sc["live"].get("quote_usd", 25))
         scale = usd / float(self.sc.get("quote_usd", 50))
         want = {}
+        # live: all resting buys together must be covered by the real cash (the exchange refuses the rest anyway)
+        budget = self.st.cash if self.gw.live else float("inf")
         for mk in self.st.markets.values():
             for tok, q, lbl in ((mk.yes, mk.bid_yes, "JA"), (mk.no, mk.bid_no, "NEIN")):
                 if q and q["size"] > 0:
                     size = float(max(mk.min_size, math.floor(usd / q["price"])))
+                    if q["price"] * size > budget + 1e-9:
+                        self.scan["Gebote ohne Cash (echt)"] = self.scan.get("Gebote ohne Cash (echt)", 0) + 1
+                        continue
+                    budget -= q["price"] * size
                     want[(tok, "BUY")] = (q["price"], size, f"{mk.title[:80]} – {lbl}")
             a = mk.ask
             if a and a["size"] > 0:  # inventory exit: the sell order, scaled like the bids
@@ -704,6 +710,7 @@ class MarketMaker:
                     log.info("%s: code updated on disk – exiting for restart", self.name)
                     return
         finally:
+            self.store.commit()  # with the state: the cursor of real fills already applied (else applied twice)
             self.st.save(self.state_path)
             if self.pool is not None:
                 self.pool.stop()

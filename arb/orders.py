@@ -77,6 +77,8 @@ class Gateway:
         self.orders: Dict[Key, dict] = {}   # (token, side) -> {price, size, oid, ts, label}
         self.counts = {"gesetzt": 0, "storniert": 0, "abgelehnt": 0}
         self.rejected: Dict[Key, tuple] = {}  # last logged rejection per order
+        self.retry_s = float(lim.get("retry_after_reject_s", 60))
+        self._ex_reject: Dict[Key, float] = {}  # when the exchange last refused this order: no retry before retry_s
         self._seq = 0
         self.mode = "off"
         self.live = False
@@ -149,10 +151,14 @@ class Gateway:
         if why:
             return self._reject(now, key, label, price, size, why)
         if self.live:
+            if now - self._ex_reject.get(key, -1e18) < self.retry_s:
+                return  # refused a moment ago (balance, post-only would cross, ...): do not hammer the exchange
             try:
                 oid = self.exchange.place(key[0], key[1], price, size)
             except Exception as e:  # noqa – the exchange said no (post-only would cross, balance, tick, ...)
+                self._ex_reject[key] = now
                 return self._reject(now, key, label, price, size, f"Börse: {str(e)[:100] or type(e).__name__}")
+            self._ex_reject.pop(key, None)
         else:
             self._seq += 1
             oid = f"dry-{self.name}-{self._seq}"

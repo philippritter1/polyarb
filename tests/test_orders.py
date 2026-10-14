@@ -219,7 +219,7 @@ def test_exchange_rejection_is_logged_once_and_daily_loss_switches_everything_of
     rej = db.execute("SELECT note FROM live_orders WHERE action='reject'").fetchall()
     assert rej == [("Börse: order crosses book",)] and gw.counts["abgelehnt"] == 1
     ex.fail = None
-    gw.sync(NOW + 3, {("A", "BUY"): (0.48, 50, "A JA")})
+    gw.sync(NOW + 63, {("A", "BUY"): (0.48, 50, "A JA")})  # retried only after a minute
     assert ("A", "BUY") in gw.orders
     # cash falls by 25 $ (> 20 $ limit) within the day: off for everyone, all cancelled at the exchange
     ex.cash = 275.0
@@ -458,3 +458,31 @@ def test_reward_live_reads_polymarkets_share_and_earnings():
     ex = PolyExchange.__new__(PolyExchange)
     ex._c = C()
     assert ex.reward_live("2026-10-14") == {"c1": {"pct": 1.5, "earned": 0.15}, "c3": {"earned": 0.2}}
+
+
+def test_exchange_refusal_is_not_retried_for_a_minute(tmp_path):
+    ex = FakeExchange(fail="not enough balance / allowance")
+    gw, _ = _live(tmp_path, ex)
+    for i in range(10):  # every 2 s, like the strategy loop
+        gw.sync(NOW + 2 * i, {("A", "BUY"): (0.31, 20, "A JA")})
+    assert sum(c[0] == "place" for c in ex.calls) == 1
+    ex.fail = None
+    gw.sync(NOW + 61, {("A", "BUY"): (0.31, 20, "A JA")})
+    assert sum(c[0] == "place" for c in ex.calls) == 2 and ("A", "BUY") in gw.orders
+
+
+def test_live_bids_are_limited_to_the_real_cash():
+    from types import SimpleNamespace
+    from arb.mm import MMMarket, MarketMaker
+    seen = {}
+    gw = SimpleNamespace(live=True, counts={"gesetzt": 0}, sync=lambda now, want: seen.update(want))
+    mk = MMMarket("c", "Markt", "Y", "N", None, 100.0, 0.05, 20.0, "x",
+                  bid_yes=dict(price=0.30, size=20, placed_ts=0), bid_no=dict(price=0.31, size=20, placed_ts=0))
+    me = SimpleNamespace(sc=dict(quote_usd=5, live=dict(quote_usd=5)), gw=gw, scan={}, store=None,
+                         st=SimpleNamespace(cash=7.0, markets={"c": mk}))
+    MarketMaker.sync_orders(me, NOW)
+    assert list(seen) == [("Y", "BUY")] and me.scan["Gebote ohne Cash (echt)"] == 1  # 6 $ fit, the next 6.2 $ not
+    gw.live = False  # dry run: no cash limit, both bids mirrored
+    seen.clear()
+    MarketMaker.sync_orders(me, NOW)
+    assert set(seen) == {("Y", "BUY"), ("N", "BUY")}

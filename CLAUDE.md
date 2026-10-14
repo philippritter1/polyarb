@@ -77,6 +77,12 @@ mit `wind_down: true` ausgelaufen, seit 12.10. `enabled: false` + `archive: true
 Export bleiben, Reiter „Archiv“). Endstand: fussball_dog −37,7 %, breit −19,6 %, mess −13,1 %, streng −14,8 %. Kontrollgruppen `weather_no`, `mlb_spread`, `ladder`
 laufen weiter, ebenso `wetter_no_maker` (live ≈ 0, Treffer ≈ Preis).
 
+Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiviert, keine offenen Positionen);
+`ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
+Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
+Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
+Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_pilot) plus Studie/Kalshi-Studie.
+
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
   max. 1.000 $/Tag. Studie +8,2 % (OOS +5,8 %); Stations-Filter streng +10,7 % (n≈5.200) – beides mit dem

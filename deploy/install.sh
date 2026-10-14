@@ -60,14 +60,18 @@ fi
 systemctl daemon-reload
 systemctl enable polyarb-admin.service
 systemctl restart polyarb-admin.service
-systemctl enable polyarb.service polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-wxobs.timer
-systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-wxobs.timer
+systemctl enable polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer
+systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer
+# 14.10.: the arbitrage bot and the weather-observation study can be switched off in config.yaml (services:)
+svc() { .venv/bin/python -c "from arb.config import load_config; print('1' if (load_config('config.yaml').get('services') or {}).get('$1', True) else '0')"; }
+BOT=$(svc arbitrage_bot); WXOBS=$(svc wxobs_study)
+if [ "$WXOBS" = 1 ]; then systemctl enable --now polyarb-wxobs.timer; else systemctl disable --now polyarb-wxobs.timer || true; fi
 # seit 01.10.: nur noch der 4-h-Bericht (08 Uhr gehört jetzt dazu), kein eigener Tagesbericht
 systemctl disable --now polyarb-daily.timer || true
 systemctl restart polyarb-report.timer  # neuer Zeitplan
 # a study run started with the old code would go on for hours: stop it, the timers start the new code
 systemctl stop polyarb-kalshi.service polyarb-wxobs.service || true
-systemctl restart polyarb.service
+if [ "$BOT" = 1 ]; then systemctl enable polyarb.service; systemctl restart polyarb.service; else systemctl disable --now polyarb.service || true; fi
 # paper scenarios from config.yaml: one polyarb-scenario@<name> per enabled entry, the rest stopped
 SCEN=$(.venv/bin/python -c "from arb.config import load_config; c=load_config('config.yaml'); print(' '.join(k for k, v in (c.get('scenarios') or {}).items() if v.get('enabled')))")
 for u in $(ls /etc/systemd/system/multi-user.target.wants/ 2>/dev/null | grep '^polyarb-scenario@' || true); do

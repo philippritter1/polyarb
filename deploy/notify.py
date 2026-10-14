@@ -42,7 +42,8 @@ def books() -> list:
     data = Path(((cfg.get("storage") or {}).get("db_path")) or "data/polyarb.sqlite")
     data = data if data.is_absolute() else base / data
     out = [dict(label="Arbitrage", db=str(data),
-                start=float((cfg.get("portfolio") or {}).get("starting_capital_usd", 2500)))]
+                start=float((cfg.get("portfolio") or {}).get("starting_capital_usd", 2500)))] \
+        if (cfg.get("services") or {}).get("arbitrage_bot", True) else []
     for name, sc in (cfg.get("scenarios") or {}).items():
         if sc and sc.get("enabled"):
             out.append(dict(label=sc.get("title", name), db=str(data.parent / f"scenario-{name}.sqlite"),

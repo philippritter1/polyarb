@@ -735,3 +735,16 @@ def test_wind_down_buys_nothing_but_still_settles_and_archive_keeps_the_page(tmp
     assert "../endgame/" in archive and "Archiv (1)" in archive
     root = (tmp_path / "www" / "index.html").read_text(encoding="utf-8")
     assert '"href": "endgame/"' not in root and "Archiv (1)" in root  # out of the tab bar and the overview
+
+
+def test_dashboard_without_arbitrage_bot_and_weather_study(tmp_path):
+    """services: off – the landing page becomes the overview, the bot moves to the archive, no weather tab."""
+    from dashboard import build_all
+    cfg = _cfg(tmp_path, "endgame", max_position_usd=40)
+    cfg["services"] = {"arbitrage_bot": False, "wxobs_study": False}
+    build_all(cfg, str(tmp_path / "www" / "index.html"))
+    page = (tmp_path / "www" / "endgame" / "index.html").read_text(encoding="utf-8")
+    nav = json.loads(page.split("const D=", 1)[1].split(";\n", 1)[0])["nav"]
+    assert nav[0]["label"] == "Übersicht" and nav[0]["ret"] is None
+    assert [n["label"] for n in nav if "Wetter" in n["label"]] == [] and nav[-1]["label"] == "Archiv (1)"
+    assert "Arbitrage (beendet)" in (tmp_path / "www" / "archiv" / "index.html").read_text(encoding="utf-8")

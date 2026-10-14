@@ -344,7 +344,10 @@ def build_all(cfg: dict, out: str) -> list:
     and the export section at <dir>/export/ – all linked by one tab bar."""
     root = Path(out).parent
     data_dir = Path(cfg["storage"]["db_path"]).parent
-    pages = [dict(key="", label="Arbitrage", db=cfg["storage"]["db_path"], kind="arb",
+    services = cfg.get("services") or {}
+    bot_on = services.get("arbitrage_bot", True)
+    pages = [dict(key="", label="Arbitrage" + ("" if bot_on else " (beendet)"), done=not bot_on,
+                  db=cfg["storage"]["db_path"], kind="arb",
                   start=float(cfg["portfolio"]["starting_capital_usd"]), out=Path(out),
                   title="Polymarket Arbitrage – Paper Trading")]
     for name, sc in (cfg.get("scenarios") or {}).items():
@@ -354,7 +357,8 @@ def build_all(cfg: dict, out: str) -> list:
                               kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
-    extra = [("study", "Studie"), ("wxobs", "Wetter-Messwerte"), ("kalshi", "Kalshi"), ("export", "Export")]
+    extra = [("study", "Studie")] + ([("wxobs", "Wetter-Messwerte")] if services.get("wxobs_study", True) else []) \
+        + [("kalshi", "Kalshi"), ("export", "Export")]
 
     archived = [p for p in pages if p.get("done")]
     if archived:  # finished scenarios leave the tab bar (10.10.): one "Archiv" tab lists them
@@ -364,7 +368,9 @@ def build_all(cfg: dict, out: str) -> list:
         up = "../" if active else ""  # every page except the arbitrage one lives one folder down
         nav = [dict(label=q["label"], href=up + q["key"] + "/" if q["key"] else up or "./",
                     ret=rets[q["key"]]["ret"], real=rets[q["key"]]["real_ret"], active=q["key"] == active)
-               for q in pages if not q.get("done") or q["key"] == active]
+               for q in pages if not q.get("done") or q["key"] == active or q["key"] == ""]
+        if not bot_on:  # the landing page stays first in the bar; with the bot off it is the overview
+            nav[0].update(label="Übersicht", ret=None, real=None)
         return nav + [dict(label=l, href=up + k + "/", ret=None, active=k == active) for k, l in extra]
 
     overview = [dict(rets[p["key"]], label=p["label"], href=(p["key"] + "/") if p["key"] else "./")

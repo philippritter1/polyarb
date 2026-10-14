@@ -72,6 +72,10 @@ stream:
 storage:
   db_path: data/polyarb.sqlite
 
+services:                      # 14.10.: abgeschaltet (Nutzer-Entscheidung) – Daten, Seiten und Exporte bleiben
+  arbitrage_bot: false         # polyarb.service: echte Arbitrage, praktisch nie erreichbar
+  wxobs_study: false           # polyarb-wxobs.timer: Wetter-Messwert-Studie (Wetter-Strategien beendet)
+
 notify:
   scenario: mm_rewards         # Alarme (Stillstand, Kill-Switch) für dieses Szenario; der 4-h-Bericht umfasst alle
 
@@ -92,6 +96,7 @@ scenarios:
   # Renditen vergleichbar sind. Ändert sich capital_usd, startet das Szenario neu (alte Daten archiviert).
   ladder:
     enabled: true
+    wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus
     title: Logische Arbitrage
     strategy: ladder             # Leitern wie "über 100k / über 110k" oder "bis Oktober / bis Dezember"
     reset: 2                     # 02.10.: Neustart nach dem Billionen-Fehler (alte Daten archiviert)
@@ -125,7 +130,8 @@ scenarios:
     max_new_per_step: 6
     max_open_positions: 150
   weather_no:
-    enabled: true
+    enabled: false               # 14.10.: beendet (Nutzer-Entscheidung), keine offenen Positionen
+    archive: true
     title: Wetter-NO
     strategy: band               # Studie: Temperatur-Buckets zu 3-10 % in Märkten unter 5k $ gewannen nur ~1 %
     category: Wetter
@@ -260,6 +266,7 @@ scenarios:
     max_open_positions: 200
   wetter_no_maker:
     enabled: true
+    wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus
     title: Wetter-NO Maker
     strategy: band
     # 03.10.: wie wetter_no_mess (gleiche Auswahl), aber als Maker: Limit-Kauf 1 Tick über dem Bid statt den Ask
@@ -450,6 +457,7 @@ scenarios:
       max_daily_loss_usd: 30     # Kontowert fällt an einem Tag um mehr: Not-Aus für alles
   sharp_fussball:
     enabled: true
+    wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus
     title: Fußball vs. Pinnacle
     strategy: sharp              # arb/sharp.py (06.10.): Pinnacle-Quoten (The Odds API) als fairer Preis
     # Kauft auf Polymarket "Will X win on DATE?" / "Will A vs. B end in a draw?", wenn der Ask mindestens
@@ -501,7 +509,8 @@ scenarios:
     max_new_per_step: 6
     max_open_positions: 80
   mlb_spread:
-    enabled: true
+    enabled: false               # 14.10.: beendet (Nutzer-Entscheidung), keine offenen Positionen
+    archive: true
     title: MLB-Spread-Außenseiter
     strategy: band               # Studie: +25 % (n=133); in den neuen Daten keine Fälle -> ungetestet
     category: Sport

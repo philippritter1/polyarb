@@ -45,6 +45,8 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
   Wallet seit 14.10. eingetragen (Signer 0xaAc8…bE83, Funder 0x441A…4438 = Smart-Contract-Wallet, **Signaturtyp 3**).
   Reward-Test (zweiter Knopf, `reward_test`): ein Gebot in einem Reward-Markt in Reward-Mindestgröße innerhalb des
   Reward-Abstands (nie über dem besten Gebot), bis 80 s Scoring abfragen, stornieren; Ausführung möglich und wird gemeldet.
+  Reward-Test am 14.10. 14:17 bestanden: 20 Anteile @ 0,08 (Mitte 0,115, Reward-Abstand 6,5 ct) zählte nach 40 s für
+  Rewards (Polymarkets eigene Prüfung) – unsere Gebotslogik qualifiziert also wirklich.
   Verbindungstest am 14.10. 13:30 bestanden (11 pUSD, echte Order gesetzt/gefunden/storniert). Pilot startet erst
   nach der Entscheidung am 31.10. (dann `allow_real: true` für mm_pilot + Admin-Schalter „Echt“).
 - `arb/sharp.py` – Pinnacle-Quoten (The Odds API) vs. Polymarket-Fußball (Strategie `sharp`)

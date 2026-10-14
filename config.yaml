@@ -421,6 +421,35 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_sofort:
+    enabled: true
+    title: Market Making (sofort verkaufen)
+    strategy: mm                 # 14.10.: wie mm_abbau, aber jede einseitige Position bekommt SOFORT ein Verkaufsgebot
+    # zur Mitte + Abstand (statt nach 24 h) – Generalprobe: auch Verkaufsgebote zählen für Rewards, ohne Cash zu binden.
+    # Mitgezählt werden sie hier (reward_asks), Anteil getrennt ausgewiesen. Frage: schneller wieder Cash + Spread
+    # + Rewards auf dem Bestand vs. mm_abbau (wartet 24 h) – Vergleich bis 31.10.
+    exit:
+      after_h: 0                 # sofort: Verkaufsgebot zur Mitte + Abstand (gefüllt nur durch Trades darüber)
+      dump_after_h: 96           # nach 4 Tagen noch da: zum Bid verkaufen (wie mm_abbau)
+    reward_asks: true
+    max_age_days: 3
+    rank: share
+    prefilter: 60
+    min_liquidity: 0
+    capital_usd: 2500
+    max_markets: 15
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_pilot:
     enabled: true
     title: Market Making (Pilot)

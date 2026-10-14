@@ -301,3 +301,30 @@ def test_real_rewards_next_to_the_estimate(tmp_path):
     line = notify.live_line(dict(label="Pilot", db=str(db_path)))
     assert "gezahlt $3.00 (geschätzt $4.00, 75 %)" in line and "zählen jetzt 8/10" in line and "Konto $301.50" in line
     assert rewards_compare(str(tmp_path / "none.sqlite")) == []
+
+
+def test_exit_ask_counts_for_rewards_and_sells_at_once(tmp_path):
+    from arb.mm import reward_share
+    store = BookStore()
+    _book(store, "a", 0.48, 0.52)
+    bk = store.books(["aY", "aN"])
+    by, bn = bk["aY"], bk["aN"]
+    # a YES sell at 0.52 is on the same side as a NO bid at 0.48: one-sided bid + ask = both sides
+    bid = dict(price=0.48, size=100)
+    one = reward_share(by, bn, bid, None, 0.50, 0.035, 20)
+    both = reward_share(by, bn, bid, None, 0.50, 0.035, 20, dict(side="yes", price=0.52, size=100))
+    assert both > one > 0
+    assert reward_share(by, bn, None, None, 0.50, 0.035, 20, dict(side="no", price=0.52, size=100)) > 0
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=0, dump_after_h=96), reward_asks=True),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    mm.step()
+    store.trades.append(("aY", 0.47, 30, NOW + 5))  # 30 YES at 0.48
+    mm.clock.sleep(10)
+    mm.step()
+    mk = mm.st.markets["a"]
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.qty_yes == 30 and mk.ask and mk.ask["side"] == "yes"  # sell order right away
+    mm.clock.sleep(60)
+    mm.step()
+    assert mm.st.ask_rewards > 0 and mm.st.rewards > mm.st.ask_rewards

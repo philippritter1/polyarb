@@ -86,6 +86,7 @@ class MMState:
     fills: int = 0
     exit_pnl: float = 0.0        # realized by selling inventory (part of realized)
     exit_usd: float = 0.0        # proceeds of those sales
+    ask_rewards: float = 0.0     # reward_asks: part of `rewards` earned by the exit's sell orders
 
     def inventory_value(self) -> float:
         return sum(m.qty_yes * (m.mid if m.mid is not None else 0.5) + m.qty_no * (1 - (m.mid if m.mid is not None else 0.5))
@@ -106,7 +107,7 @@ class MMState:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(dict(cash=self.cash, realized=self.realized, rewards=self.rewards,
                            rewards_unbooked=self.rewards_unbooked, rebates=self.rebates, fills=self.fills,
-                           exit_pnl=self.exit_pnl, exit_usd=self.exit_usd,
+                           exit_pnl=self.exit_pnl, exit_usd=self.exit_usd, ask_rewards=self.ask_rewards,
                            markets=[asdict(m) for m in self.markets.values()]), f)
         os.replace(tmp, path)
 
@@ -118,7 +119,8 @@ class MMState:
             d = json.load(f)
         st = cls(cash=d["cash"], realized=d.get("realized", 0.0), rewards=d.get("rewards", 0.0),
                  rewards_unbooked=d.get("rewards_unbooked", 0.0), rebates=d.get("rebates", 0.0),
-                 fills=d.get("fills", 0), exit_pnl=d.get("exit_pnl", 0.0), exit_usd=d.get("exit_usd", 0.0))
+                 fills=d.get("fills", 0), exit_pnl=d.get("exit_pnl", 0.0), exit_usd=d.get("exit_usd", 0.0),
+                 ask_rewards=d.get("ask_rewards", 0.0))
         for m in d.get("markets", []):
             st.markets[m["cid"]] = MMMarket(**m)
         return st
@@ -141,16 +143,24 @@ def q_min(q1: float, q2: float, mid: float, c: float = 3.0) -> float:
 
 
 def reward_share(yes: OrderBook, no: OrderBook, ours_yes: Optional[dict], ours_no: Optional[dict], mid: float,
-                 v: float, min_size: float) -> float:
+                 v: float, min_size: float, ours_ask: Optional[dict] = None) -> float:
     """Our share of the market's reward pool right now. YES bids + NO asks are one side (NO asks at q are YES
-    bids at 1 - q), YES asks + NO bids the other. Our quotes are bids on YES and on NO."""
+    bids at 1 - q), YES asks + NO bids the other. Our quotes are bids on YES and on NO, plus optionally a resting
+    sell order {side: yes|no, price, size} from the inventory exit (counts like any ask)."""
     def lv(book_levels, flip=False):
         return [((1 - l.price) if flip else l.price, l.size) for l in book_levels]
     side1 = lv(yes.bids) + lv(no.asks, flip=True)   # buy YES
     side2 = lv(yes.asks) + lv(no.bids, flip=True)   # sell YES
     others = q_min(score(side1, mid, v, True, min_size), score(side2, mid, v, False, min_size), mid)
-    o1 = score([(ours_yes["price"], ours_yes["size"])], mid, v, True, min_size) if ours_yes else 0.0
-    o2 = score([(1 - ours_no["price"], ours_no["size"])], mid, v, False, min_size) if ours_no else 0.0
+    l1 = [(ours_yes["price"], ours_yes["size"])] if ours_yes else []
+    l2 = [(1 - ours_no["price"], ours_no["size"])] if ours_no else []
+    if ours_ask and ours_ask.get("size", 0) > 0:
+        if ours_ask["side"] == "yes":
+            l2.append((ours_ask["price"], ours_ask["size"]))      # selling YES at p
+        else:
+            l1.append((1 - ours_ask["price"], ours_ask["size"]))  # selling NO at q = buying YES at 1 - q
+    o1 = score(l1, mid, v, True, min_size) if l1 else 0.0
+    o2 = score(l2, mid, v, False, min_size) if l2 else 0.0
     ours = q_min(o1, o2, mid)
     return ours / (ours + others) if ours > 0 else 0.0
 
@@ -577,11 +587,16 @@ class MarketMaker:
         dt = min(now - last, 600.0)
         self._acc["dt"] += dt
         est = {}
+        asks = bool(self.sc.get("reward_asks"))  # also count the exit's sell orders (they qualify like bids)
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
-            if not by or not bn or mk.mid is None or not (mk.bid_yes or mk.bid_no):
+            ask = mk.ask if asks else None
+            if not by or not bn or mk.mid is None or not (mk.bid_yes or mk.bid_no or ask):
                 continue
-            share = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size)
+            share = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size, ask)
+            if ask:
+                base = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size)
+                self.st.ask_rewards += mk.daily_rate * (share - base) * dt / DAY
             est[mk.cid] = dict(q=mk.title, rate=mk.daily_rate, pct=round(share * 100, 4))
             r = mk.daily_rate * share * dt / DAY
             self.st.rewards += r
@@ -685,6 +700,8 @@ class MarketMaker:
                                   **({"Bestand verkauft $": round(st.exit_usd, 2), "davon Ergebnis $": round(st.exit_pnl, 2),
                                       "Verkaufsgebote aktiv": sum(1 for m in st.markets.values() if m.ask)}
                                      if self.sc.get("exit") else {}),
+                                  **({"davon Rewards aus Verkaufsgeboten $": round(st.ask_rewards, 2)}
+                                     if self.sc.get("reward_asks") else {}),
                                   "Bestand $": round(st.inventory_value(), 2), "ts": now})
         try:
             with open(self.state_path.replace(".json", ".scan.json"), "w", encoding="utf-8") as f:

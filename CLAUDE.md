@@ -127,6 +127,11 @@ Aktive Kandidaten im Live-Test:
   **Gestartet 14.10. ~16:38 (Nutzer hat „Echt“ gewählt):** 1 Order ~5 $, zählt für Rewards (1/1). Beobachtung: sehr
   häufiges Umsetzen (12 gesetzt / 11 storniert in wenigen Minuten, Mitte flackert um 1 Tick) – für den Pilot Toleranz
   (erst ab 2 Ticks umsetzen) als neues Szenario/Option prüfen. „Could not create api key“ im Log ist harmlos.
+  14.10. 17:39 erster echter Fill (~6,4 $ Kauf), `apply_real_fills` hat ihn übernommen (Bestand 6,8 $, Cash 4,6 $).
+  Danach wiederholte das Gateway eine wegen Guthaben abgelehnte Order alle ~2 s an der Börse (nur einmal
+  protokolliert) – für den Pilot Abkühlzeit nach Ablehnung einbauen. Reward-Abgleich (`live_reward_share`, ab
+  Commit acea21e, alle 10 Min.): erste Werte Polymarket-Anteil 47,6 % vs. geschätzt 14,3 %, „heute verdient“ aber
+  nur 0,006 $ – Bedeutung von get_reward_percentages noch unklar, mehr Abfragen abwarten.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

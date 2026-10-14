@@ -313,4 +313,4 @@ def test_chain_balances_reads_both_usdc_tokens_and_contract_code():
         tok = json["params"][0]["to"]
         return R({"result": hex(11_000_000 if tok == TOKENS["USDC"] else 0)})
     out = chain_balances({"Funder": "0x" + "1" * 40, "kaputt": "nope"}, post=post)
-    assert out == {"Funder": "USDC.e 0.00, USDC 11.00, Vertrag"}
+    assert out == {"Funder": "pUSD 0.00, USDC.e 0.00, USDC 11.00, Vertrag"}

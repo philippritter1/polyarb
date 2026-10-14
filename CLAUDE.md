@@ -36,7 +36,8 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
   Szenario (`live:` in config.yaml), Protokoll `live_orders`, Fills `live_fills`, gezahlte Rewards `live_rewards`,
   Status `data/live-status-*.json`. Echt NUR wenn: Admin-Schalter „Echt“ + `live: allow_real: true` (Commit) + Wallet
   in `data/secrets.env` + Geoblock frei + Tagesverlust-Limit (`max_daily_loss_usd`) nicht erreicht; sonst Trockenlauf.
-- `arb/exchange.py` – Polymarket-Anbindung (py-clob-client aus `requirements-live.txt`, optional installiert): Post-only-
+- `arb/exchange.py` – Polymarket-Anbindung (py-clob-client-v2 aus `requirements-live.txt`, optional installiert; seit
+  28.04.2026 CLOB V2 mit pUSD als Sicherheit, der alte py-clob-client geht nicht mehr): Post-only-
   Limitorders, Storno, offene Orders, Fills, Guthaben, Reward-Scoring, gezahlte Rewards, Geoblock, Kontowert.
   Wallet (POLY_PRIVATE_KEY/POLY_FUNDER/POLY_SIG_TYPE) trägt der Nutzer auf `/admin/` ein, nie im Chat/Repo.
   Verbindungstest (Knopf auf `/admin/`, `connection_test`): eine Mindestgrößen-Kauforder 3 Ticks unter dem besten Gebot

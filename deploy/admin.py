@@ -212,7 +212,7 @@ def wallet_section() -> str:
             '<label>Private Key (64 Hex-Zeichen; leer lassen = gespeicherten behalten)<input name="key" type="password" autocomplete="off" spellcheck="false"></label>'
             '<label>Funder-Adresse (Proxy-Wallet von polymarket.com, 0x…; leer = behalten)<input name="funder" autocomplete="off" '
             'spellcheck="false"></label>'
-            '<label>Signaturtyp (1 = E-Mail-Konto, 2 = Browser-Wallet, 0 = eigene Wallet)<input name="sig_type" value="1">'
+            '<label>Signaturtyp (1 = E-Mail-Konto, 2 = Browser-Wallet, 3 = Smart-Contract-Wallet, 0 = eigene Wallet)<input name="sig_type" value="1">'
             '</label><button type="submit">Prüfen und speichern</button></form>'
             '<form method="post" action="/admin/wallet-delete" style="margin-top:8px">'
             '<button type="submit">Wallet löschen</button></form>'
@@ -378,7 +378,7 @@ class Handler(BaseHTTPRequestHandler):
             key = (form.get("key") or [""])[0].strip() or read_secrets().get("POLY_PRIVATE_KEY", "")  # empty: keep
             funder = (form.get("funder") or [""])[0].strip() or read_secrets().get("POLY_FUNDER", "")
             sig = (form.get("sig_type") or ["1"])[0].strip()
-            w = dict(key=key, funder=funder, sig_type=int(sig) if sig in ("0", "1", "2") else -1)
+            w = dict(key=key, funder=funder, sig_type=int(sig) if sig in ("0", "1", "2", "3") else -1)
             why = wallet_problem(w)
             if why:
                 return self._send(page(f"Nicht gespeichert: {why}.", False), 400)

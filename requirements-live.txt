@@ -1,2 +1,2 @@
 # only for real orders (arb/exchange.py); installed separately so a failure never blocks the paper bot
-py-clob-client==0.34.6
+py-clob-client-v2==1.2.0

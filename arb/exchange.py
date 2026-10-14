@@ -1,6 +1,7 @@
 """Real Polymarket access for the order gateway (arb/orders.py) – only used in live mode.
 
-Wraps the official client (py-clob-client, imported lazily: the paper bot and the tests do not need it):
+Wraps the official client (py-clob-client-v2 – Polymarket switched to CLOB V2 with pUSD collateral on 28.04.2026,
+the old py-clob-client no longer works against production; imported lazily, the paper bot and the tests do not need it):
 sign and post GTC limit orders as post-only (a maker order that would cross the book is rejected instead of
 taking), cancel, list open orders and own trades, read the USDC balance, ask whether orders score for
 liquidity rewards, and read the rewards actually earned. Plus the public checks the gateway needs before it
@@ -9,7 +10,8 @@ sends anything: the geoblock answer for the server's IP and the account value fr
 Credentials come from data/secrets.env (entered on /admin/, mode 600) or the environment:
   POLY_PRIVATE_KEY   key of the wallet that signs (a wallet used only for the bot, holding only the pilot money)
   POLY_FUNDER        address that holds the funds (the Polymarket proxy wallet shown on polymarket.com)
-  POLY_SIG_TYPE      0 = plain wallet (EOA), 1 = email/Magic account, 2 = browser-wallet proxy
+  POLY_SIG_TYPE      0 = plain wallet (EOA), 1 = Polymarket proxy (email), 2 = Gnosis safe (browser wallet),
+                     3 = smart-contract wallet (EIP-1271)
 The API key/secret/passphrase are derived from the private key on first use; nothing secret is logged.
 """
 from __future__ import annotations
@@ -54,10 +56,10 @@ def wallet_problem(w: dict) -> str:
     """'' if the wallet settings look usable, else what is missing."""
     if not KEY_RE.match(w.get("key") or ""):
         return "kein gültiger Private Key"
-    if w.get("sig_type") in (1, 2) and not ADDR_RE.match(w.get("funder") or ""):
+    if w.get("sig_type") in (1, 2, 3) and not ADDR_RE.match(w.get("funder") or ""):
         return "Funder-Adresse fehlt (Proxy-Wallet von polymarket.com)"
-    if w.get("sig_type") not in (0, 1, 2):
-        return "Signaturtyp muss 0, 1 oder 2 sein"
+    if w.get("sig_type") not in (0, 1, 2, 3):
+        return "Signaturtyp muss 0, 1, 2 oder 3 sein"
     return ""
 
 
@@ -78,7 +80,8 @@ def geoblock(get: Callable = None) -> dict:
 
 
 POLYGON_RPC = ("https://polygon-bor-rpc.publicnode.com", "https://polygon-rpc.com", "https://1rpc.io/matic")
-TOKENS = {"USDC.e": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "USDC": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"}
+TOKENS = {"pUSD": "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",   # Polymarket's collateral since CLOB V2
+          "USDC.e": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "USDC": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"}
 
 
 def chain_balances(addresses: Dict[str, str], post: Callable = None) -> Dict[str, str]:
@@ -129,16 +132,18 @@ class PolyExchange:
         self._c = client
         self.host = host
 
+    def _client(self, sig_type: int, creds=None):
+        from py_clob_client_v2.client import ClobClient
+        w = self.wallet
+        key = w["key"] if w["key"].startswith("0x") else "0x" + w["key"]
+        c = ClobClient(self.host, chain_id=CHAIN_ID, key=key, signature_type=sig_type, funder=w.get("funder") or None)
+        c.set_api_creds(creds or c.create_or_derive_api_key())
+        return c
+
     @property
     def c(self):
         if self._c is None:
-            from py_clob_client.client import ClobClient
-            w = self.wallet
-            key = w["key"] if w["key"].startswith("0x") else "0x" + w["key"]
-            c = ClobClient(self.host, chain_id=CHAIN_ID, key=key, signature_type=w["sig_type"],
-                           funder=w.get("funder") or None)
-            c.set_api_creds(c.create_or_derive_api_creds())
-            self._c = c
+            self._c = self._client(self.wallet["sig_type"])
         return self._c
 
     @property
@@ -148,19 +153,19 @@ class PolyExchange:
 
     def best(self, token: str) -> dict:
         """{bid, ask, tick, min_size} of a token's book."""
-        b = self.c.get_order_book(str(token))
-        bids = sorted((float(x.price) for x in b.bids or []), reverse=True)
-        asks = sorted(float(x.price) for x in b.asks or [])
-        return dict(bid=bids[0] if bids else None, ask=asks[0] if asks else None, tick=float(b.tick_size or 0.01),
-                    min_size=float(b.min_order_size or 5))
+        b = self.c.get_order_book(str(token)) or {}
+        bids = sorted((float(x["price"]) for x in b.get("bids") or []), reverse=True)
+        asks = sorted(float(x["price"]) for x in b.get("asks") or [])
+        return dict(bid=bids[0] if bids else None, ask=asks[0] if asks else None,
+                    tick=float(b.get("tick_size") or 0.01), min_size=float(b.get("min_order_size") or 5))
 
     # ------------------------------------------------------------------ orders
     def place(self, token: str, side: str, price: float, size: float) -> str:
         """Post-only GTC limit order; returns the order id or raises with the exchange's reason."""
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        from py_clob_client.order_builder.constants import BUY, SELL
-        order = self.c.create_order(OrderArgs(token_id=str(token), price=float(price), size=float(size),
-                                              side=BUY if side == "BUY" else SELL))
+        from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
+        from py_clob_client_v2.order_builder.constants import BUY, SELL
+        order = self.c.create_order(OrderArgsV2(token_id=str(token), price=float(price), size=float(size),
+                                                side=BUY if side == "BUY" else SELL))
         resp = self.c.post_order(order, OrderType.GTC, post_only=True) or {}
         oid = resp.get("orderID") or resp.get("orderId") or ""
         if not resp.get("success", bool(oid)) or not oid:
@@ -168,16 +173,17 @@ class PolyExchange:
         return oid
 
     def cancel(self, order_id: str) -> None:
-        self.c.cancel(order_id)
+        from py_clob_client_v2.clob_types import OrderPayload
+        self.c.cancel_order(OrderPayload(orderID=order_id))
 
     def cancel_all(self) -> None:
         self.c.cancel_all()
 
     def open_orders(self) -> Dict[str, dict]:
         """order id -> {token, side, price, size, matched}."""
-        from py_clob_client.clob_types import OpenOrderParams
+        from py_clob_client_v2.clob_types import OpenOrderParams
         out = {}
-        for o in self.c.get_orders(OpenOrderParams()) or []:
+        for o in self.c.get_open_orders(OpenOrderParams()) or []:
             out[o.get("id")] = dict(token=str(o.get("asset_id")), side=str(o.get("side", "")).upper(),
                                     price=float(o.get("price") or 0), size=float(o.get("original_size") or 0),
                                     matched=float(o.get("size_matched") or 0))
@@ -185,7 +191,7 @@ class PolyExchange:
 
     def trades(self, after_ts: int) -> List[dict]:
         """Own fills since `after_ts` (unix s): {id, token, side, price, size, ts, role}."""
-        from py_clob_client.clob_types import TradeParams
+        from py_clob_client_v2.clob_types import TradeParams
         out = []
         for t in self.c.get_trades(TradeParams(after=int(after_ts))) or []:
             out.append(dict(id=t.get("id"), token=str(t.get("asset_id")), side=str(t.get("side", "")).upper(),
@@ -194,16 +200,17 @@ class PolyExchange:
         return out
 
     def balance_usd(self, sig_type: Optional[int] = None) -> Optional[float]:
-        """USDC available for orders; `sig_type` asks for another signature type than the configured one."""
-        from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
-        sig = -1 if sig_type is None else int(sig_type)
+        """pUSD available for orders; `sig_type` asks as another signature type than the configured one."""
+        from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
+        c = self.c if sig_type is None or sig_type == self.wallet["sig_type"] else self._client(sig_type, self.c.creds)
+        p = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         try:  # the exchange caches the balance: refresh it from the chain first (a fresh deposit showed 0)
-            self.c.update_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=sig))
+            c.update_balance_allowance(p)
         except Exception as e:  # noqa
             log.warning("balance refresh: %s", type(e).__name__)
-        d = self.c.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=sig)) or {}
+        d = c.get_balance_allowance(p) or {}
         try:
-            return float(d.get("balance", 0)) / 1e6  # USDC has 6 decimals
+            return float(d.get("balance", 0)) / 1e6  # 6 decimals
         except (TypeError, ValueError):
             return None
 
@@ -211,22 +218,16 @@ class PolyExchange:
         """Does each order count for liquidity rewards right now (Polymarket's own check)?"""
         if not order_ids:
             return {}
-        from py_clob_client.clob_types import OrdersScoringParams
+        from py_clob_client_v2.clob_types import OrdersScoringParams
         d = self.c.are_orders_scoring(OrdersScoringParams(orderIds=list(order_ids))) or {}
         return {k: bool(v) for k, v in d.items()}
 
     def rewards(self, day: Optional[str] = None) -> Optional[float]:
-        """Liquidity rewards earned on `day` (YYYY-MM-DD, UTC; default yesterday) in USDC; None if the endpoint
-        does not answer (not in py-clob-client – checked against the real account in the pilot)."""
-        from py_clob_client.clob_types import RequestArgs
-        from py_clob_client.headers.headers import create_level_2_headers
-        from py_clob_client.http_helpers.helpers import get
+        """Liquidity rewards earned on `day` (YYYY-MM-DD, UTC; default yesterday); None if unavailable."""
         day = day or datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - 86400, timezone.utc).strftime("%Y-%m-%d")
-        path = "/rewards/user/total"
         try:
-            headers = create_level_2_headers(self.c.signer, self.c.creds, RequestArgs(method="GET", request_path=path))
-            d = get(f"{self.host}{path}?date={day}&signature_type={self.wallet['sig_type']}", headers=headers)
-            rows = d if isinstance(d, list) else (d.get("data") or [d])
+            d = self.c.get_total_earnings_for_user_for_day(day)
+            rows = d if isinstance(d, list) else (d.get("data") or [d]) if isinstance(d, dict) else []
             return round(sum(float(r.get("earnings", 0) or 0) for r in rows if isinstance(r, dict)), 6)
         except Exception as e:  # noqa
             log.warning("rewards %s: %s", day, type(e).__name__)
@@ -286,7 +287,7 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
         hint = ""
         if bal == 0:  # usually the wrong signature type: look where the money is
             found = {}
-            for t in (0, 1, 2):
+            for t in (0, 1, 2, 3):
                 if t != ex.wallet.get("sig_type"):
                     try:
                         found[t] = ex.balance_usd(t)

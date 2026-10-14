@@ -580,6 +580,8 @@ class MarketMaker:
             if (self.quoted is not None and mk.cid not in self.quoted) or not by or not by.bids or not by.asks \
                     or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0:
                 mk.bid_yes = mk.bid_no = None
+                if self.gw is not None and self.gw.live and by and by.bids and by.asks:
+                    mk.mid = (by.best_bid + by.best_ask) / 2  # live: value held positions at the current book
                 continue
             mid = (by.best_bid + by.best_ask) / 2
             mk.mid = mid
@@ -659,6 +661,9 @@ class MarketMaker:
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
             bids = bool(mk.bid_yes or mk.bid_no)
+            if mk.ask and mk.max_spread <= 0:  # live: a market taken back from the account has no reward data;
+                est[mk.cid] = dict(q=mk.title, rate=0.0, pct=None)  # still record Polymarket's own numbers
+                continue
             if not by or not bn or mk.mid is None or not (bids or mk.ask):
                 continue
             base = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size) if bids else 0.0

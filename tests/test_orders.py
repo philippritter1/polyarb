@@ -250,18 +250,26 @@ def test_no_scenario_is_released_for_real_orders_by_accident():
 
 
 def test_connection_test_places_below_the_bid_and_always_cancels():
-    from arb.exchange import connection_test
+    from arb.exchange import connection_test, test_passed
 
     class Ex(FakeExchange):
         c = object()
 
-        def best(self, token):
+        def best(self, token):  # "OVER" is a finished match: no bids left
+            if token == "OVER":
+                return dict(bid=None, ask=0.01, tick=0.01, min_size=5)
             return dict(bid=0.55, ask=0.57, tick=0.01, min_size=5)
-    find = lambda: dict(token="T", question="Will it rain?")  # noqa: E731
+    find = lambda: [dict(token="OVER", question="Finished match"), dict(token="T", question="Will it rain?")]  # noqa
     ex = Ex(cash=10)
     steps = connection_test(ex, find=find, wait=lambda s: None)
-    assert all(s["ok"] for s in steps), steps
+    assert all(s["ok"] for s in steps) and test_passed(steps), steps
     assert ("place", "T", "BUY", 0.52, 5.0) in ex.calls and ex.open == {}  # 3 ticks under the bid, gone again
+    assert "Will it rain?" in steps[2]["info"]  # the one-sided book was skipped
+    # only one-sided books: a failed step, and not a pass (the page claimed success on 14.10.)
+    steps = connection_test(Ex(cash=10), find=lambda: [dict(token="OVER", question="x")], wait=lambda s: None)
+    assert not steps[-1]["ok"] and "beiden Seiten" in steps[-1]["info"] and not test_passed(steps)
+    # stopped early with every shown step green is no pass either
+    assert not test_passed([{"step": "Zugang", "ok": True}])
     # the scoring check breaks after the order was placed: it is cancelled all the same
     ex2 = Ex(cash=10)
     ex2.scoring = lambda ids: (_ for _ in ()).throw(RuntimeError("down"))

@@ -233,19 +233,21 @@ class PolyExchange:
             return None
 
 
-def liquid_token(get: Callable = None) -> Optional[dict]:
-    """A busy, two-sided market for the connection test: {token, question}."""
+def liquid_tokens(get: Callable = None, n: int = 8) -> List[dict]:
+    """Busy markets for the connection test, most traded first: [{token, question}] (books checked by the caller)."""
     import json as _json
     r = (get or requests.get)("https://gamma-api.polymarket.com/markets", params={
-        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 30}, timeout=20)
+        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 40}, timeout=20)
+    out = []
     for m in (r.json() if hasattr(r, "json") else r) or []:
         try:
             toks, prices = _json.loads(m.get("clobTokenIds") or "[]"), _json.loads(m.get("outcomePrices") or "[]")
-            if m.get("enableOrderBook") and len(toks) == 2 and 0.2 <= float(prices[0]) <= 0.8:
-                return dict(token=str(toks[0]), question=m.get("question", ""))
+            if m.get("enableOrderBook") and m.get("acceptingOrders", True) and len(toks) == 2 \
+                    and 0.2 <= float(prices[0]) <= 0.8:
+                out.append(dict(token=str(toks[0]), question=m.get("question", "")))
         except (ValueError, TypeError, IndexError):
             continue
-    return None
+    return out[:n]
 
 
 def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
@@ -267,12 +269,17 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
     if step("Zugang (API-Schlüssel aus dem Private Key)", lambda: bool(ex.c) and "ok") is None:
         return steps
     bal = step("Guthaben (USDC)", ex.balance_usd)
-    m = step("Markt für den Test", lambda: (find or liquid_token)() or (_ for _ in ()).throw(RuntimeError("keiner gefunden")))
+    def two_sided():  # the most traded market whose book has a bid AND an ask (a finished match has neither)
+        for c in (find or liquid_tokens)():
+            b = ex.best(c["token"])
+            if b["bid"] is not None and b["ask"] is not None and b["ask"] - b["bid"] <= 0.05:
+                return dict(c, book=b)
+        raise RuntimeError("kein Markt mit Geboten auf beiden Seiten gefunden")
+    m = step("Markt für den Test", two_sided)
     if not m:
         return steps
-    bk = step("Orderbuch", lambda: ex.best(m["token"]))
-    if not bk or bk["bid"] is None:
-        return steps
+    bk = m.pop("book")
+    steps[-1]["info"] = f"{m['question'][:80]} – bestes Gebot {bk['bid']:.2f}, bester Ask {bk['ask']:.2f}"
     price = round(max(bk["tick"], bk["bid"] - 3 * bk["tick"]), 4)
     size = max(bk["min_size"], 5.0)
     if bal is not None and price * size > bal:
@@ -313,3 +320,8 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
             (wait or _t.sleep)(2)
             step("Order weg", lambda: oid not in ex.open_orders() or (_ for _ in ()).throw(RuntimeError("noch offen!")))
     return steps
+
+
+def test_passed(steps: List[dict]) -> bool:
+    """Only a test that went all the way – order placed, found, cancelled and gone – counts as passed."""
+    return bool(steps) and all(x.get("ok") for x in steps) and any(x.get("step") == "Order weg" for x in steps)

@@ -178,7 +178,11 @@ def live_test_html() -> str:
         return "<p>Noch kein Test.</p>"
     rows = "".join(f"<li>{'✅' if x.get('ok') else '❌'} {html.escape(str(x.get('step')))}: {html.escape(str(x.get('info')))}</li>"
                    for x in d.get("steps", []))
-    return f"<p>Letzter Test {time.strftime('%d.%m. %H:%M', time.localtime(d.get('ts', 0)))}:</p><ul>{rows}</ul>"
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from arb.exchange import test_passed
+    verdict = "✅ bestanden" if test_passed(d.get("steps", [])) else "❌ nicht bestanden"
+    return (f"<p>Letzter Test {time.strftime('%d.%m. %H:%M', time.localtime(d.get('ts', 0)))}: <b>{verdict}</b></p>"
+            f"<ul>{rows}</ul>")
 
 
 def geocheck() -> dict:
@@ -360,9 +364,11 @@ class Handler(BaseHTTPRequestHandler):
             if time.time() - last < 60:
                 return self._send(page("Bitte eine Minute warten bis zum nächsten Test.", False), 429)
             steps = self.run_test()
-            ok = steps and all(x.get("ok") for x in steps)
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from arb.exchange import test_passed
+            ok = test_passed(steps)
             return self._send(page("Verbindungstest " + ("erfolgreich – Order gesetzt, gefunden, storniert." if ok
-                                                          else "mit Fehlern – siehe Liste unten."), bool(ok)))
+                                                          else "NICHT bestanden – siehe Liste unten."), bool(ok)))
         if path == "/admin/wallet-delete":
             remove_secrets({"POLY_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIG_TYPE"})
             return self._send(page("Wallet gelöscht."))

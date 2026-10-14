@@ -39,6 +39,9 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
 - `arb/exchange.py` – Polymarket-Anbindung (py-clob-client aus `requirements-live.txt`, optional installiert): Post-only-
   Limitorders, Storno, offene Orders, Fills, Guthaben, Reward-Scoring, gezahlte Rewards, Geoblock, Kontowert.
   Wallet (POLY_PRIVATE_KEY/POLY_FUNDER/POLY_SIG_TYPE) trägt der Nutzer auf `/admin/` ein, nie im Chat/Repo.
+  Verbindungstest (Knopf auf `/admin/`, `connection_test`): eine Mindestgrößen-Kauforder 3 Ticks unter dem besten Gebot
+  eines großen Markts setzen, offen prüfen, Scoring prüfen, immer stornieren; Ergebnis in `data/live-test.json`.
+  Wallet seit 14.10. eingetragen (Signer 0xaAc8…bE83, Funder 0x441A…4438, Signaturtyp 1 – beim Test zu bestätigen).
 - `arb/sharp.py` – Pinnacle-Quoten (The Odds API) vs. Polymarket-Fußball (Strategie `sharp`)
 - `arb/kalshi.py` – Kalshi-Studie; `arb/ladder.py` + `arb/scanner.py` – Arbitrage
 - `dashboard.py` – statisches Dashboard + Exporte; `deploy/notify.py` – 4-h-Bericht per Push

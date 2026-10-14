@@ -102,3 +102,26 @@ def test_wallet_is_stored_privately_never_shown_and_live_needs_a_release(tmp_pat
         assert post("/admin/live-mode", mode="live")[0] == 400
     finally:
         srv.shutdown()
+
+
+def test_connection_test_button_needs_a_wallet_and_shows_the_steps(tmp_path, monkeypatch):
+    srv, base = _server(tmp_path, monkeypatch, None)
+    calls = []
+    monkeypatch.setattr(admin.Handler, "run_test", lambda self: calls.append(1) or admin.json.dump(
+        {"ts": 1, "steps": [{"step": "Order stornieren", "ok": True, "info": "ok"}]},
+        open(admin.LIVE_TEST_PATH(), "w")) or [{"ok": True}])
+
+    def post(path, **form):
+        try:
+            with urllib.request.urlopen(base + path, data=urllib.parse.urlencode(form).encode(), timeout=5) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+    try:
+        assert post("/admin/live-test")[0] == 400 and not calls  # no wallet yet
+        post("/admin/wallet", key="ab" * 32, funder="0x" + "1" * 40, sig_type="1")
+        code, body = post("/admin/live-test")
+        assert code == 200 and "erfolgreich" in body and "Order stornieren" in body and calls == [1]
+        assert post("/admin/live-test")[0] == 429  # once a minute at most
+    finally:
+        srv.shutdown()

@@ -157,6 +157,28 @@ def live_section() -> str:
 
 
 _GEO = {"ts": 0.0, "v": None}
+LIVE_TEST_PATH = lambda: os.path.join(DATA, "live-test.json")  # noqa: E731
+
+
+def run_live_test(ex=None, find=None, wait=None) -> list:
+    """The connection test (arb/exchange.connection_test) with the stored wallet; result kept for the page."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from arb.exchange import PolyExchange, connection_test, read_wallet
+    steps = connection_test(ex or PolyExchange(read_wallet(SECRETS)), find=find, wait=wait)
+    with open(LIVE_TEST_PATH(), "w", encoding="utf-8") as f:
+        json.dump(dict(ts=time.time(), steps=steps), f, default=str)
+    return steps
+
+
+def live_test_html() -> str:
+    try:
+        with open(LIVE_TEST_PATH(), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return "<p>Noch kein Test.</p>"
+    rows = "".join(f"<li>{'✅' if x.get('ok') else '❌'} {html.escape(str(x.get('step')))}: {html.escape(str(x.get('info')))}</li>"
+                   for x in d.get("steps", []))
+    return f"<p>Letzter Test {time.strftime('%d.%m. %H:%M', time.localtime(d.get('ts', 0)))}:</p><ul>{rows}</ul>"
 
 
 def geocheck() -> dict:
@@ -189,7 +211,13 @@ def wallet_section() -> str:
             '<label>Signaturtyp (1 = E-Mail-Konto, 2 = Browser-Wallet, 0 = eigene Wallet)<input name="sig_type" value="1">'
             '</label><button type="submit">Prüfen und speichern</button></form>'
             '<form method="post" action="/admin/wallet-delete" style="margin-top:8px">'
-            '<button type="submit">Wallet löschen</button></form>')
+            '<button type="submit">Wallet löschen</button></form>'
+            "<h2>Verbindungstest</h2><p>Setzt EINE Kauforder (Mindestgröße, einige Cent unter dem besten Gebot eines "
+            "großen Markts, wird praktisch nie ausgeführt), prüft sie bei Polymarket und storniert sie sofort. "
+            "Braucht ein paar $ Guthaben, die nur kurz reserviert werden.</p>"
+            + (live_test_html() if not prob else "")
+            + ('<form method="post" action="/admin/live-test"><button type="submit">Verbindungstest starten</button></form>'
+               if not prob else "<p>Erst eine Wallet speichern.</p>"))
 
 
 def page(msg: str = "", ok: bool = True) -> str:
@@ -286,6 +314,9 @@ class Handler(BaseHTTPRequestHandler):
     fetch = None  # tests: replaces the key check
     run = None    # tests: replaces systemctl/journalctl
 
+    def run_test(self) -> list:  # tests: replaced by a fake exchange
+        return run_live_test()
+
     def _send(self, body: str, code: int = 200, ctype: str = "text/html") -> None:
         data = body.encode("utf-8")
         self.send_response(code)
@@ -313,12 +344,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.rstrip("/")
-        if path not in ("/admin/odds-key", "/admin/live-mode", "/admin/wallet", "/admin/wallet-delete"):
+        if path not in ("/admin/odds-key", "/admin/live-mode", "/admin/wallet", "/admin/wallet-delete", "/admin/live-test"):
             return self._send("not found", 404)
         n = int(self.headers.get("Content-Length") or 0)
         if n > 4096:
             return self._send(page("Zu viele Daten.", False), 413)
         form = urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+        if path == "/admin/live-test":
+            if wallet_info()[0]:
+                return self._send(page("Erst eine Wallet speichern.", False), 400)
+            try:
+                last = os.path.getmtime(LIVE_TEST_PATH())
+            except OSError:
+                last = 0
+            if time.time() - last < 60:
+                return self._send(page("Bitte eine Minute warten bis zum nächsten Test.", False), 429)
+            steps = self.run_test()
+            ok = steps and all(x.get("ok") for x in steps)
+            return self._send(page("Verbindungstest " + ("erfolgreich – Order gesetzt, gefunden, storniert." if ok
+                                                          else "mit Fehlern – siehe Liste unten."), bool(ok)))
         if path == "/admin/wallet-delete":
             remove_secrets({"POLY_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIG_TYPE"})
             return self._send(page("Wallet gelöscht."))

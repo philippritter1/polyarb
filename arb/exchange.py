@@ -114,6 +114,14 @@ class PolyExchange:
         """The address that holds funds and positions (proxy wallet, or the signer for sig type 0)."""
         return self.wallet.get("funder") or address_of(self.wallet["key"])
 
+    def best(self, token: str) -> dict:
+        """{bid, ask, tick, min_size} of a token's book."""
+        b = self.c.get_order_book(str(token))
+        bids = sorted((float(x.price) for x in b.bids or []), reverse=True)
+        asks = sorted(float(x.price) for x in b.asks or [])
+        return dict(bid=bids[0] if bids else None, ask=asks[0] if asks else None, tick=float(b.tick_size or 0.01),
+                    min_size=float(b.min_order_size or 5))
+
     # ------------------------------------------------------------------ orders
     def place(self, token: str, side: str, price: float, size: float) -> str:
         """Post-only GTC limit order; returns the order id or raises with the exchange's reason."""
@@ -185,3 +193,64 @@ class PolyExchange:
         except Exception as e:  # noqa
             log.warning("rewards %s: %s", day, type(e).__name__)
             return None
+
+
+def liquid_token(get: Callable = None) -> Optional[dict]:
+    """A busy, two-sided market for the connection test: {token, question}."""
+    import json as _json
+    r = (get or requests.get)("https://gamma-api.polymarket.com/markets", params={
+        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 30}, timeout=20)
+    for m in (r.json() if hasattr(r, "json") else r) or []:
+        try:
+            toks, prices = _json.loads(m.get("clobTokenIds") or "[]"), _json.loads(m.get("outcomePrices") or "[]")
+            if m.get("enableOrderBook") and len(toks) == 2 and 0.2 <= float(prices[0]) <= 0.8:
+                return dict(token=str(toks[0]), question=m.get("question", ""))
+        except (ValueError, TypeError, IndexError):
+            continue
+    return None
+
+
+def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
+    """One small, controlled round trip with real money but (almost) no risk: read the balance, place ONE post-only
+    buy of the minimum size a few ticks BELOW the best bid of a busy market (so it is practically never filled),
+    see it among the open orders, ask whether it scores, cancel it and check it is gone. Every step is reported;
+    the order is cancelled whatever happens after it was placed."""
+    import time as _t
+    steps, oid = [], ""
+
+    def step(name, fn):
+        try:
+            v = fn()
+            steps.append(dict(step=name, ok=True, info=v))
+            return v
+        except Exception as e:  # noqa
+            steps.append(dict(step=name, ok=False, info=f"{type(e).__name__}: {str(e)[:160]}"))
+            return None
+    if step("Zugang (API-Schlüssel aus dem Private Key)", lambda: bool(ex.c) and "ok") is None:
+        return steps
+    bal = step("Guthaben (USDC)", ex.balance_usd)
+    m = step("Markt für den Test", lambda: (find or liquid_token)() or (_ for _ in ()).throw(RuntimeError("keiner gefunden")))
+    if not m:
+        return steps
+    bk = step("Orderbuch", lambda: ex.best(m["token"]))
+    if not bk or bk["bid"] is None:
+        return steps
+    price = round(max(bk["tick"], bk["bid"] - 3 * bk["tick"]), 4)
+    size = max(bk["min_size"], 5.0)
+    if bal is not None and price * size > bal:
+        steps.append(dict(step="Testorder", ok=False, info=f"zu wenig Guthaben: braucht {price * size:.2f} $"))
+        return steps
+    try:
+        oid = step(f"Testorder setzen: KAUF {size:g} @ {price:.2f} (bestes Gebot {bk['bid']:.2f}) – {m['question'][:60]}",
+                   lambda: ex.place(m["token"], "BUY", price, size))
+        if not oid:
+            return steps
+        (wait or _t.sleep)(2)
+        step("Order bei Polymarket offen", lambda: oid in ex.open_orders() or (_ for _ in ()).throw(RuntimeError("nicht gefunden")))
+        step("Zählt für Rewards (Polymarkets Prüfung)", lambda: ex.scoring([oid]).get(oid))
+    finally:
+        if oid:
+            step("Order stornieren", lambda: ex.cancel(oid) or "ok")
+            (wait or _t.sleep)(2)
+            step("Order weg", lambda: oid not in ex.open_orders() or (_ for _ in ()).throw(RuntimeError("noch offen!")))
+    return steps

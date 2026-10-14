@@ -247,3 +247,32 @@ def test_no_scenario_is_released_for_real_orders_by_accident():
     assert released == []
     pilot = cfg["scenarios"]["mm_pilot"]
     assert pilot["live"]["quote_usd"] == pilot["quote_usd"] and pilot["live"]["max_daily_loss_usd"] <= 50
+
+
+def test_connection_test_places_below_the_bid_and_always_cancels():
+    from arb.exchange import connection_test
+
+    class Ex(FakeExchange):
+        c = object()
+
+        def best(self, token):
+            return dict(bid=0.55, ask=0.57, tick=0.01, min_size=5)
+    find = lambda: dict(token="T", question="Will it rain?")  # noqa: E731
+    ex = Ex(cash=10)
+    steps = connection_test(ex, find=find, wait=lambda s: None)
+    assert all(s["ok"] for s in steps), steps
+    assert ("place", "T", "BUY", 0.52, 5.0) in ex.calls and ex.open == {}  # 3 ticks under the bid, gone again
+    # the scoring check breaks after the order was placed: it is cancelled all the same
+    ex2 = Ex(cash=10)
+    ex2.scoring = lambda ids: (_ for _ in ()).throw(RuntimeError("down"))
+    steps = connection_test(ex2, find=find, wait=lambda s: None)
+    assert [s["ok"] for s in steps if "Rewards" in s["step"]] == [False] and ex2.open == {}
+    assert any(c[0] == "cancel" for c in ex2.calls)
+    # not enough money: nothing is placed
+    ex3 = Ex(cash=1)
+    steps = connection_test(ex3, find=find, wait=lambda s: None)
+    assert not any(c[0] == "place" for c in ex3.calls) and "zu wenig Guthaben" in steps[-1]["info"]
+    # the exchange refuses (e.g. wrong signature type): reported, nothing to cancel
+    ex4 = Ex(cash=10, fail="invalid signature")
+    steps = connection_test(ex4, find=find, wait=lambda s: None)
+    assert "invalid signature" in steps[-1]["info"] and not any(c[0] == "cancel" for c in ex4.calls)

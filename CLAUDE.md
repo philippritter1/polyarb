@@ -146,7 +146,9 @@ Aktive Kandidaten im Live-Test:
   /positions: conditionId, oppositeAsset, outcomeIndex). mm_probe jetzt `after_h: 0` (Nutzer: bei Bestand sofort
   Verkaufsgebot), Verkauf zum Bid weiter nach 2 h. Für den Pilot `after_h: 0` erwägen (mm_sofort misst es). Reward-Abgleich (`live_reward_share`, ab
   Commit acea21e, alle 10 Min.): erste Werte Polymarket-Anteil 47,6 % vs. geschätzt 14,3 %, „heute verdient“ aber
-  nur 0,006 $ – Bedeutung von get_reward_percentages noch unklar, mehr Abfragen abwarten.
+  nur 0,006 $ – Bedeutung von get_reward_percentages noch unklar, mehr Abfragen abwarten. Abends: API-Tag 14.10. = 0,0386 $ =
+  polymarket.com „Oct 15 Earnings“ 0,04 $ (Website beschriftet mit dem Auszahlungstag, API mit dem Verdiensttag;
+  der Verdienst wird verzögert verbucht). Schätzung desselben Tags ~0,15 $. Verkaufsgebot CT-02: Polymarket-Anteil 3,9 %.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

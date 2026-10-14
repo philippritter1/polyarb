@@ -121,6 +121,12 @@ Aktive Kandidaten im Live-Test:
   zum Bid (Taker-Gebühr). Frage: Verluste früh begrenzen und Kapital fürs Bieten freihalten vs. auf Auflösung warten.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
+- `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit
+  `allow_real: true`: 1 Markt, Gebote ~5 $, echte Orders zusammen max. 11 $, Not-Aus ab 3 $ Tagesverlust, Abbau nach
+  1 h / 2 h. Echt nur, wenn auf /admin/ „Echt“ gewählt ist. Nach der Probe allow_real aus und ins Archiv.
+  Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
+  maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
+  Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.
 - `mm_breit` (ab 10.10.): wie `mm_rewards`, aber 40 Märkte nach erwartetem Reward (`rank: share`), 20 $ je Gebot,
   nur Märkte mit Reward-Mindestgröße ≤ 25 $ (`max_min_size_usd`), Bestand gesamt max. 1.500 $
   (`max_total_inventory_usd`, darüber nur Gebote, die Positionen abbauen). Frage: breit + klein besser als 15 groß?

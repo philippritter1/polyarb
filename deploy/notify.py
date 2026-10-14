@@ -278,6 +278,36 @@ def mm_trend(b: dict, now: float = None):
             f" · Rewards ~{usd(cur[2] or 0)}/Tag{chg(2)}")
 
 
+def live_line(b: dict):
+    """Pilot books: yesterday's real reward payout next to the estimate, and how many open orders score now."""
+    import json as _json
+    import sqlite3
+    try:
+        db = sqlite3.connect(b["db"])
+        row = db.execute("SELECT day, usd FROM live_rewards ORDER BY day DESC LIMIT 1").fetchone()
+        est = db.execute("SELECT SUM(payout) FROM settlements WHERE kind='reward' AND date(ts, 'unixepoch') = ?",
+                         (row[0],)).fetchone()[0] if row else None
+        db.close()
+    except sqlite3.Error:
+        return None
+    name = Path(b["db"]).stem.replace("scenario-", "")
+    try:
+        st = _json.loads((Path(b["db"]).parent / f"live-status-{name}.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    if not row and not st.get("live"):
+        return None
+    parts = [f"ECHT {b['label']}:"]
+    if row:
+        parts.append(f"Rewards {row[0]} gezahlt {usd(row[1])} (geschätzt {usd(est or 0)}"
+                     + (f", {row[1] / est * 100:.0f} %" if est else "") + ")")
+    if st.get("scoring"):
+        parts.append(f"zählen jetzt {st['scoring']}")
+    if st.get("equity") is not None:
+        parts.append(f"Konto {usd(st['equity'])}")
+    return " · ".join(parts)
+
+
 def overview(hours: float, title: str):
     """One message for all strategies: realized result in total and over the last `hours`."""
     since = time.time() - hours * 3600
@@ -296,6 +326,9 @@ def overview(hours: float, title: str):
         lines.append(f"{arrow} {x['label']}: {usd(x['real'])} ({x['real'] / x['start'] * 100:+.2f} %)"
                      f" | {hours:g}h {usd(x['delta'])}{res}")
     lines += [f"• {x['label']}: noch keine Daten" for x in stats if not x["ok"]]
+    real = [t for t in (live_line(x) for x in live) if t]
+    if real:
+        lines += [""] + real
     trend = [t for t in (mm_trend(x) for x in live) if t]
     if trend:
         lines += ["", "Trend 24 h (Vortag):"] + trend

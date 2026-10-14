@@ -262,6 +262,21 @@ def mm_daily(db_path: str) -> list:
     return out[::-1]
 
 
+def rewards_compare(db_path: str) -> list:
+    """Pilot: rewards Polymarket really paid per (UTC) day next to our estimate for the same day.
+    [[day, estimate $, paid $, paid / estimate %]] – empty until the first real payout was read."""
+    try:
+        db = sqlite3.connect(db_path)
+        paid = dict(db.execute("SELECT day, usd FROM live_rewards ORDER BY day").fetchall())
+        est = dict(db.execute("""SELECT date(ts, 'unixepoch'), SUM(payout) FROM settlements WHERE kind='reward'
+                                 GROUP BY 1""").fetchall())
+        db.close()
+    except sqlite3.Error:
+        return []
+    return [[d, round(est.get(d) or 0, 2), round(p, 2), round(p / est[d] * 100) if est.get(d) else None]
+            for d, p in sorted(paid.items(), reverse=True)]
+
+
 def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
           kind: str = "arb", nav: list | None = None, overview: list | None = None, scan: dict | None = None) -> str:
     data = collect(db_path, float(start_capital))
@@ -275,10 +290,11 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
              "bis Preisgrenze der Regel $"], [[c["day"], c["n"], c["bought"], c["slip"], c["c2"], c["band"]] for c in cap]),
             "utf-8-sig")
     metrics = mm_daily(db_path) if kind == "mm" else []
+    rcmp = rewards_compare(db_path) if kind == "mm" else []
     if metrics:
         _write(Path(out).with_name("kennzahlen.csv"), _csv(MM_DAILY_HEADER, metrics), "utf-8-sig")
     data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
-                metrics=metrics,
+                metrics=metrics, rewards_cmp=rcmp,
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -1053,6 +1069,7 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <div id="halt"></div>
 <div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
 <div class="kpis" id="kpis"></div>
+<div class="card" id="rwcard" style="display:none"><h2>Pilot: Rewards echt vs. geschätzt</h2><p class="note">Was Polymarket für unsere echten Gebote tatsächlich gezahlt hat (einmal täglich abgerechnet, Tag = UTC), neben unserer Schätzung für denselben Tag. Die Kernzahl des Pilots: liegt „echt / geschätzt“ deutlich unter 100 %, überschätzt die Simulation die Rewards.</p><div class="tblwrap"><table id="rwtbl"></table></div></div>
 <div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
 <div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
 <div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i>Vermögen realisiert (Start + realisierter PnL)</span></div><div id="eq"></div></div>
@@ -1099,6 +1116,10 @@ const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Pos
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
 if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[6]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[7][2]="Preis unter der Strategie-Grenze"}
+if(D.rewards_cmp&&D.rewards_cmp.length){
+ $("rwtbl").innerHTML=`<tr><th>Tag (UTC)</th><th class="num">geschätzt</th><th class="num">echt gezahlt</th><th class="num">echt / geschätzt</th></tr>`+
+  D.rewards_cmp.map(r=>`<tr><td>${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${usd(r[2])}</td><td class="num">${r[3]==null?"–":r[3]+" %"}</td></tr>`).join("");
+ $("rwcard").style.display=""}
 if(D.metrics&&D.metrics.length){
  $("mmtbl").innerHTML=`<tr><th>Tag</th><th class="num">Pool ausgewählt</th><th class="num">Pool unserer Gebote</th><th class="num">Rewards/Tag (geschätzt)</th><th class="num">Anteil am Pool</th><th class="num">Spread/Auflösung</th><th class="num">Rewards</th><th class="num">Rebates</th><th class="num">Bestand</th><th class="num">Märkte</th><th class="num">Ausführungen</th><th class="num">Std.</th></tr>`+
   D.metrics.map(m=>`<tr><td>${m[0]}</td><td class="num">${usd(m[1])}</td><td class="num">${usd(m[2])}</td><td class="num">${usd(m[3])}</td><td class="num">${m[4]==null?"–":fmt(m[4],2)+" %"}</td><td class="num ${m[5]>0?"pos":m[5]<0?"neg":""}">${usd(m[5])}</td><td class="num">${usd(m[6])}</td><td class="num">${usd(m[7])}</td><td class="num">${usd(m[8])}</td><td class="num">${m[9]}</td><td class="num">${m[10]}</td><td class="num">${m[11]}</td></tr>`).join("");

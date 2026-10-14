@@ -278,3 +278,26 @@ def test_exit_sells_old_inventory_first_resting_then_at_the_bid(tmp_path):
     again = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=1, dump_after_h=3)), Client([]), SimClock(NOW),
                         books=BookStore(), pool=None)
     assert abs(again.st.exit_usd - mm.st.exit_usd) < 1e-9
+
+
+def test_real_rewards_next_to_the_estimate(tmp_path):
+    import sqlite3
+    from datetime import datetime, timezone
+    from dashboard import rewards_compare
+    db_path = tmp_path / "scenario-mm_pilot.sqlite"
+    db = sqlite3.connect(db_path)
+    db.execute("CREATE TABLE settlements(ts REAL, ref TEXT, kind TEXT, qty REAL, payout REAL, pnl REAL)")
+    db.execute("CREATE TABLE live_rewards(day TEXT PRIMARY KEY, usd REAL, ts REAL)")
+    day_ts = datetime(2026, 11, 2, 12, tzinfo=timezone.utc).timestamp()
+    db.executemany("INSERT INTO settlements VALUES(?,?,?,?,?,?)",
+                   [(day_ts, "r", "reward", 0, 2.0, 2.0), (day_ts + 60, "r", "reward", 0, 2.0, 2.0),
+                    (day_ts, "m", "merge", 1, 1.0, 0.04)])
+    db.execute("INSERT INTO live_rewards VALUES('2026-11-02', 3.0, 0)")
+    db.commit()
+    assert rewards_compare(str(db_path)) == [["2026-11-02", 4.0, 3.0, 75]]
+    (tmp_path / "live-status-mm_pilot.json").write_text(json.dumps({"live": True, "scoring": "8/10", "equity": 301.5}))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
+    import notify
+    line = notify.live_line(dict(label="Pilot", db=str(db_path)))
+    assert "gezahlt $3.00 (geschätzt $4.00, 75 %)" in line and "zählen jetzt 8/10" in line and "Konto $301.50" in line
+    assert rewards_compare(str(tmp_path / "none.sqlite")) == []

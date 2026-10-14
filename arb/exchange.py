@@ -329,25 +329,27 @@ def test_passed(steps: List[dict]) -> bool:
     return bool(steps) and all(x.get("ok") for x in steps) and any(x.get("step") == "Order weg" for x in steps)
 
 
-def reward_markets(get: Callable = None, n: int = 15) -> List[dict]:
-    """Markets that pay liquidity rewards, biggest daily pool first: [{token, question, rate, v, min_size}].
+def reward_markets(get: Callable = None, n: int = 300) -> List[dict]:
+    """Markets that pay liquidity rewards, both outcome tokens each: [{token, question, rate, v, min_size, price}].
     Same reading of Polymarket's reward fields as the paper market maker (arb/mm.rewards_of)."""
     import json as _json
     from .mm import rewards_of
     r = (get or requests.get)("https://gamma-api.polymarket.com/markets", params={
-        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 300,
-        "liquidity_num_min": 1000}, timeout=30)
+        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 500,
+        "liquidity_num_min": 500}, timeout=30)
     out = []
     for m in (r.json() if hasattr(r, "json") else r) or []:
         try:
             rate, v, size = rewards_of(m)
             toks, prices = _json.loads(m.get("clobTokenIds") or "[]"), _json.loads(m.get("outcomePrices") or "[]")
             if rate > 0 and v >= 0.02 and m.get("enableOrderBook") and m.get("acceptingOrders", True) \
-                    and len(toks) == 2 and 0.2 <= float(prices[0]) <= 0.8:
-                out.append(dict(token=str(toks[0]), question=m.get("question", ""), rate=rate, v=v, min_size=size))
+                    and len(toks) == 2 and 0.1 <= float(prices[0]) <= 0.9:
+                for i in (0, 1):  # bid on either side: the cheaper one needs less money for the reward minimum
+                    out.append(dict(token=str(toks[i]), question=m.get("question", "") + (" – NEIN" if i else " – JA"),
+                                    rate=rate, v=v, min_size=size, price=float(prices[i])))
         except (ValueError, TypeError, IndexError):
             continue
-    return sorted(out, key=lambda x: -x["rate"])[:n]
+    return out[:n]
 
 
 def reward_test(ex: "PolyExchange", find=None, wait=None, checks: int = 4, every_s: float = 20) -> List[dict]:
@@ -372,17 +374,26 @@ def reward_test(ex: "PolyExchange", find=None, wait=None, checks: int = 4, every
         return steps
 
     def pick():
-        for c in (find or reward_markets)():
+        cands = list((find or reward_markets)())
+        # cheapest reward minimum first (fits the balance), then the bigger pool
+        cands.sort(key=lambda c: (c["min_size"] * c.get("price", 0.5) > bal * 0.95, c["min_size"] * c.get("price", 0.5),
+                                  -c["rate"]))
+        cheapest = None
+        for c in cands[:40]:
             b = ex.best(c["token"])
             if b["bid"] is None or b["ask"] is None or b["ask"] - b["bid"] > c["v"]:
                 continue  # one-sided or too wide to quote inside the reward distance
             mid, tick = (b["bid"] + b["ask"]) / 2, b["tick"]
             price = round(min(b["bid"], math.floor((mid - c["v"] / 2) / tick + 1e-9) * tick), 4)
             size = max(c["min_size"], b["min_size"], 5.0)
-            if price <= 0 or mid - price >= c["v"] or price * size > bal:
+            if price <= 0 or mid - price >= c["v"]:
+                continue
+            cheapest = min(cheapest or 1e9, price * size)
+            if price * size > bal:
                 continue
             return dict(c, price=price, size=size, mid=mid, bid=b["bid"])
-        raise RuntimeError(f"kein Reward-Markt, dessen Mindestgröße ins Guthaben ({bal:.2f} $) passt")
+        raise RuntimeError(f"{len(cands)} Reward-Angebote geprüft, keins passt ins Guthaben ({bal:.2f} $)"
+                           + (f"; das günstigste bräuchte {cheapest:.2f} $" if cheapest else ""))
     m = step("Reward-Markt", pick)
     if not m:
         return steps

@@ -354,4 +354,4 @@ def test_reward_test_quotes_inside_the_reward_distance_and_reports_scoring_and_f
     # not enough money for the reward minimum: nothing placed
     ex4 = Ex(cash=5)
     steps = reward_test(ex4, find=markets, wait=lambda s: None)
-    assert not any(c[0] == "place" for c in ex4.calls) and "Guthaben" in steps[-1]["info"]
+    assert not any(c[0] == "place" for c in ex4.calls) and "bräuchte 9.40 $" in steps[-1]["info"]

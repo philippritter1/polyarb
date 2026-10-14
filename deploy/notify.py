@@ -148,6 +148,50 @@ def cmd_start():
          tags="rocket")
 
 
+def live_alerts(st: dict, now: float, data_dir: Path) -> list:
+    """Alarms for real orders: the emergency stop fired, the exchange keeps rejecting orders, too few of our
+    open orders count for rewards, or a live order module stopped reporting. Each fires once (state in `st`)."""
+    import json as _json
+    out, seen = [], st.setdefault("live", {})
+    try:
+        mode = _json.loads((data_dir / "live.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        mode = {}
+    if mode.get("mode") == "off" and mode.get("why") and seen.get("stop_ts") != mode.get("ts"):
+        seen["stop_ts"] = mode.get("ts")
+        out.append((f"{NAME}: NOT-AUS", f"Order-Modul automatisch ausgeschaltet: {mode['why']}. Alle Orders "
+                    "wurden storniert. Wieder einschalten nur bewusst auf /admin/.", "urgent", "rotating_light"))
+    for f in sorted(data_dir.glob("live-status-*.json")):
+        try:
+            s = _json.loads(f.read_text("utf-8"))
+        except (OSError, ValueError):
+            continue
+        name = s.get("scenario") or f.stem
+        k = seen.setdefault(name, {})
+        if not s.get("live"):
+            k["rej"] = s.get("abgelehnt", 0)
+            continue
+        if now - float(s.get("ts") or 0) > 600 and now - k.get("stale_at", 0) > 3600:
+            k["stale_at"] = now
+            out.append((f"{NAME}: Order-Modul {name} meldet sich nicht", "Seit über 10 Minuten kein Status – "
+                        "offene echte Orders bleiben stehen. Diagnose auf /admin/diag ansehen.", "high", "warning"))
+        rej = int(s.get("abgelehnt", 0))
+        if rej - int(k.get("rej", rej)) >= 10 and now - k.get("rej_at", 0) > 3600:
+            k["rej_at"] = now
+            out.append((f"{NAME}: {name} - Orders abgelehnt", f"{rej - int(k.get('rej', rej))} Orders seit der letzten "
+                        "Prüfung abgelehnt (Grenzen oder Börse). Gründe im Order-Protokoll.", "high", "warning"))
+        k["rej"] = rej
+        try:
+            a, b = (int(x) for x in str(s.get("scoring", "")).split("/"))
+        except ValueError:
+            a, b = 0, 0
+        if b >= 3 and a / b < 0.5 and now - k.get("score_at", 0) > 6 * 3600:
+            k["score_at"] = now
+            out.append((f"{NAME}: {name} - wenige Gebote zaehlen fuer Rewards", f"Nur {a} von {b} offenen Geboten zählen laut "
+                        "Polymarket für Rewards.", "default", "warning"))
+    return out
+
+
 def cmd_watch():
     st = load_state()
     alerts = []
@@ -170,6 +214,8 @@ def cmd_watch():
     if not problem and st.get("problem"):
         alerts.append((f"{NAME}: wieder OK", "Der Bot liefert wieder Daten.", "default", "white_check_mark"))
     st["problem"] = problem
+
+    alerts += live_alerts(st, now, Path(T["db"]).parent)
 
     halted = last[0][2] if last else None
     if halted and halted != st.get("halted"):

@@ -767,3 +767,25 @@ def test_watchdog_alarms_only_when_a_process_is_down_twice_in_a_row(tmp_path, mo
         notify.cmd_watch()
     problems = [t for t in sent if "Problem" in t]
     assert len(problems) == 1 and sent[-1].endswith("wieder OK")
+
+
+def test_live_alarms_fire_once(tmp_path, monkeypatch):
+    import time
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
+    import notify
+    now = time.time()
+    st = {}
+    (tmp_path / "live.json").write_text(json.dumps({"mode": "off", "ts": now, "why": "Tagesverlust 31 $ > 30 $"}))
+    status = tmp_path / "live-status-mm_pilot.json"
+    status.write_text(json.dumps({"scenario": "mm_pilot", "live": True, "ts": now, "abgelehnt": 0, "scoring": "1/5"}))
+    first = notify.live_alerts(st, now, tmp_path)
+    titles = [a[0] for a in first]
+    assert any("NOT-AUS" in t for t in titles) and any("wenige Gebote" in t for t in titles)
+    assert all(t.isascii() or "NOT-AUS" in t for t in titles)
+    # nothing new: no repeat
+    assert notify.live_alerts(st, now + 60, tmp_path) == []
+    # 12 more rejections, then the module goes quiet for 11 minutes
+    status.write_text(json.dumps({"scenario": "mm_pilot", "live": True, "ts": now, "abgelehnt": 12, "scoring": "4/5"}))
+    again = [a[0] for a in notify.live_alerts(st, now + 700, tmp_path)]
+    assert any("abgelehnt" in t for t in again) and any("meldet sich nicht" in t for t in again)
+    assert all(a[0].isascii() for a in notify.live_alerts({}, now, tmp_path) if "NOT-AUS" not in a[0])

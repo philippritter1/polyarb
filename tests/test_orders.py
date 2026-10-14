@@ -273,7 +273,9 @@ def test_connection_test_places_below_the_bid_and_always_cancels():
     ex0.wallet = {"sig_type": 1}
     ex0.balance_usd = lambda t=None: {None: 0.0, 0: 0.0, 2: 11.0}[t]
     steps = connection_test(ex0, find=find, wait=lambda s: None)
-    assert "Typ 2: 11.0" in steps[-2]["info"] and "Signaturtyp 2" in steps[-1]["info"]
+    info = {x["step"]: x["info"] for x in steps}
+    assert "Typ 2: 11.0" in info["Guthaben je Signaturtyp"] and "Signaturtyp 2" in steps[-1]["info"]
+    assert "Blockchain direkt" in info  # reported (here without a key: as a failed diagnostic step)
     assert not any(c[0] == "place" for c in ex0.calls)
     # not enough money: nothing is placed
     ex3 = Ex(cash=1)
@@ -283,3 +285,24 @@ def test_connection_test_places_below_the_bid_and_always_cancels():
     ex4 = Ex(cash=10, fail="invalid signature")
     steps = connection_test(ex4, find=find, wait=lambda s: None)
     assert "invalid signature" in steps[-1]["info"] and not any(c[0] == "cancel" for c in ex4.calls)
+
+
+def test_chain_balances_reads_both_usdc_tokens_and_contract_code():
+    from arb.exchange import TOKENS, chain_balances
+    calls = []
+
+    class R:
+        def __init__(self, d):
+            self.d = d
+
+        def json(self):
+            return self.d
+
+    def post(url, json, timeout):
+        calls.append(url)
+        if json["method"] == "eth_getCode":
+            return R({"result": "0x6080"})
+        tok = json["params"][0]["to"]
+        return R({"result": hex(11_000_000 if tok == TOKENS["USDC"] else 0)})
+    out = chain_balances({"Funder": "0x" + "1" * 40, "kaputt": "nope"}, post=post)
+    assert out == {"Funder": "USDC.e 0.00, USDC 11.00, Vertrag"}

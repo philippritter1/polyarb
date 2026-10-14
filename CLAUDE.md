@@ -124,6 +124,9 @@ Aktive Kandidaten im Live-Test:
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit
   `allow_real: true`: 1 Markt, Gebote ~5 $, echte Orders zusammen max. 11 $, Not-Aus ab 3 $ Tagesverlust, Abbau nach
   1 h / 2 h. Echt nur, wenn auf /admin/ „Echt“ gewählt ist. Nach der Probe allow_real aus und ins Archiv.
+  **Gestartet 14.10. ~16:38 (Nutzer hat „Echt“ gewählt):** 1 Order ~5 $, zählt für Rewards (1/1). Beobachtung: sehr
+  häufiges Umsetzen (12 gesetzt / 11 storniert in wenigen Minuten, Mitte flackert um 1 Tick) – für den Pilot Toleranz
+  (erst ab 2 Ticks umsetzen) als neues Szenario/Option prüfen. „Could not create api key“ im Log ist harmlos.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

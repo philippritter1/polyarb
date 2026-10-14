@@ -77,6 +77,38 @@ def geoblock(get: Callable = None) -> dict:
         return dict(blocked=None, country="", error=type(e).__name__)
 
 
+POLYGON_RPC = ("https://polygon-bor-rpc.publicnode.com", "https://polygon-rpc.com", "https://1rpc.io/matic")
+TOKENS = {"USDC.e": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "USDC": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"}
+
+
+def chain_balances(addresses: Dict[str, str], post: Callable = None) -> Dict[str, str]:
+    """What the blockchain itself says (public Polygon RPC): USDC.e / USDC per address and whether the address is
+    a contract (Polymarket proxy/safe wallets are). Diagnostic only – for when the exchange reports 0."""
+    def rpc(method, params):
+        for url in POLYGON_RPC:
+            try:
+                r = (post or requests.post)(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+                                            timeout=10)
+                d = r.json() if hasattr(r, "json") else r
+                if "result" in d:
+                    return d["result"]
+            except Exception:  # noqa – next endpoint
+                continue
+        raise RuntimeError("kein Polygon-Knoten erreichbar")
+    out = {}
+    for name, addr in addresses.items():
+        if not ADDR_RE.match(addr or ""):
+            continue
+        parts = []
+        for sym, tok in TOKENS.items():
+            raw = rpc("eth_call", [{"to": tok, "data": "0x70a08231" + addr[2:].lower().rjust(64, "0")}, "latest"])
+            parts.append(f"{sym} {int(raw, 16) / 1e6:.2f}")
+        code = rpc("eth_getCode", [addr, "latest"])
+        parts.append("Vertrag" if code not in ("0x", "0x0", None) else "normale Adresse")
+        out[name] = ", ".join(parts)
+    return out
+
+
 def account_value(user: str, get: Callable = None) -> Optional[float]:
     """Current value of all positions of `user` (data API, public); None if unavailable."""
     try:
@@ -201,19 +233,21 @@ class PolyExchange:
             return None
 
 
-def liquid_token(get: Callable = None) -> Optional[dict]:
-    """A busy, two-sided market for the connection test: {token, question}."""
+def liquid_tokens(get: Callable = None, n: int = 8) -> List[dict]:
+    """Busy markets for the connection test, most traded first: [{token, question}] (books checked by the caller)."""
     import json as _json
     r = (get or requests.get)("https://gamma-api.polymarket.com/markets", params={
-        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 30}, timeout=20)
+        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 40}, timeout=20)
+    out = []
     for m in (r.json() if hasattr(r, "json") else r) or []:
         try:
             toks, prices = _json.loads(m.get("clobTokenIds") or "[]"), _json.loads(m.get("outcomePrices") or "[]")
-            if m.get("enableOrderBook") and len(toks) == 2 and 0.2 <= float(prices[0]) <= 0.8:
-                return dict(token=str(toks[0]), question=m.get("question", ""))
+            if m.get("enableOrderBook") and m.get("acceptingOrders", True) and len(toks) == 2 \
+                    and 0.2 <= float(prices[0]) <= 0.8:
+                out.append(dict(token=str(toks[0]), question=m.get("question", "")))
         except (ValueError, TypeError, IndexError):
             continue
-    return None
+    return out[:n]
 
 
 def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
@@ -235,12 +269,17 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
     if step("Zugang (API-Schlüssel aus dem Private Key)", lambda: bool(ex.c) and "ok") is None:
         return steps
     bal = step("Guthaben (USDC)", ex.balance_usd)
-    m = step("Markt für den Test", lambda: (find or liquid_token)() or (_ for _ in ()).throw(RuntimeError("keiner gefunden")))
+    def two_sided():  # the most traded market whose book has a bid AND an ask (a finished match has neither)
+        for c in (find or liquid_tokens)():
+            b = ex.best(c["token"])
+            if b["bid"] is not None and b["ask"] is not None and b["ask"] - b["bid"] <= 0.05:
+                return dict(c, book=b)
+        raise RuntimeError("kein Markt mit Geboten auf beiden Seiten gefunden")
+    m = step("Markt für den Test", two_sided)
     if not m:
         return steps
-    bk = step("Orderbuch", lambda: ex.best(m["token"]))
-    if not bk or bk["bid"] is None:
-        return steps
+    bk = m.pop("book")
+    steps[-1]["info"] = f"{m['question'][:80]} – bestes Gebot {bk['bid']:.2f}, bester Ask {bk['ask']:.2f}"
     price = round(max(bk["tick"], bk["bid"] - 3 * bk["tick"]), 4)
     size = max(bk["min_size"], 5.0)
     if bal is not None and price * size > bal:
@@ -255,6 +294,12 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
                         found[t] = None
             steps.append(dict(step="Guthaben je Signaturtyp", ok=True,
                               info=", ".join(f"Typ {t}: {v if v is not None else '?'}" for t, v in found.items())))
+            try:
+                from_chain = chain_balances({"Funder": ex.wallet.get("funder") or "",
+                                             "Signer": address_of(ex.wallet["key"])})
+                steps.append(dict(step="Blockchain direkt", ok=True, info=" | ".join(f"{k}: {v}" for k, v in from_chain.items())))
+            except Exception as e:  # noqa
+                steps.append(dict(step="Blockchain direkt", ok=False, info=f"{type(e).__name__}: {str(e)[:120]}"))
             rich = [t for t, v in found.items() if v]
             hint = (f" – das Geld liegt bei Signaturtyp {rich[0]}: auf /admin/ Signaturtyp {rich[0]} speichern "
                     "(Key-Feld leer lassen) und erneut testen" if rich else
@@ -275,3 +320,8 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
             (wait or _t.sleep)(2)
             step("Order weg", lambda: oid not in ex.open_orders() or (_ for _ in ()).throw(RuntimeError("noch offen!")))
     return steps
+
+
+def test_passed(steps: List[dict]) -> bool:
+    """Only a test that went all the way – order placed, found, cancelled and gone – counts as passed."""
+    return bool(steps) and all(x.get("ok") for x in steps) and any(x.get("step") == "Order weg" for x in steps)

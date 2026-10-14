@@ -110,9 +110,14 @@ def test_wallet_is_stored_privately_never_shown_and_live_needs_a_release(tmp_pat
 def test_connection_test_button_needs_a_wallet_and_shows_the_steps(tmp_path, monkeypatch):
     srv, base = _server(tmp_path, monkeypatch, None)
     calls = []
-    monkeypatch.setattr(admin.Handler, "run_test", lambda self: calls.append(1) or admin.json.dump(
-        {"ts": 1, "steps": [{"step": "Order stornieren", "ok": True, "info": "ok"}]},
-        open(admin.LIVE_TEST_PATH(), "w")) or [{"ok": True}])
+    done = [{"step": "Order stornieren", "ok": True, "info": "ok"}, {"step": "Order weg", "ok": True, "info": True}]
+
+    def fake(self):
+        calls.append(1)
+        with open(admin.LIVE_TEST_PATH(), "w") as f:
+            admin.json.dump({"ts": 1, "steps": done}, f)
+        return done
+    monkeypatch.setattr(admin.Handler, "run_test", fake)
 
     def post(path, **form):
         try:
@@ -125,6 +130,7 @@ def test_connection_test_button_needs_a_wallet_and_shows_the_steps(tmp_path, mon
         post("/admin/wallet", key="ab" * 32, funder="0x" + "1" * 40, sig_type="1")
         code, body = post("/admin/live-test")
         assert code == 200 and "erfolgreich" in body and "Order stornieren" in body and calls == [1]
+        assert "✅ bestanden" in body
         assert post("/admin/live-test")[0] == 429  # once a minute at most
     finally:
         srv.shutdown()

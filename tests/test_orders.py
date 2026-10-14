@@ -250,18 +250,26 @@ def test_no_scenario_is_released_for_real_orders_by_accident():
 
 
 def test_connection_test_places_below_the_bid_and_always_cancels():
-    from arb.exchange import connection_test
+    from arb.exchange import connection_test, test_passed
 
     class Ex(FakeExchange):
         c = object()
 
-        def best(self, token):
+        def best(self, token):  # "OVER" is a finished match: no bids left
+            if token == "OVER":
+                return dict(bid=None, ask=0.01, tick=0.01, min_size=5)
             return dict(bid=0.55, ask=0.57, tick=0.01, min_size=5)
-    find = lambda: dict(token="T", question="Will it rain?")  # noqa: E731
+    find = lambda: [dict(token="OVER", question="Finished match"), dict(token="T", question="Will it rain?")]  # noqa
     ex = Ex(cash=10)
     steps = connection_test(ex, find=find, wait=lambda s: None)
-    assert all(s["ok"] for s in steps), steps
+    assert all(s["ok"] for s in steps) and test_passed(steps), steps
     assert ("place", "T", "BUY", 0.52, 5.0) in ex.calls and ex.open == {}  # 3 ticks under the bid, gone again
+    assert "Will it rain?" in steps[2]["info"]  # the one-sided book was skipped
+    # only one-sided books: a failed step, and not a pass (the page claimed success on 14.10.)
+    steps = connection_test(Ex(cash=10), find=lambda: [dict(token="OVER", question="x")], wait=lambda s: None)
+    assert not steps[-1]["ok"] and "beiden Seiten" in steps[-1]["info"] and not test_passed(steps)
+    # stopped early with every shown step green is no pass either
+    assert not test_passed([{"step": "Zugang", "ok": True}])
     # the scoring check breaks after the order was placed: it is cancelled all the same
     ex2 = Ex(cash=10)
     ex2.scoring = lambda ids: (_ for _ in ()).throw(RuntimeError("down"))
@@ -273,7 +281,9 @@ def test_connection_test_places_below_the_bid_and_always_cancels():
     ex0.wallet = {"sig_type": 1}
     ex0.balance_usd = lambda t=None: {None: 0.0, 0: 0.0, 2: 11.0}[t]
     steps = connection_test(ex0, find=find, wait=lambda s: None)
-    assert "Typ 2: 11.0" in steps[-2]["info"] and "Signaturtyp 2" in steps[-1]["info"]
+    info = {x["step"]: x["info"] for x in steps}
+    assert "Typ 2: 11.0" in info["Guthaben je Signaturtyp"] and "Signaturtyp 2" in steps[-1]["info"]
+    assert "Blockchain direkt" in info  # reported (here without a key: as a failed diagnostic step)
     assert not any(c[0] == "place" for c in ex0.calls)
     # not enough money: nothing is placed
     ex3 = Ex(cash=1)
@@ -283,3 +293,24 @@ def test_connection_test_places_below_the_bid_and_always_cancels():
     ex4 = Ex(cash=10, fail="invalid signature")
     steps = connection_test(ex4, find=find, wait=lambda s: None)
     assert "invalid signature" in steps[-1]["info"] and not any(c[0] == "cancel" for c in ex4.calls)
+
+
+def test_chain_balances_reads_both_usdc_tokens_and_contract_code():
+    from arb.exchange import TOKENS, chain_balances
+    calls = []
+
+    class R:
+        def __init__(self, d):
+            self.d = d
+
+        def json(self):
+            return self.d
+
+    def post(url, json, timeout):
+        calls.append(url)
+        if json["method"] == "eth_getCode":
+            return R({"result": "0x6080"})
+        tok = json["params"][0]["to"]
+        return R({"result": hex(11_000_000 if tok == TOKENS["USDC"] else 0)})
+    out = chain_balances({"Funder": "0x" + "1" * 40, "kaputt": "nope"}, post=post)
+    assert out == {"Funder": "USDC.e 0.00, USDC 11.00, Vertrag"}

@@ -641,14 +641,19 @@ class MarketMaker:
         asks = bool(self.sc.get("reward_asks"))  # also count the exit's sell orders (they qualify like bids)
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
-            ask = mk.ask if asks else None
-            if not by or not bn or mk.mid is None or not (mk.bid_yes or mk.bid_no or ask):
+            bids = bool(mk.bid_yes or mk.bid_no)
+            if not by or not bn or mk.mid is None or not (bids or mk.ask):
                 continue
-            share = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size, ask)
-            if ask:
-                base = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size)
-                self.st.ask_rewards += mk.daily_rate * (share - base) * dt / DAY
-            est[mk.cid] = dict(q=mk.title, rate=mk.daily_rate, pct=round(share * 100, 4))
+            base = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size) if bids else 0.0
+            full = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size, mk.ask) \
+                if mk.ask else base
+            # Polymarket counts the sell order either way: the live comparison always uses the full share
+            est[mk.cid] = dict(q=mk.title, rate=mk.daily_rate, pct=round(full * 100, 4))
+            if not (bids or asks):
+                continue  # booked estimate as before for scenarios without reward_asks
+            share = full if asks else base
+            if asks:
+                self.st.ask_rewards += mk.daily_rate * (full - base) * dt / DAY
             r = mk.daily_rate * share * dt / DAY
             self.st.rewards += r
             self.st.rewards_unbooked += r

@@ -371,6 +371,9 @@ def test_live_exit_sells_for_real_and_books_only_the_reported_fill(tmp_path):
     mm.clock.sleep(3600)
     mm.step()
     assert ("aY", "SELL") in gw.want  # resting exit ask (limit, earns rewards)
+    mm.clock.sleep(2)
+    mm.step()
+    assert gw.est["a"]["pct"] > 0  # the live comparison counts the sell order too
     mm.clock.sleep(2 * 3600)
     mm.step()
     assert gw.sold == [("aY", 0.48, 30.0)] and ("aY", "SELL") not in gw.want  # ask withdrawn, sold at the bid

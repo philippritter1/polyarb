@@ -170,9 +170,22 @@ def run_live_test(ex=None, find=None, wait=None) -> list:
     return steps
 
 
-def live_test_html() -> str:
+REWARD_TEST_PATH = lambda: os.path.join(DATA, "reward-test.json")  # noqa: E731
+
+
+def run_reward_test(ex=None, find=None, wait=None) -> list:
+    """The reward test (arb/exchange.reward_test): does a real quote of ours score? Result kept for the page."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from arb.exchange import PolyExchange, read_wallet, reward_test
+    steps = reward_test(ex or PolyExchange(read_wallet(SECRETS)), find=find, wait=wait)
+    with open(REWARD_TEST_PATH(), "w", encoding="utf-8") as f:
+        json.dump(dict(ts=time.time(), steps=steps), f, default=str)
+    return steps
+
+
+def live_test_html(path_fn=None, passed=None) -> str:
     try:
-        with open(LIVE_TEST_PATH(), encoding="utf-8") as f:
+        with open((path_fn or LIVE_TEST_PATH)(), encoding="utf-8") as f:
             d = json.load(f)
     except (OSError, ValueError):
         return "<p>Noch kein Test.</p>"
@@ -180,7 +193,7 @@ def live_test_html() -> str:
                    for x in d.get("steps", []))
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from arb.exchange import test_passed
-    verdict = "✅ bestanden" if test_passed(d.get("steps", [])) else "❌ nicht bestanden"
+    verdict = "✅ bestanden" if (passed or test_passed)(d.get("steps", [])) else "❌ nicht bestanden"
     return (f"<p>Letzter Test {time.strftime('%d.%m. %H:%M', time.localtime(d.get('ts', 0)))}: <b>{verdict}</b></p>"
             f"<ul>{rows}</ul>")
 
@@ -212,7 +225,7 @@ def wallet_section() -> str:
             '<label>Private Key (64 Hex-Zeichen; leer lassen = gespeicherten behalten)<input name="key" type="password" autocomplete="off" spellcheck="false"></label>'
             '<label>Funder-Adresse (Proxy-Wallet von polymarket.com, 0x…; leer = behalten)<input name="funder" autocomplete="off" '
             'spellcheck="false"></label>'
-            '<label>Signaturtyp (1 = E-Mail-Konto, 2 = Browser-Wallet, 3 = Smart-Contract-Wallet, 0 = eigene Wallet)<input name="sig_type" value="1">'
+            '<label>Signaturtyp (1 = E-Mail-Konto, 2 = Browser-Wallet, 3 = Smart-Contract-Wallet, 0 = eigene Wallet)<input name="sig_type" value="' + html.escape(sec.get("POLY_SIG_TYPE", "1")) + '">'
             '</label><button type="submit">Prüfen und speichern</button></form>'
             '<form method="post" action="/admin/wallet-delete" style="margin-top:8px">'
             '<button type="submit">Wallet löschen</button></form>'
@@ -221,7 +234,20 @@ def wallet_section() -> str:
             "Braucht ein paar $ Guthaben, die nur kurz reserviert werden.</p>"
             + (live_test_html() if not prob else "")
             + ('<form method="post" action="/admin/live-test"><button type="submit">Verbindungstest starten</button></form>'
-               if not prob else "<p>Erst eine Wallet speichern.</p>"))
+               if not prob else "<p>Erst eine Wallet speichern.</p>")
+            + "<h2>Reward-Test</h2><p>Setzt EIN Gebot in einem Markt MIT Reward-Budget, in der Reward-Mindestgröße und "
+            "nah genug an der Mitte, fragt bis zu 80 Sekunden lang Polymarket, ob es für Rewards zählt, und storniert es. "
+            "Weil es nah an der Mitte liegt, kann es in der Zeit ausgeführt werden – dann bleiben die Anteile im Konto. "
+            "Dauert gut eine Minute.</p>"
+            + (reward_test_html() if not prob else "")
+            + ('<form method="post" action="/admin/reward-test"><button type="submit">Reward-Test starten</button></form>'
+               if not prob else ""))
+
+
+def reward_test_html() -> str:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from arb.exchange import reward_test_passed
+    return live_test_html(REWARD_TEST_PATH, reward_test_passed)
 
 
 def page(msg: str = "", ok: bool = True) -> str:
@@ -321,6 +347,9 @@ class Handler(BaseHTTPRequestHandler):
     def run_test(self) -> list:  # tests: replaced by a fake exchange
         return run_live_test()
 
+    def run_reward(self) -> list:  # tests: replaced by a fake exchange
+        return run_reward_test()
+
     def _send(self, body: str, code: int = 200, ctype: str = "text/html") -> None:
         data = body.encode("utf-8")
         self.send_response(code)
@@ -348,7 +377,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.rstrip("/")
-        if path not in ("/admin/odds-key", "/admin/live-mode", "/admin/wallet", "/admin/wallet-delete", "/admin/live-test"):
+        if path not in ("/admin/odds-key", "/admin/live-mode", "/admin/wallet", "/admin/wallet-delete", "/admin/live-test",
+                        "/admin/reward-test"):
             return self._send("not found", 404)
         n = int(self.headers.get("Content-Length") or 0)
         if n > 4096:
@@ -369,6 +399,21 @@ class Handler(BaseHTTPRequestHandler):
             ok = test_passed(steps)
             return self._send(page("Verbindungstest " + ("erfolgreich – Order gesetzt, gefunden, storniert." if ok
                                                           else "NICHT bestanden – siehe Liste unten."), bool(ok)))
+        if path == "/admin/reward-test":
+            if wallet_info()[0]:
+                return self._send(page("Erst eine Wallet speichern.", False), 400)
+            try:
+                last = os.path.getmtime(REWARD_TEST_PATH())
+            except OSError:
+                last = 0
+            if time.time() - last < 120:
+                return self._send(page("Bitte zwei Minuten warten bis zum nächsten Reward-Test.", False), 429)
+            steps = self.run_reward()
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from arb.exchange import reward_test_passed
+            ok = reward_test_passed(steps)
+            return self._send(page("Reward-Test " + ("bestanden – unser Gebot zählt für Rewards." if ok
+                                                     else "NICHT bestanden – siehe Liste unten."), bool(ok)))
         if path == "/admin/wallet-delete":
             remove_secrets({"POLY_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIG_TYPE"})
             return self._send(page("Wallet gelöscht."))

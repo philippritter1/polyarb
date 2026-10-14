@@ -314,3 +314,44 @@ def test_chain_balances_reads_both_usdc_tokens_and_contract_code():
         return R({"result": hex(11_000_000 if tok == TOKENS["USDC"] else 0)})
     out = chain_balances({"Funder": "0x" + "1" * 40, "kaputt": "nope"}, post=post)
     assert out == {"Funder": "pUSD 0.00, USDC.e 0.00, USDC 11.00, Vertrag"}
+
+
+def test_reward_test_quotes_inside_the_reward_distance_and_reports_scoring_and_fills():
+    from arb.exchange import reward_test, reward_test_passed
+
+    class Ex(FakeExchange):
+        c = object()
+
+        def __init__(self, cash=30.0, score_after=2, fills=()):
+            super().__init__(cash)
+            self.n_score, self.score_after, self.fill_list = 0, score_after, list(fills)
+
+        def best(self, token):
+            return {"WIDE": dict(bid=0.30, ask=0.50, tick=0.01, min_size=5),
+                    "R": dict(bid=0.48, ask=0.50, tick=0.01, min_size=5)}[token]
+
+        def scoring(self, ids):
+            self.n_score += 1
+            return {i: self.n_score >= self.score_after for i in ids}
+
+        def trades(self, after_ts):
+            return self.fill_list
+    markets = lambda: [dict(token="WIDE", question="wide book", rate=100, v=0.035, min_size=20),  # noqa: E731
+                       dict(token="R", question="Will X happen?", rate=50, v=0.035, min_size=20)]
+    ex = Ex()
+    steps = reward_test(ex, find=markets, wait=lambda s: None)
+    # wide book skipped; bid at min(best bid 0.48, mid 0.49 - 1.75 ct -> 0.47) = 0.47, 20 shares (reward minimum)
+    assert ("place", "R", "BUY", 0.47, 20.0) in ex.calls and ex.open == {} and reward_test_passed(steps), steps
+    assert any("nach 40 s" in str(x["info"]) for x in steps)
+    # never scores: not passed, still cancelled
+    ex2 = Ex(score_after=99)
+    steps = reward_test(ex2, find=markets, wait=lambda s: None)
+    assert not reward_test_passed(steps) and ex2.open == {} and any(c[0] == "cancel" for c in ex2.calls)
+    # filled while waiting: reported, the shares stay
+    ex3 = Ex(fills=[dict(id="t", token="R", side="BUY", price=0.47, size=20, ts=0, role="MAKER")])
+    steps = reward_test(ex3, find=markets, wait=lambda s: None)
+    assert steps[-1]["step"] == "Teilweise ausgeführt" and "20 Anteile" in steps[-1]["info"]
+    # not enough money for the reward minimum: nothing placed
+    ex4 = Ex(cash=5)
+    steps = reward_test(ex4, find=markets, wait=lambda s: None)
+    assert not any(c[0] == "place" for c in ex4.calls) and "Guthaben" in steps[-1]["info"]

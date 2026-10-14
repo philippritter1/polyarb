@@ -17,6 +17,7 @@ The API key/secret/passphrase are derived from the private key on first use; not
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -326,3 +327,97 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
 def test_passed(steps: List[dict]) -> bool:
     """Only a test that went all the way – order placed, found, cancelled and gone – counts as passed."""
     return bool(steps) and all(x.get("ok") for x in steps) and any(x.get("step") == "Order weg" for x in steps)
+
+
+def reward_markets(get: Callable = None, n: int = 15) -> List[dict]:
+    """Markets that pay liquidity rewards, biggest daily pool first: [{token, question, rate, v, min_size}].
+    Same reading of Polymarket's reward fields as the paper market maker (arb/mm.rewards_of)."""
+    import json as _json
+    from .mm import rewards_of
+    r = (get or requests.get)("https://gamma-api.polymarket.com/markets", params={
+        "active": "true", "closed": "false", "order": "volume24hr", "ascending": "false", "limit": 300,
+        "liquidity_num_min": 1000}, timeout=30)
+    out = []
+    for m in (r.json() if hasattr(r, "json") else r) or []:
+        try:
+            rate, v, size = rewards_of(m)
+            toks, prices = _json.loads(m.get("clobTokenIds") or "[]"), _json.loads(m.get("outcomePrices") or "[]")
+            if rate > 0 and v >= 0.02 and m.get("enableOrderBook") and m.get("acceptingOrders", True) \
+                    and len(toks) == 2 and 0.2 <= float(prices[0]) <= 0.8:
+                out.append(dict(token=str(toks[0]), question=m.get("question", ""), rate=rate, v=v, min_size=size))
+        except (ValueError, TypeError, IndexError):
+            continue
+    return sorted(out, key=lambda x: -x["rate"])[:n]
+
+
+def reward_test(ex: "PolyExchange", find=None, wait=None, checks: int = 4, every_s: float = 20) -> List[dict]:
+    """Does a real quote of ours count for liquidity rewards? In a market WITH a reward pool: one post-only buy of
+    the reward minimum size, inside the qualifying distance from the mid but never above the best bid (so it does not
+    cross), asked `checks` times every `every_s` seconds whether it scores, then cancelled. Closer to the mid than the
+    connection test, so it CAN be filled in that minute – a fill is reported (the shares then stay in the account)."""
+    import time as _t
+    pause = wait or _t.sleep
+    steps, oid = [], ""
+
+    def step(name, fn):
+        try:
+            v = fn()
+            steps.append(dict(step=name, ok=True, info=v))
+            return v
+        except Exception as e:  # noqa
+            steps.append(dict(step=name, ok=False, info=f"{type(e).__name__}: {str(e)[:160]}"))
+            return None
+    bal = step("Guthaben (pUSD)", ex.balance_usd)
+    if bal is None:
+        return steps
+
+    def pick():
+        for c in (find or reward_markets)():
+            b = ex.best(c["token"])
+            if b["bid"] is None or b["ask"] is None or b["ask"] - b["bid"] > c["v"]:
+                continue  # one-sided or too wide to quote inside the reward distance
+            mid, tick = (b["bid"] + b["ask"]) / 2, b["tick"]
+            price = round(min(b["bid"], math.floor((mid - c["v"] / 2) / tick + 1e-9) * tick), 4)
+            size = max(c["min_size"], b["min_size"], 5.0)
+            if price <= 0 or mid - price >= c["v"] or price * size > bal:
+                continue
+            return dict(c, price=price, size=size, mid=mid, bid=b["bid"])
+        raise RuntimeError(f"kein Reward-Markt, dessen Mindestgröße ins Guthaben ({bal:.2f} $) passt")
+    m = step("Reward-Markt", pick)
+    if not m:
+        return steps
+    steps[-1]["info"] = (f"{m['question'][:70]} – Pool {m['rate']:.0f} $/Tag, Abstand max. {m['v'] * 100:.1f} ct, "
+                         f"Mindestgröße {m['min_size']:g}")
+    t0 = int(_t.time()) - 5
+    try:
+        oid = step(f"Gebot setzen: KAUF {m['size']:g} @ {m['price']:.2f} (Mitte {m['mid']:.3f}, bestes Gebot {m['bid']:.2f})",
+                   lambda: ex.place(m["token"], "BUY", m["price"], m["size"]))
+        if not oid:
+            return steps
+        scored = False
+        for i in range(checks):
+            pause(every_s)
+            s = ex.scoring([oid]).get(oid)
+            scored = scored or bool(s)
+            if scored:
+                break
+        steps.append(dict(step="Zählt für Rewards (Polymarkets Prüfung)", ok=scored,
+                          info=f"ja (nach {(i + 1) * every_s:.0f} s)" if scored else f"nein nach {checks * every_s:.0f} s"))
+    finally:
+        if oid:
+            step("Order stornieren", lambda: ex.cancel(oid) or "ok")
+            pause(2)
+            step("Order weg", lambda: oid not in ex.open_orders() or (_ for _ in ()).throw(RuntimeError("noch offen!")))
+            try:  # fully filled orders are no longer open: look at our own trades instead
+                filled = sum(t["size"] for t in ex.trades(t0) if t["token"] == m["token"] and t["side"] == "BUY")
+            except Exception:  # noqa
+                filled = 0
+            if filled:
+                steps.append(dict(step="Teilweise ausgeführt", ok=True,
+                                  info=f"{filled:g} Anteile gekauft – liegen jetzt im Konto (später verkaufen)"))
+    return steps
+
+
+def reward_test_passed(steps: List[dict]) -> bool:
+    return any(x.get("step", "").startswith("Zählt für Rewards") and x.get("ok") for x in steps) \
+        and any(x.get("step") == "Order weg" and x.get("ok") for x in steps)

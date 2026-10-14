@@ -134,3 +134,31 @@ def test_connection_test_button_needs_a_wallet_and_shows_the_steps(tmp_path, mon
         assert post("/admin/live-test")[0] == 429  # once a minute at most
     finally:
         srv.shutdown()
+
+
+def test_reward_test_button(tmp_path, monkeypatch):
+    srv, base = _server(tmp_path, monkeypatch, None)
+    done = [{"step": "Zählt für Rewards (Polymarkets Prüfung)", "ok": True, "info": "ja (nach 20 s)"},
+            {"step": "Order weg", "ok": True, "info": True}]
+
+    def fake(self):
+        with open(admin.REWARD_TEST_PATH(), "w") as f:
+            admin.json.dump({"ts": 1, "steps": done}, f)
+        return done
+    monkeypatch.setattr(admin.Handler, "run_reward", fake)
+
+    def post(path, **form):
+        try:
+            with urllib.request.urlopen(base + path, data=urllib.parse.urlencode(form).encode(), timeout=5) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+    try:
+        assert post("/admin/reward-test")[0] == 400  # no wallet yet
+        post("/admin/wallet", key="ab" * 32, funder="0x" + "1" * 40, sig_type="3")
+        code, body = post("/admin/reward-test")
+        assert code == 200 and "unser Gebot zählt für Rewards" in body and "ja (nach 20 s)" in body
+        assert 'name="sig_type" value="3"' in body  # the stored type is shown, not the default
+        assert post("/admin/reward-test")[0] == 429
+    finally:
+        srv.shutdown()

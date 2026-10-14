@@ -203,7 +203,8 @@ class MarketMaker:
         if sc.get("live"):
             from .orders import Gateway
             self.gw = Gateway(name, self.store.db, os.path.join(data_dir, "live.json"),
-                              os.path.join(data_dir, f"live-status-{name}.json"), sc["live"])
+                              os.path.join(data_dir, f"live-status-{name}.json"), sc["live"],
+                              secrets_path=os.path.join(data_dir, "secrets.env"))
         self.scan: dict = {}
         self.quoted: Optional[set] = None  # market ids select() chose to quote (None until the first selection)
 
@@ -512,12 +513,19 @@ class MarketMaker:
         """The quotes the paper strategy holds, at pilot size (live.quote_usd, at least the reward minimum),
         handed to the order gateway, which places/cancels/replaces – in dry run only logged."""
         usd = float(self.sc["live"].get("quote_usd", 25))
+        scale = usd / float(self.sc.get("quote_usd", 50))
         want = {}
         for mk in self.st.markets.values():
             for tok, q, lbl in ((mk.yes, mk.bid_yes, "JA"), (mk.no, mk.bid_no, "NEIN")):
                 if q and q["size"] > 0:
                     size = float(max(mk.min_size, math.floor(usd / q["price"])))
-                    want[tok] = (q["price"], size, f"{mk.title[:80]} – {lbl}")
+                    want[(tok, "BUY")] = (q["price"], size, f"{mk.title[:80]} – {lbl}")
+            a = mk.ask
+            if a and a["size"] > 0:  # inventory exit: the sell order, scaled like the bids
+                size = math.floor(a["size"] * min(1.0, scale) * 100) / 100
+                if size >= 5:  # Polymarket's minimum order size
+                    want[(mk.yes if a["side"] == "yes" else mk.no, "SELL")] = (
+                        a["price"], size, f"{mk.title[:80]} – {'JA' if a['side'] == 'yes' else 'NEIN'}")
         before = sum(self.gw.counts.values())
         self.gw.sync(now, want)
         if sum(self.gw.counts.values()) != before:

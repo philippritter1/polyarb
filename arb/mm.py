@@ -209,6 +209,8 @@ class MarketMaker:
             rewards_per_day REAL, share_pct REAL, realized REAL, rewards REAL, rebates REAL, inventory REAL,
             markets INTEGER, quotes INTEGER, fills INTEGER)""")
         self._acc = dict(dt=0.0, rew=0.0, pool_dt=0.0)
+        self._dumps: list = []      # live: fill-and-kill sells of the exit, sent after the next gateway sync
+        self._mismatch: dict = {}   # live: account differences seen at the last read (corrected if they persist)
         self.gw = None  # order gateway (arb/orders.py): mirrors the quotes at pilot size, dry run only for now
         if sc.get("live"):
             from .orders import Gateway
@@ -360,8 +362,8 @@ class MarketMaker:
     def _merge(self, mk: MMMarket, now: float) -> None:
         """A YES and a NO share together are worth $1 at once (merge): book the spread earned."""
         n = math.floor(min(mk.qty_yes, mk.qty_no) * 100) / 100
-        if n <= 0:
-            return
+        if n <= 0 or (self.gw is not None and self.gw.live):  # live: merging on the chain is not built yet, the
+            return  # pair stays in the account (and so in the inventory, else the account check undoes it)
         c_yes = mk.cost_yes * n / mk.qty_yes
         c_no = mk.cost_no * n / mk.qty_no
         pnl = n - c_yes - c_no
@@ -401,6 +403,7 @@ class MarketMaker:
         if not ex:
             return
         after, dump = float(ex.get("after_h", 24)) * 3600, float(ex.get("dump_after_h", 96)) * 3600
+        self._dumps = []
         frac = float(self.sc.get("quote_frac", 0.5))
         for mk in self.st.markets.values():
             net = mk.qty_yes - mk.qty_no
@@ -416,6 +419,12 @@ class MarketMaker:
                 continue
             if age >= dump:
                 q = min(abs(net), bk.bids[0].size)
+                if self.gw is not None and self.gw.live:  # real: send a fill-and-kill sell after the resting ask is
+                    # cancelled (sync_orders); booked only when the exchange reports the fill (apply_real_fills)
+                    mk.ask = None
+                    self._dumps.append((mk.yes if side == "yes" else mk.no, bk.best_bid, math.floor(q * 100) / 100,
+                                        f"{mk.title[:80]} – {'JA' if side == 'yes' else 'NEIN'}"))
+                    continue
                 self._sell(mk, side, q, bk.best_bid, now, "abgestoßen zum Bid", taker=True)
                 self.scan["Bestand abgestoßen (Bid)"] = self.scan.get("Bestand abgestoßen (Bid)", 0) + 1
                 mk.ask = None
@@ -460,6 +469,44 @@ class MarketMaker:
         if n:
             self.scan["echte Fills"] = self.scan.get("echte Fills", 0) + n
         return n
+
+    def reconcile_positions(self, now: float) -> None:
+        """Live mode: the account is the truth. Every 5 min the real positions are compared with the inventory;
+        a difference that is still there at the next read (a fill may simply not be booked yet) is corrected to
+        the account and reported (scan, gateway status -> push alarm). Same for the cash."""
+        real = self.gw.real_positions(now)
+        if real is None:
+            return
+        seen, notes = {}, []
+        for mk in self.st.markets.values():
+            for which, tok in (("yes", mk.yes), ("no", mk.no)):
+                have = mk.qty_yes if which == "yes" else mk.qty_no
+                r = real.get(tok, {})
+                size = float(r.get("size", 0))
+                if abs(size - have) <= 0.01:
+                    continue
+                seen[tok] = size
+                if self._mismatch.get(tok) is None or abs(self._mismatch[tok] - size) > 0.01:
+                    continue  # first sighting: wait for the next read
+                cost = size * float(r.get("avg") or (mk.mid if which == "yes" else 1 - (mk.mid or 0.5)) or 0.5)
+                if which == "yes":
+                    mk.qty_yes, mk.cost_yes = size, cost
+                else:
+                    mk.qty_no, mk.cost_no = size, cost
+                notes.append(f"{mk.title[:40]} {which.upper()} {have:.2f} -> {size:.2f}")
+        cash = self.gw.info.get("cash")
+        if cash is not None and abs(cash - self.st.cash) > 0.05:
+            if self._mismatch.get("cash") is not None and abs(self._mismatch["cash"] - cash) <= 0.05:
+                if abs(cash - self.st.cash) > 1.0:  # small drifts are the estimated rewards/rebates booked as
+                    notes.append(f"Cash {self.st.cash:.2f} -> {cash:.2f}")  # cash (real ones come next day)
+                self.st.cash = float(cash)
+            else:
+                seen["cash"] = cash
+        self._mismatch = seen
+        if notes:
+            log.warning("%s: Abgleich mit dem Konto korrigiert: %s", self.name, "; ".join(notes))
+            self.scan["Abgleich korrigiert"] = self.scan.get("Abgleich korrigiert", 0) + len(notes)
+            self.gw.info["abgleich"] = f"{time.strftime('%d.%m. %H:%M')}: " + "; ".join(notes)[:300]
 
     def process_trades(self, now: float) -> int:
         """Fill resting quotes from the trades seen since the last step (see module doc)."""
@@ -575,6 +622,10 @@ class MarketMaker:
                         a["price"], size, f"{mk.title[:80]} – {'JA' if a['side'] == 'yes' else 'NEIN'}")
         before = sum(self.gw.counts.values())
         self.gw.sync(now, want)
+        for tok, price, size, label in getattr(self, "_dumps", []):
+            if size >= 5:  # Polymarket's minimum order size
+                self.gw.sell_now(now, tok, price, size, label)
+        self._dumps = []
         if sum(self.gw.counts.values()) != before:
             self.store.commit()
 
@@ -668,6 +719,7 @@ class MarketMaker:
             self.sync_orders(now)  # in live mode this also fetches the account's fills ...
             if self.gw.live:
                 self.apply_real_fills(now)  # ... which then become the inventory
+                self.reconcile_positions(now)
         if now - self._last["settle"] >= 1800:
             self._last["settle"] = now
             self.settle(now)

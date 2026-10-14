@@ -150,6 +150,24 @@ def account_value(user: str, get: Callable = None) -> Optional[float]:
         return None
 
 
+def positions(user: str, get: Callable = None) -> Optional[Dict[str, dict]]:
+    """Positions of `user` per token (data API, public): {token: {"size": shares, "avg": average price}};
+    None if unavailable (never treat a failed read as "no positions")."""
+    try:
+        r = (get or requests.get)(f"{DATA_API}/positions", params={"user": user, "sizeThreshold": 0, "limit": 500},
+                                  timeout=15)
+        d = r.json() if hasattr(r, "json") else r
+        if not isinstance(d, list):
+            return None
+        out = {}
+        for p in d:
+            if isinstance(p, dict) and p.get("asset") is not None:
+                out[str(p["asset"])] = dict(size=float(p.get("size") or 0), avg=float(p.get("avgPrice") or 0))
+        return out
+    except Exception:  # noqa
+        return None
+
+
 class PolyExchange:
     """Thin layer over py-clob-client with the calls the gateway needs. `client` may be injected (tests)."""
 
@@ -193,6 +211,18 @@ class PolyExchange:
         order = self.c.create_order(OrderArgsV2(token_id=str(token), price=float(price), size=float(size),
                                                 side=BUY if side == "BUY" else SELL))
         resp = self.c.post_order(order, OrderType.GTC, post_only=True) or {}
+        oid = resp.get("orderID") or resp.get("orderId") or ""
+        if not resp.get("success", bool(oid)) or not oid:
+            raise RuntimeError(resp.get("errorMsg") or resp.get("error") or "Order abgelehnt")
+        return oid
+
+    def sell_now(self, token: str, price: float, size: float) -> str:
+        """Sell at once: limit `price` (the bid), fill-and-kill – whatever the book takes at that price or better
+        is sold, the rest is cancelled (never rests). Returns the order id or raises with the exchange's reason."""
+        from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
+        from py_clob_client_v2.order_builder.constants import SELL
+        order = self.c.create_order(OrderArgsV2(token_id=str(token), price=float(price), size=float(size), side=SELL))
+        resp = self.c.post_order(order, OrderType.FAK) or {}
         oid = resp.get("orderID") or resp.get("orderId") or ""
         if not resp.get("success", bool(oid)) or not oid:
             raise RuntimeError(resp.get("errorMsg") or resp.get("error") or "Order abgelehnt")

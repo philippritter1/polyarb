@@ -486,3 +486,45 @@ def test_live_bids_are_limited_to_the_real_cash():
     seen.clear()
     MarketMaker.sync_orders(me, NOW)
     assert set(seen) == {("Y", "BUY"), ("N", "BUY")}
+
+
+def test_sell_now_only_live_and_at_most_once_a_minute(tmp_path):
+    ex = FakeExchange()
+    ex.sell_now = lambda tok, price, size: ex.calls.append(("sell_now", tok, price, size)) or "0xs"
+    gw, db = _live(tmp_path, ex)
+    gw.sync(NOW, {})
+    assert gw.sell_now(NOW, "A", 0.48, 20, "A JA") and ("sell_now", "A", 0.48, 20) in ex.calls
+    assert not gw.sell_now(NOW + 30, "A", 0.48, 20, "A JA")  # once a minute
+    assert gw.sell_now(NOW + 61, "A", 0.48, 20, "A JA")
+    assert db.execute("SELECT COUNT(*) FROM live_orders WHERE action='dump'").fetchone()[0] == 2
+    write_mode(str(tmp_path / "live.json"), "dry")
+    gw.sync(NOW + 62, {})
+    assert not gw.sell_now(NOW + 200, "A", 0.48, 20, "A JA")
+
+
+def test_positions_and_fill_and_kill_sell_without_network(monkeypatch):
+    import sys
+    import types
+    from arb.exchange import PolyExchange, positions
+    if "py_clob_client_v2" not in sys.modules:  # the live library is optional: stand in for its two modules
+        ct = types.SimpleNamespace(OrderArgsV2=lambda **k: types.SimpleNamespace(**k),
+                                   OrderType=types.SimpleNamespace(GTC="GTC", FAK="FAK"))
+        monkeypatch.setitem(sys.modules, "py_clob_client_v2", types.ModuleType("py_clob_client_v2"))
+        monkeypatch.setitem(sys.modules, "py_clob_client_v2.clob_types", ct)
+        monkeypatch.setitem(sys.modules, "py_clob_client_v2.order_builder", types.ModuleType("ob"))
+        monkeypatch.setitem(sys.modules, "py_clob_client_v2.order_builder.constants",
+                            types.SimpleNamespace(BUY="BUY", SELL="SELL"))
+    assert positions("0x1", lambda *a, **k: [dict(asset="t1", size="20", avgPrice="0.32"), dict(x=1)]) == \
+        {"t1": {"size": 20.0, "avg": 0.32}}
+    assert positions("0x1", lambda *a, **k: {"error": "x"}) is None
+
+    class C:
+        def create_order(self, args):
+            return args
+
+        def post_order(self, order, order_type, post_only=False):
+            self.sent = (order.side, order.price, order.size, order_type, post_only)
+            return {"success": True, "orderID": "0xf"}
+    ex = PolyExchange.__new__(PolyExchange)
+    ex._c = C()
+    assert ex.sell_now("t1", 0.48, 20) == "0xf" and ex._c.sent == ("SELL", 0.48, 20.0, "FAK", False)

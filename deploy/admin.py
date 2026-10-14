@@ -134,7 +134,8 @@ def live_section() -> str:
         if geo:
             extra.append("Geoblock: " + ("gesperrt" if geo.get("blocked") else "frei" if geo.get("blocked") is False
                                          else "unbekannt") + f" ({e(geo.get('country', '?'))})")
-        for k, t in (("fills", "Fills"), ("scoring", "zählen für Rewards"), ("rewards_yesterday", "Rewards gestern $")):
+        for k, t in (("fills", "Fills"), ("scoring", "zählen für Rewards"), ("rewards_yesterday", "Rewards gestern $"),
+                     ("abgleich", "Letzter Konto-Abgleich")):
             if st.get(k) is not None:
                 extra.append(f"{t} {e(st.get(k))}")
         for r in st.get("reward_share") or []:  # Polymarket's own share of the pool vs. our estimate

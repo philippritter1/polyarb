@@ -181,6 +181,10 @@ def live_alerts(st: dict, now: float, data_dir: Path) -> list:
             out.append((f"{NAME}: {name} - Orders abgelehnt", f"{rej - int(k.get('rej', rej))} Orders seit der letzten "
                         "Prüfung abgelehnt (Grenzen oder Börse). Gründe im Order-Protokoll.", "high", "warning"))
         k["rej"] = rej
+        if s.get("abgleich") and s["abgleich"] != k.get("abgleich"):
+            k["abgleich"] = s["abgleich"]
+            out.append((f"{NAME}: {name} - Bestand an Konto angepasst", "Bot-Bestand wich vom echten Konto ab und "
+                        f"wurde korrigiert: {s['abgleich']}", "high", "warning"))
         try:
             a, b = (int(x) for x in str(s.get("scoring", "")).split("/"))
         except ValueError:

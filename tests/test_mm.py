@@ -328,3 +328,76 @@ def test_exit_ask_counts_for_rewards_and_sells_at_once(tmp_path):
     mm.clock.sleep(60)
     mm.step()
     assert mm.st.ask_rewards > 0 and mm.st.rewards > mm.st.ask_rewards
+
+
+class FakeGW:
+    """Live gateway stand-in: the account's fills and positions are set by the test."""
+    def __init__(self):
+        self.live, self.mode, self.counts, self.info, self.est = True, "live", dict(gesetzt=0, storniert=0, abgelehnt=0), {}, {}
+        self.fills, self.sold, self.want, self.pos = [], [], {}, None
+
+    def sync(self, now, want):
+        self.want = dict(want)
+
+    def new_fills(self):
+        f, self.fills = self.fills, []
+        return f
+
+    def sell_now(self, now, tok, price, size, label=""):
+        self.sold.append((tok, price, size))
+        return True
+
+    def real_positions(self, now):
+        return self.pos
+
+    def open_usd(self):
+        return 0.0
+
+
+def test_live_exit_sells_for_real_and_books_only_the_reported_fill(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=1, dump_after_h=3), live=dict(quote_usd=20)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    mm.gw = gw = FakeGW()
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    gw.fills = [("aY", "BUY", 0.48, 30.0)]
+    mm.clock.sleep(10)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.qty_yes == 30
+    mm.clock.sleep(2)
+    mm.step()  # the exit's clock starts at the next step
+    mm.clock.sleep(3600)
+    mm.step()
+    assert ("aY", "SELL") in gw.want  # resting exit ask (limit, earns rewards)
+    mm.clock.sleep(2 * 3600)
+    mm.step()
+    assert gw.sold == [("aY", 0.48, 30.0)] and ("aY", "SELL") not in gw.want  # ask withdrawn, sold at the bid
+    assert mk.qty_yes == 30 and mm.st.exit_usd == 0  # not booked before the exchange reports the fill
+    gw.fills = [("aY", "SELL", 0.48, 30.0)]
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.qty_yes == 0 and abs(mm.st.exit_usd - 30 * 0.48) < 1e-9
+
+
+def test_live_inventory_follows_the_account_when_a_difference_persists(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, live=dict(quote_usd=20)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    mm.gw = gw = FakeGW()
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    mk = mm.st.markets["a"]
+    gw.pos, gw.info["cash"] = {"aY": dict(size=20.0, avg=0.32)}, mm.st.cash - 6.4
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.qty_yes == 0 and "abgleich" not in gw.info  # first sighting: maybe just not booked yet
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.qty_yes == 20 and abs(mk.cost_yes - 6.4) < 1e-9 and abs(mm.st.cash - gw.info["cash"]) < 1e-2
+    assert "YES 0.00 -> 20.00" in gw.info["abgleich"] and "Cash" in gw.info["abgleich"]
+    gw.pos = None  # unreadable: nothing changes
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.qty_yes == 20

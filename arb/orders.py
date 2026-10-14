@@ -79,6 +79,7 @@ class Gateway:
         self.rejected: Dict[Key, tuple] = {}  # last logged rejection per order
         self.retry_s = float(lim.get("retry_after_reject_s", 60))
         self._ex_reject: Dict[Key, float] = {}  # when the exchange last refused this order: no retry before retry_s
+        self._sold: Dict[str, float] = {}  # token -> when sell_now last sent an order (at most one per retry_s)
         self._seq = 0
         self.mode = "off"
         self.live = False
@@ -166,6 +167,32 @@ class Gateway:
         self.orders[key] = dict(price=price, size=size, oid=oid, ts=now, label=label)
         self.counts["gesetzt"] += 1
         self._log(now, "place", key, label, price, size, oid)
+
+    def sell_now(self, now: float, token: str, price: float, size: float, label: str = "") -> bool:
+        """Inventory exit: sell `size` at once at `price` (the bid), fill-and-kill – nothing rests. Only in live
+        mode (dry: the simulation sells by itself); at most once per retry_s per token. The fill comes back through new_fills()."""
+        key = (token, "SELL")
+        if not self.live:
+            return False
+        if now - self._sold.get(token, -1e18) < self.retry_s:
+            return False
+        self._sold[token] = now
+        try:
+            oid = self.exchange.sell_now(token, price, size)
+        except Exception as e:  # noqa
+            self._reject(now, key, label, price, size, f"Sofortverkauf: {str(e)[:100] or type(e).__name__}")
+            return False
+        self.counts["gesetzt"] += 1
+        self._log(now, "dump", key, label, price, size, oid, "Sofortverkauf zum Bid")
+        return True
+
+    def real_positions(self, now: float) -> Optional[Dict[str, dict]]:
+        """The account's positions per token, read at most every 5 min (None between reads or if unreadable)."""
+        if not self.live or now - self._last.get("positions", -1e18) < 300:
+            return None
+        self._last["positions"] = now
+        from .exchange import positions
+        return positions(self.exchange.user)
 
     # ------------------------------------------------------------------ safety
     def _live_allowed(self, now: float, mode: str) -> str:

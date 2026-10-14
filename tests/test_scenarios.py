@@ -748,3 +748,22 @@ def test_dashboard_without_arbitrage_bot_and_weather_study(tmp_path):
     assert nav[0]["label"] == "Übersicht" and nav[0]["ret"] is None
     assert [n["label"] for n in nav if "Wetter" in n["label"]] == [] and nav[-1]["label"] == "Archiv (1)"
     assert "Arbitrage (beendet)" in (tmp_path / "www" / "archiv" / "index.html").read_text(encoding="utf-8")
+
+
+def test_watchdog_alarms_only_when_a_process_is_down_twice_in_a_row(tmp_path, monkeypatch):
+    import time
+    import importlib
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
+    monkeypatch.setenv("NOTIFY_STATE", str(tmp_path / "st.json"))
+    monkeypatch.setenv("POLYARB_DB", str(tmp_path / "none.sqlite"))
+    import notify
+    importlib.reload(notify)
+    sent = []
+    monkeypatch.setattr(notify, "push", lambda title, msg, *a, **k: sent.append(title))
+    monkeypatch.setattr(notify, "q", lambda *a, **k: [(time.time(), 2500.0, None)])  # fresh data
+    states = iter([False, True, False, False, True])  # restart blip, ok, then really down twice, ok
+    monkeypatch.setattr(notify, "service_active", lambda: next(states))
+    for _ in range(5):
+        notify.cmd_watch()
+    problems = [t for t in sent if "Problem" in t]
+    assert len(problems) == 1 and sent[-1].endswith("wieder OK")

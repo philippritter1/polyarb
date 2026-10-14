@@ -154,7 +154,10 @@ def cmd_watch():
     now = time.time()
     last = q("SELECT ts, equity, halted FROM equity ORDER BY ts DESC LIMIT 1")
     stale = (not last) or (now - last[0][0] > T["stale_min"] * 60)
-    down = not service_active()
+    # a restart for a code update takes a few seconds; only a process that is down at two checks in a row
+    # (5 min apart) is a problem – single hits during updates sent false alarms (14.10.)
+    st["down_n"] = st.get("down_n", 0) + 1 if not service_active() else 0
+    down = st["down_n"] >= 2
 
     problem = None
     if down:

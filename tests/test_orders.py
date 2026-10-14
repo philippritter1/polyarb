@@ -91,6 +91,7 @@ def test_settings_page_switches_dry_and_off_but_never_live(tmp_path, monkeypatch
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
     import admin
     monkeypatch.setattr(admin, "DATA", str(tmp_path))
+    monkeypatch.setattr(admin, "geocheck", lambda: {"blocked": None, "country": ""})
     srv = admin.serve(port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"

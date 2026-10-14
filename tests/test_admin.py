@@ -18,6 +18,7 @@ def _server(tmp_path, monkeypatch, fetch):
     monkeypatch.setattr(admin, "DATA", str(tmp_path))
     monkeypatch.setattr(admin, "SECRETS", str(tmp_path / "secrets.env"))
     monkeypatch.setattr(admin.Handler, "fetch", staticmethod(fetch) if fetch else None)
+    monkeypatch.setattr(admin, "geocheck", lambda: {"blocked": False, "country": "DE"})
     srv = admin.serve(port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
@@ -65,5 +66,39 @@ def test_rejected_key_is_not_stored(tmp_path, monkeypatch):
     try:
         code, body = _post(base, "abcdef0123456789abcdef0123456789")
         assert code == 400 and "abgelehnt" in body and not (tmp_path / "secrets.env").exists()
+    finally:
+        srv.shutdown()
+
+
+def test_wallet_is_stored_privately_never_shown_and_live_needs_a_release(tmp_path, monkeypatch):
+    from arb.orders import read_mode
+    srv, base = _server(tmp_path, monkeypatch, None)
+
+    def post(path, **form):
+        try:
+            with urllib.request.urlopen(base + path, data=urllib.parse.urlencode(form).encode(), timeout=5) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+    key = "ab" * 32
+    try:
+        assert post("/admin/wallet", key="nope", funder="0x" + "1" * 40, sig_type="1")[0] == 400
+        assert post("/admin/wallet", key=key, funder="", sig_type="1")[0] == 400  # proxy wallet needs the funder
+        code, body = post("/admin/wallet", key=key, funder="0x" + "1" * 40, sig_type="1")
+        assert code == 200 and key not in body and "Wallet gespeichert" in body
+        sec = tmp_path / "secrets.env"
+        assert stat.S_IMODE(os.stat(sec).st_mode) == 0o600 and f"POLY_PRIVATE_KEY={key}" in sec.read_text()
+        # no scenario released in config: live stays locked even with a wallet
+        monkeypatch.setattr(admin, "released", lambda: [])
+        assert post("/admin/live-mode", mode="live")[0] == 400
+        with urllib.request.urlopen(base + "/admin/", timeout=5) as r:
+            page = r.read().decode()
+        assert key not in page and "gesperrt: kein Szenario freigegeben" in page
+        # released + wallet: live can be chosen
+        monkeypatch.setattr(admin, "released", lambda: ["mm_pilot"])
+        assert post("/admin/live-mode", mode="live")[0] == 200 and read_mode(str(tmp_path / "live.json")) == "live"
+        # wallet deleted: live locked again
+        assert post("/admin/wallet-delete")[0] == 200 and "POLY_PRIVATE_KEY" not in sec.read_text()
+        assert post("/admin/live-mode", mode="live")[0] == 400
     finally:
         srv.shutdown()

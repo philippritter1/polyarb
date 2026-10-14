@@ -4,7 +4,10 @@ Runs as polyarb on 127.0.0.1:8787 (deploy/systemd/polyarb-admin.service); Caddy 
 dashboard's basic auth. It can do exactly two things – store the Odds API key in data/secrets.env (mode 600,
 read by arb/sharp.py on every step, no restart), and switch the order gateway (arb/orders.py) between
 "off" (emergency stop) and "dry" (dry run) in data/live.json. Live trading cannot be switched on here. It never
-shows a stored key (only its last 4 characters) and accepts nothing else. Read-only: /admin/diag (and
+shows a stored key (only its last 4 characters) and accepts nothing else. Since 14.10. it also stores the
+pilot wallet (POLY_PRIVATE_KEY / POLY_FUNDER / POLY_SIG_TYPE, arb/exchange.py) – shown only as its public address –
+and offers "live" only when a scenario is released for real orders (`live: allow_real: true` in config.yaml, a
+reviewed commit) and a wallet is stored; the gateway (arb/orders.py) checks geoblock and the daily loss on top. Read-only: /admin/diag (and
 /admin/diag.json) shows service state, memory, disk and redacted log tails (deploy/diag.py – fixed read-only
 queries only, nothing can be started, stopped or changed). A new key is first checked against The Odds API's free /sports
 endpoint (costs no credit).
@@ -56,6 +59,42 @@ def write_secret(name: str, value: str, path: str = None) -> None:
     os.replace(tmp, path)
 
 
+def remove_secrets(names, path: str = None) -> None:
+    path = path or SECRETS
+    cur = {k: v for k, v in read_secrets(path).items() if k not in names}
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("".join(f"{k}={v}\n" for k, v in cur.items()))
+    os.replace(tmp, path)
+
+
+def released() -> list:
+    """Scenarios whose `live:` allows real orders (config.yaml in the checkout)."""
+    try:
+        import yaml
+        cfg = yaml.safe_load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                               "config.yaml"), encoding="utf-8")) or {}
+    except Exception:  # noqa
+        return []
+    return [n for n, sc in (cfg.get("scenarios") or {}).items()
+            if sc and sc.get("enabled") and (sc.get("live") or {}).get("allow_real")]
+
+
+def wallet_info() -> tuple:
+    """(problem, public address) of the stored wallet – never the key."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from arb.exchange import address_of, read_wallet, wallet_problem
+    w = read_wallet(SECRETS)
+    why = wallet_problem(w)
+    if why:
+        return why, ""
+    try:
+        return "", address_of(w["key"])
+    except Exception:  # noqa – eth_account missing (py-clob-client not installed yet)
+        return "", "(Adresse erst nach Installation der Polymarket-Bibliothek)"
+
+
 def check_key(key: str, fetch=None) -> str:
     """'' if The Odds API accepts the key, else a short reason. /sports is free."""
     url = ODDS_CHECK + "?" + urllib.parse.urlencode({"apiKey": key})
@@ -86,18 +125,71 @@ def live_section() -> str:
                 st = json.load(f)
         except (OSError, ValueError):
             continue
-        rows.append(f"<li><b>{html.escape(str(st.get('scenario')))}</b>: {html.escape(str(st.get('mode')))} · "
+        e = lambda v: html.escape(str(v))  # noqa: E731
+        geo = st.get("geoblock") or {}
+        extra = []
+        if st.get("equity") is not None:
+            extra.append(f"Konto {e(st.get('equity'))} $ (Cash {e(st.get('cash'))} $ + Positionen {e(st.get('positions'))} $,"
+                         f" Tagesstart {e(st.get('day_start'))} $)")
+        if geo:
+            extra.append("Geoblock: " + ("gesperrt" if geo.get("blocked") else "frei" if geo.get("blocked") is False
+                                         else "unbekannt") + f" ({e(geo.get('country', '?'))})")
+        for k, t in (("fills", "Fills"), ("scoring", "zählen für Rewards"), ("rewards_yesterday", "Rewards gestern $")):
+            if st.get(k) is not None:
+                extra.append(f"{t} {e(st.get(k))}")
+        rows.append(f"<li><b>{e(st.get('scenario'))}</b>: {e(st.get('mode'))} · "
                     f"offen {st.get('open_orders', 0)} Orders / {st.get('open_usd', 0)} $ · gesetzt {st.get('gesetzt', 0)}"
-                    f" · storniert {st.get('storniert', 0)} · abgelehnt {st.get('abgelehnt', 0)}</li>")
+                    f" · storniert {st.get('storniert', 0)} · abgelehnt {st.get('abgelehnt', 0)}"
+                    + ("<br>" + " · ".join(extra) if extra else "") + "</li>")
     label = {"off": "Aus (Not-Aus)", "dry": "Trockenlauf", "live": "Echt"}.get(mode, mode)
+    rel, (wprob, _) = released(), wallet_info()
+    can_live = bool(rel) and not wprob
+    live_txt = ("Echt – echte Orders für " + ", ".join(rel) if can_live else
+                "Echt – gesperrt: " + ("kein Szenario freigegeben" if not rel else wprob))
     radios = "".join(
         f'<label style="display:block;margin:6px 0"><input type="radio" name="mode" value="{v}"'
-        f'{" checked" if mode == v else ""}{" disabled" if v == "live" else ""}> {t}</label>'
+        f'{" checked" if mode == v else ""}{" disabled" if v == "live" and not can_live else ""}> {html.escape(t)}</label>'
         for v, t in (("off", "Aus – Not-Aus, alle Orders stornieren"), ("dry", "Trockenlauf – Orders nur protokollieren"),
-                     ("live", "Echt – noch nicht verfügbar")))
+                     ("live", live_txt)))
     return (f"<h2>Order-Modul (Market Making)</h2><p>Modus: <b>{label}</b></p>"
             f"<ul>{''.join(rows) or '<li>noch kein Lauf</li>'}</ul>"
             f'<form method="post" action="/admin/live-mode">{radios}<button type="submit">Übernehmen</button></form>')
+
+
+_GEO = {"ts": 0.0, "v": None}
+
+
+def geocheck() -> dict:
+    """Polymarket's geoblock answer for this server, cached 10 minutes (one request per page view at most)."""
+    if _GEO["v"] is None or time.time() - _GEO["ts"] > 600:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from arb.exchange import geoblock
+        _GEO.update(ts=time.time(), v=geoblock())
+    return _GEO["v"]
+
+
+def wallet_section() -> str:
+    prob, addr = wallet_info()
+    sec = read_secrets()
+    state = (f"<p>Wallet: <b>{html.escape(addr)}</b> · Funder {html.escape(sec.get('POLY_FUNDER', '–'))} · "
+             f"Signaturtyp {html.escape(sec.get('POLY_SIG_TYPE', '1'))}</p>" if not prob else
+             f"<p>Wallet: <b>{html.escape(prob)}</b></p>")
+    try:
+        g = geocheck()
+        geo = ("<p>Polymarket-Geoblock für diesen Server: <b>" + ("gesperrt" if g.get("blocked") else "frei"
+               if g.get("blocked") is False else "nicht prüfbar") + f"</b> ({html.escape(str(g.get('country') or '?'))})</p>")
+    except Exception:  # noqa
+        geo = ""
+    return (f"<h2>Wallet für den Pilot</h2>{state}{geo}"
+            "<p>Nur eine eigene Wallet nur für den Bot, mit nur dem Pilotgeld. Der Schlüssel wird nie angezeigt.</p>"
+            '<form method="post" action="/admin/wallet">'
+            '<label>Private Key (64 Hex-Zeichen)<input name="key" type="password" autocomplete="off" spellcheck="false"></label>'
+            '<label>Funder-Adresse (Proxy-Wallet von polymarket.com, 0x…)<input name="funder" autocomplete="off" '
+            'spellcheck="false"></label>'
+            '<label>Signaturtyp (1 = E-Mail-Konto, 2 = Browser-Wallet, 0 = eigene Wallet)<input name="sig_type" value="1">'
+            '</label><button type="submit">Prüfen und speichern</button></form>'
+            '<form method="post" action="/admin/wallet-delete" style="margin-top:8px">'
+            '<button type="submit">Wallet löschen</button></form>')
 
 
 def page(msg: str = "", ok: bool = True) -> str:
@@ -128,6 +220,7 @@ button{{font-size:16px;padding:10px 16px}} .ok{{color:#0a7a2f}} .err{{color:#b00
 <button type="submit">Prüfen und speichern</button></form>
 <p>Wirkt ohne Neustart beim nächsten Durchlauf (alle 10 Minuten). Der Key wird nie angezeigt.</p>
 {live_section()}
+{wallet_section()}
 <p><a href="/admin/diag">→ Server-Diagnose</a> · <a href="/sharp_fussball/">→ Tab Fußball vs. Pinnacle</a> ·
 <a href="/">→ Dashboard</a></p>
 </body></html>"""
@@ -220,23 +313,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.rstrip("/")
-        if path not in ("/admin/odds-key", "/admin/live-mode"):
+        if path not in ("/admin/odds-key", "/admin/live-mode", "/admin/wallet", "/admin/wallet-delete"):
             return self._send("not found", 404)
         n = int(self.headers.get("Content-Length") or 0)
         if n > 4096:
             return self._send(page("Zu viele Daten.", False), 413)
         form = urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+        if path == "/admin/wallet-delete":
+            remove_secrets({"POLY_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIG_TYPE"})
+            return self._send(page("Wallet gelöscht."))
+        if path == "/admin/wallet":
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from arb.exchange import wallet_problem
+            key = (form.get("key") or [""])[0].strip()
+            funder = (form.get("funder") or [""])[0].strip()
+            sig = (form.get("sig_type") or ["1"])[0].strip()
+            w = dict(key=key, funder=funder, sig_type=int(sig) if sig in ("0", "1", "2") else -1)
+            why = wallet_problem(w)
+            if why:
+                return self._send(page(f"Nicht gespeichert: {why}.", False), 400)
+            write_secret("POLY_PRIVATE_KEY", key)
+            write_secret("POLY_FUNDER", funder)
+            write_secret("POLY_SIG_TYPE", str(w["sig_type"]))
+            return self._send(page("Wallet gespeichert."))
         if path == "/admin/live-mode":
             mode = (form.get("mode") or [""])[0]
-            if mode not in ("off", "dry"):  # "live" cannot be switched on from here
+            allowed = ("off", "dry") + (("live",) if released() and not wallet_info()[0] else ())
+            if mode not in allowed:  # "live" only with a released scenario and a stored wallet
                 return self._send(page("Dieser Modus ist nicht erlaubt.", False), 400)
             tmp = os.path.join(DATA, "live.json.tmp")
             os.makedirs(DATA, exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"mode": mode, "ts": time.time()}, f)
             os.replace(tmp, os.path.join(DATA, "live.json"))
-            return self._send(page("Order-Modul: " + ("aus – alle Orders werden storniert." if mode == "off"
-                                                       else "Trockenlauf – Orders werden nur protokolliert.")))
+            return self._send(page("Order-Modul: " + {"off": "aus – alle Orders werden storniert.",
+                                                       "dry": "Trockenlauf – Orders werden nur protokolliert.",
+                                                       "live": "ECHT – freigegebene Szenarien senden echte Orders."}[mode]))
         key = (form.get("key") or [""])[0].strip()
         if not KEY_RE.match(key):
             return self._send(page("Das sieht nicht wie ein Odds-API-Key aus (16–64 Buchstaben/Ziffern).", False), 400)

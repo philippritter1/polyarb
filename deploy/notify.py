@@ -110,10 +110,11 @@ def q(sql, args=()):
 
 
 def service_active() -> bool:
-    """The followed book's process and the arbitrage bot (which also feeds the dashboard)."""
+    """The followed book's process and the arbitrage bot – unless that is switched off (services: in config.yaml)."""
+    bot = (_cfg().get("services") or {}).get("arbitrage_bot", True)
     try:
         return all(subprocess.run(["systemctl", "is-active", "--quiet", s]).returncode == 0
-                   for s in dict.fromkeys([T["service"], "polyarb"]))
+                   for s in dict.fromkeys([T["service"]] + (["polyarb"] if bot else [])))
     except FileNotFoundError:
         return True
 

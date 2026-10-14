@@ -163,6 +163,10 @@ class PolyExchange:
 
     def balance_usd(self) -> Optional[float]:
         from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+        try:  # the exchange caches the balance: refresh it from the chain first (a fresh deposit showed 0)
+            self.c.update_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+        except Exception as e:  # noqa
+            log.warning("balance refresh: %s", type(e).__name__)
         d = self.c.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)) or {}
         try:
             return float(d.get("balance", 0)) / 1e6  # USDC has 6 decimals
@@ -238,7 +242,9 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
     price = round(max(bk["tick"], bk["bid"] - 3 * bk["tick"]), 4)
     size = max(bk["min_size"], 5.0)
     if bal is not None and price * size > bal:
-        steps.append(dict(step="Testorder", ok=False, info=f"zu wenig Guthaben: braucht {price * size:.2f} $"))
+        hint = (" – Polymarket sieht für diese Funder-Adresse und diesen Signaturtyp kein Geld; zeigt polymarket.com "
+                "Guthaben an, den Signaturtyp auf 2 stellen und erneut testen" if bal == 0 else "")
+        steps.append(dict(step="Testorder", ok=False, info=f"zu wenig Guthaben: braucht {price * size:.2f} ${hint}"))
         return steps
     try:
         oid = step(f"Testorder setzen: KAUF {size:g} @ {price:.2f} (bestes Gebot {bk['bid']:.2f}) – {m['question'][:60]}",

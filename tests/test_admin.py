@@ -88,6 +88,9 @@ def test_wallet_is_stored_privately_never_shown_and_live_needs_a_release(tmp_pat
         assert code == 200 and key not in body and "Wallet gespeichert" in body
         sec = tmp_path / "secrets.env"
         assert stat.S_IMODE(os.stat(sec).st_mode) == 0o600 and f"POLY_PRIVATE_KEY={key}" in sec.read_text()
+        # change only the signature type: the stored key and funder stay
+        assert post("/admin/wallet", key="", funder="", sig_type="2")[0] == 200
+        assert f"POLY_PRIVATE_KEY={key}" in sec.read_text() and "POLY_SIG_TYPE=2" in sec.read_text()
         # no scenario released in config: live stays locked even with a wallet
         monkeypatch.setattr(admin, "released", lambda: [])
         assert post("/admin/live-mode", mode="live")[0] == 400

@@ -268,6 +268,13 @@ def test_connection_test_places_below_the_bid_and_always_cancels():
     steps = connection_test(ex2, find=find, wait=lambda s: None)
     assert [s["ok"] for s in steps if "Rewards" in s["step"]] == [False] and ex2.open == {}
     assert any(c[0] == "cancel" for c in ex2.calls)
+    # no money for this signature type: the other types are asked, the one holding the money is named
+    ex0 = Ex(cash=0)
+    ex0.wallet = {"sig_type": 1}
+    ex0.balance_usd = lambda t=None: {None: 0.0, 0: 0.0, 2: 11.0}[t]
+    steps = connection_test(ex0, find=find, wait=lambda s: None)
+    assert "Typ 2: 11.0" in steps[-2]["info"] and "Signaturtyp 2" in steps[-1]["info"]
+    assert not any(c[0] == "place" for c in ex0.calls)
     # not enough money: nothing is placed
     ex3 = Ex(cash=1)
     steps = connection_test(ex3, find=find, wait=lambda s: None)

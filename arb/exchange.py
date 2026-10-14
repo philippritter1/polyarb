@@ -161,13 +161,15 @@ class PolyExchange:
                             ts=float(t.get("match_time") or 0), role=t.get("trader_side", "")))
         return out
 
-    def balance_usd(self) -> Optional[float]:
+    def balance_usd(self, sig_type: Optional[int] = None) -> Optional[float]:
+        """USDC available for orders; `sig_type` asks for another signature type than the configured one."""
         from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+        sig = -1 if sig_type is None else int(sig_type)
         try:  # the exchange caches the balance: refresh it from the chain first (a fresh deposit showed 0)
-            self.c.update_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            self.c.update_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=sig))
         except Exception as e:  # noqa
             log.warning("balance refresh: %s", type(e).__name__)
-        d = self.c.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)) or {}
+        d = self.c.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=sig)) or {}
         try:
             return float(d.get("balance", 0)) / 1e6  # USDC has 6 decimals
         except (TypeError, ValueError):
@@ -242,8 +244,21 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
     price = round(max(bk["tick"], bk["bid"] - 3 * bk["tick"]), 4)
     size = max(bk["min_size"], 5.0)
     if bal is not None and price * size > bal:
-        hint = (" – Polymarket sieht für diese Funder-Adresse und diesen Signaturtyp kein Geld; zeigt polymarket.com "
-                "Guthaben an, den Signaturtyp auf 2 stellen und erneut testen" if bal == 0 else "")
+        hint = ""
+        if bal == 0:  # usually the wrong signature type: look where the money is
+            found = {}
+            for t in (0, 1, 2):
+                if t != ex.wallet.get("sig_type"):
+                    try:
+                        found[t] = ex.balance_usd(t)
+                    except Exception:  # noqa
+                        found[t] = None
+            steps.append(dict(step="Guthaben je Signaturtyp", ok=True,
+                              info=", ".join(f"Typ {t}: {v if v is not None else '?'}" for t, v in found.items())))
+            rich = [t for t, v in found.items() if v]
+            hint = (f" – das Geld liegt bei Signaturtyp {rich[0]}: auf /admin/ Signaturtyp {rich[0]} speichern "
+                    "(Key-Feld leer lassen) und erneut testen" if rich else
+                    " – bei keinem Signaturtyp Guthaben sichtbar: Funder-Adresse prüfen oder die Einzahlung abwarten")
         steps.append(dict(step="Testorder", ok=False, info=f"zu wenig Guthaben: braucht {price * size:.2f} ${hint}"))
         return steps
     try:

@@ -205,8 +205,8 @@ def wallet_section() -> str:
     return (f"<h2>Wallet für den Pilot</h2>{state}{geo}"
             "<p>Nur eine eigene Wallet nur für den Bot, mit nur dem Pilotgeld. Der Schlüssel wird nie angezeigt.</p>"
             '<form method="post" action="/admin/wallet">'
-            '<label>Private Key (64 Hex-Zeichen)<input name="key" type="password" autocomplete="off" spellcheck="false"></label>'
-            '<label>Funder-Adresse (Proxy-Wallet von polymarket.com, 0x…)<input name="funder" autocomplete="off" '
+            '<label>Private Key (64 Hex-Zeichen; leer lassen = gespeicherten behalten)<input name="key" type="password" autocomplete="off" spellcheck="false"></label>'
+            '<label>Funder-Adresse (Proxy-Wallet von polymarket.com, 0x…; leer = behalten)<input name="funder" autocomplete="off" '
             'spellcheck="false"></label>'
             '<label>Signaturtyp (1 = E-Mail-Konto, 2 = Browser-Wallet, 0 = eigene Wallet)<input name="sig_type" value="1">'
             '</label><button type="submit">Prüfen und speichern</button></form>'
@@ -369,8 +369,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/admin/wallet":
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             from arb.exchange import wallet_problem
-            key = (form.get("key") or [""])[0].strip()
-            funder = (form.get("funder") or [""])[0].strip()
+            key = (form.get("key") or [""])[0].strip() or read_secrets().get("POLY_PRIVATE_KEY", "")  # empty: keep
+            funder = (form.get("funder") or [""])[0].strip() or read_secrets().get("POLY_FUNDER", "")
             sig = (form.get("sig_type") or ["1"])[0].strip()
             w = dict(key=key, funder=funder, sig_type=int(sig) if sig in ("0", "1", "2") else -1)
             why = wallet_problem(w)

@@ -280,10 +280,8 @@ class PolyExchange:
     def reward_live(self, day: Optional[str] = None) -> Dict[str, dict]:
         """Polymarket's own view of our reward business, also below the $1 payout minimum:
         {condition id: {"pct": our share of the market's pool right now in %, "earned": $ earned on `day` so far}}
-        (day = payout date YYYY-MM-DD UTC, default tomorrow = what is being earned today). Either part may be missing if its endpoint fails."""
-        # the running day's earnings are filed under the payout date, the next UTC day (polymarket.com: on 14.10.
-        # "Oct 15 Earnings" $0.04, while the 14th gave only $0.006 = the period paid on the 14th)
-        day = day or datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + 86400, timezone.utc).strftime("%Y-%m-%d")
+        (day YYYY-MM-DD UTC, default today). Either part may be missing if its endpoint fails."""
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         out: Dict[str, dict] = {}
         try:
             d = self.c.get_reward_percentages() or {}
@@ -307,8 +305,7 @@ class PolyExchange:
         return out
 
     def rewards(self, day: Optional[str] = None) -> Optional[float]:
-        """Liquidity rewards Polymarket filed under `day` (YYYY-MM-DD UTC, the payout date: earned the day before;
-        default yesterday); None if unavailable."""
+        """Liquidity rewards earned on `day` (YYYY-MM-DD, UTC; default yesterday); None if unavailable."""
         day = day or datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - 86400, timezone.utc).strftime("%Y-%m-%d")
         try:
             d = self.c.get_total_earnings_for_user_for_day(day)

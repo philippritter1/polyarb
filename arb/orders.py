@@ -304,7 +304,7 @@ class Gateway:
         day = _day(now - 86400)
         if self._last["rewards"] != day and datetime.fromtimestamp(now, timezone.utc).hour >= 1:
             self._last["rewards"] = day
-            usd = ex.rewards(_day(now))  # Polymarket files a UTC day's earnings under the payout date (next day)
+            usd = ex.rewards(day)
             if usd is not None:
                 self.db.execute("INSERT OR REPLACE INTO live_rewards VALUES(?,?,?)", (day, usd, now))
             self.info["rewards_yesterday"] = usd

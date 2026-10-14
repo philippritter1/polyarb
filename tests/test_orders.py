@@ -355,3 +355,63 @@ def test_reward_test_quotes_inside_the_reward_distance_and_reports_scoring_and_f
     ex4 = Ex(cash=5)
     steps = reward_test(ex4, find=markets, wait=lambda s: None)
     assert not any(c[0] == "place" for c in ex4.calls) and "bräuchte 9.40 $" in steps[-1]["info"]
+
+
+def test_own_fills_reads_our_side_of_maker_trades():
+    from arb.exchange import own_fills
+    me = "0xAbC"
+    trades = [
+        # we took liquidity: the trade's own fields are ours
+        dict(id="t1", trader_side="TAKER", asset_id="Y", side="BUY", price="0.5", size="10", match_time="100"),
+        # our YES bid was hit by a YES seller: same token -> we BOUGHT, at our price and matched amount
+        dict(id="t2", trader_side="MAKER", asset_id="Y", side="SELL", price="0.47", size="30", match_time="101",
+             maker_orders=[dict(order_id="o1", maker_address="0xabc", asset_id="Y", price="0.48", matched_amount="20"),
+                           dict(order_id="o2", maker_address="0xother", asset_id="Y", price="0.48", matched_amount="10")]),
+        # our NO bid met a YES buyer (minting): complementary token -> we BOUGHT NO
+        dict(id="t3", trader_side="MAKER", asset_id="Y", side="BUY", price="0.53", size="15", match_time="102",
+             maker_orders=[dict(order_id="o3", maker_address="0xABC", asset_id="N", price="0.47", matched_amount="15")]),
+        # explicit side on the maker order wins
+        dict(id="t4", trader_side="MAKER", asset_id="Y", side="BUY", price="0.6", size="5", match_time="103",
+             maker_orders=[dict(order_id="o4", maker_address="0xabc", asset_id="Y", price="0.6", matched_amount="5",
+                                side="SELL")]),
+    ]
+    out = {f["id"]: (f["token"], f["side"], f["price"], f["size"]) for f in own_fills(trades, me)}
+    assert out == {"t1": ("Y", "BUY", 0.5, 10.0), "t2:o1": ("Y", "BUY", 0.48, 20.0), "t3:o3": ("N", "BUY", 0.47, 15.0),
+                   "t4:o4": ("Y", "SELL", 0.6, 5.0)}
+
+
+def test_real_fills_drive_the_market_maker_in_live_mode(tmp_path):
+    from arb.engine import SimClock
+    from arb.mm import MarketMaker
+    from arb.stream import BookStore
+    from tests.test_mm import Client, _book, _cfg, _m
+    cfg = _cfg(tmp_path, live=dict(quote_usd=20, max_order_usd=30, max_market_usd=60, max_total_usd=300,
+                                   allow_real=True, max_daily_loss_usd=50))
+    write_mode(str(tmp_path / "live.json"), "live")
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", cfg, Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW),
+                     books=store, pool=None)
+    ex = FakeExchange(cash=300)
+    mm.gw._ex, mm.gw._geo_fn, mm.gw._value_fn = ex, (lambda: {"blocked": False, "country": "FI"}), (lambda u: 0.0)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    assert mm.gw.live and any(c[0] == "place" for c in ex.calls)
+    # a simulated trade below our bid no longer counts in live mode ...
+    store.trades.append(("aY", 0.40, 50, NOW + 5))
+    # ... but the real fill from the account does (fills from before going live never do)
+    ex.fills = [dict(id="old", token="aY", side="BUY", price=0.48, size=99, ts=NOW - 3600, role="MAKER"),
+                dict(id="f1", token="aY", side="BUY", price=0.48, size=12, ts=NOW + 6, role="MAKER")]
+    mm.clock.sleep(100)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.qty_yes == 12 and mm.st.fills == 1 and mm.scan["echte Fills"] == 1
+    # handed over once: the next sync does not book it again; a real sale reduces the position
+    ex.fills.append(dict(id="f2", token="aY", side="SELL", price=0.52, size=5, ts=NOW + 150, role="MAKER"))
+    mm.clock.sleep(100)
+    mm.step()
+    assert mk.qty_yes == 7 and abs(mm.st.exit_pnl - 5 * 0.04) < 1e-9
+    # a fill in a token the strategy does not know is reported, not booked
+    ex.fills.append(dict(id="f3", token="ZZ", side="BUY", price=0.3, size=5, ts=NOW + 250, role="MAKER"))
+    mm.clock.sleep(100)
+    mm.step()
+    assert mm.scan["echte Fills ohne Markt"] == 1 and mk.qty_yes == 7

@@ -93,6 +93,7 @@ class Gateway:
         db.execute("""CREATE TABLE IF NOT EXISTS live_fills(id TEXT PRIMARY KEY, ts REAL, token TEXT, side TEXT,
                       price REAL, size REAL, role TEXT)""")
         db.execute("CREATE TABLE IF NOT EXISTS live_rewards(day TEXT PRIMARY KEY, usd REAL, ts REAL)")
+        db.execute("CREATE TABLE IF NOT EXISTS live_meta(k TEXT PRIMARY KEY, v TEXT)")
         # drop the repeated rejections logged before they were deduplicated (keeps the first of each)
         db.execute("""DELETE FROM live_orders WHERE action='reject' AND rowid NOT IN
                       (SELECT MIN(rowid) FROM live_orders WHERE action='reject' GROUP BY token, price, size, note)""")
@@ -216,6 +217,24 @@ class Gateway:
         except Exception as e:  # noqa
             log.error("%s: cancel_all fehlgeschlagen (%s)", self.name, type(e).__name__)
 
+    def _meta(self, k: str, default=None):
+        r = self.db.execute("SELECT v FROM live_meta WHERE k=?", (k,)).fetchone()
+        return r[0] if r else default
+
+    def _set_meta(self, k: str, v) -> None:
+        self.db.execute("INSERT OR REPLACE INTO live_meta VALUES(?,?)", (k, str(v)))
+
+    def new_fills(self) -> list:
+        """Real fills not yet handed to the strategy (each exactly once, also across restarts):
+        [(token, side, price, size)]. Fills from before the switch to live are never handed over."""
+        cur = int(self._meta("fill_cursor", 0))
+        rows = self.db.execute("SELECT rowid, token, side, price, size FROM live_fills WHERE rowid > ? AND ts >= ? "
+                               "ORDER BY rowid", (cur, float(self._meta("live_since", 9e18)))).fetchall()
+        last = self.db.execute("SELECT MAX(rowid) FROM live_fills").fetchone()[0] or cur
+        if last != cur:
+            self._set_meta("fill_cursor", last)
+        return [(t, sd, p, q) for _, t, sd, p, q in rows]
+
     # ------------------------------------------------------------------ live bookkeeping
     def _reconcile(self, now: float) -> None:
         if now - self._last["reconcile"] < 60:
@@ -228,7 +247,8 @@ class Gateway:
                 if o["oid"] not in open_ids:  # filled (or cancelled by the exchange): place anew if still wanted
                     self.orders.pop(k)
                     self._log(now, "gone", k, o.get("label", ""), o["price"], o["size"], o["oid"], "nicht mehr offen")
-            last = self.db.execute("SELECT MAX(ts) FROM live_fills").fetchone()[0] or (now - 86400)
+            last = self.db.execute("SELECT MAX(ts) FROM live_fills").fetchone()[0] \
+                or float(self._meta("live_since", now))
             for t in ex.trades(int(last) - 60):
                 self.db.execute("INSERT OR IGNORE INTO live_fills VALUES(?,?,?,?,?,?,?)",
                                 (t["id"], t["ts"], t["token"], t["side"], t["price"], t["size"], t["role"]))
@@ -273,6 +293,8 @@ class Gateway:
             if live:
                 try:
                     self.exchange.cancel_all()
+                    if self._meta("live_since") is None:
+                        self._set_meta("live_since", now - 5)  # fills from here on belong to this strategy
                 except Exception as e:  # noqa
                     why, live = f"Börse nicht erreichbar ({type(e).__name__})", False
         self.live, self.why = live, why

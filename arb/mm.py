@@ -420,6 +420,37 @@ class MarketMaker:
             if not mk.ask or abs(mk.ask["price"] - price) > 1e-9 or abs(mk.ask["size"] - abs(net)) > 1e-6:
                 mk.ask = dict(side=side, price=price, size=abs(net), placed_ts=now)
 
+    def apply_real_fills(self, now: float) -> int:
+        """Live mode: inventory and cash follow the account – every real fill since the switch to live, once.
+        (A merge of YES+NO pairs is still booked as in the paper run; on the chain the pair simply stays until
+        resolution or until merging is built – same value, the capital is just bound longer.)"""
+        by_tok = {}
+        for mk in self.st.markets.values():
+            by_tok[mk.yes], by_tok[mk.no] = (mk, "yes"), (mk, "no")
+        n = 0
+        for tok, side, price, size in self.gw.new_fills():
+            hit = by_tok.get(tok)
+            if not hit:
+                log.warning("%s: echter Fill in unbekanntem Token %s (%s %.2f @ %.3f)", self.name, tok[:12], side, size, price)
+                self.scan["echte Fills ohne Markt"] = self.scan.get("echte Fills ohne Markt", 0) + 1
+                continue
+            mk, which = hit
+            if side == "BUY":
+                q = (mk.bid_yes if which == "yes" else mk.bid_no) or dict(price=price, size=size, placed_ts=now)
+                q = dict(q, price=price, size=max(q.get("size", 0), size))
+                self._fill(mk, q, which, size, now)
+                bid = mk.bid_yes if which == "yes" else mk.bid_no
+                if bid:
+                    bid["size"] = max(0.0, bid["size"] - size)
+            else:
+                self._sell(mk, which, size, price, now, "echter Verkauf", taker=False)
+                if mk.ask and mk.ask["side"] == which:
+                    mk.ask["size"] = max(0.0, mk.ask["size"] - size)
+            n += 1
+        if n:
+            self.scan["echte Fills"] = self.scan.get("echte Fills", 0) + n
+        return n
+
     def process_trades(self, now: float) -> int:
         """Fill resting quotes from the trades seen since the last step (see module doc)."""
         by_tok = {}
@@ -600,12 +631,18 @@ class MarketMaker:
         if self.pool is not None and len(books) < len(tokens) and now - self._last["book"] > 60:
             self._last["book"] = now  # websocket not (yet) delivering: fall back to REST once a minute
             books = dict(self.client.books(tokens), **books)
-        self.process_trades(now)
+        live = self.gw is not None and self.gw.live
+        if live:
+            self.books.trades.clear()  # real orders: what was really filled counts, not the simulation's guess
+        else:
+            self.process_trades(now)
         self.sample_rewards(now, books)
         self.quote(now, books)
         self.manage_inventory(now, books)
         if self.gw is not None:
-            self.sync_orders(now)
+            self.sync_orders(now)  # in live mode this also fetches the account's fills ...
+            if self.gw.live:
+                self.apply_real_fills(now)  # ... which then become the inventory
         if now - self._last["settle"] >= 1800:
             self._last["settle"] = now
             self.settle(now)

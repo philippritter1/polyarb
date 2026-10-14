@@ -113,6 +113,31 @@ def chain_balances(addresses: Dict[str, str], post: Callable = None) -> Dict[str
     return out
 
 
+def own_fills(trades: List[dict], user: str) -> List[dict]:
+    """Our side of each trade. As TAKER the trade's own fields are ours. As MAKER they describe the taker's order –
+    our fill is the entry in maker_orders with our address: its asset, price and matched amount. Its side is
+    given, or follows from the matching rule: same token = the opposite side of the taker, complementary token
+    (YES bid met NO bid by minting / two asks by merging) = the same side."""
+    me, out = (user or "").lower(), []
+    for t in trades:
+        ts = float(t.get("match_time") or 0)
+        if str(t.get("trader_side", "")).upper() != "MAKER":
+            out.append(dict(id=str(t.get("id")), token=str(t.get("asset_id")), side=str(t.get("side", "")).upper(),
+                            price=float(t.get("price") or 0), size=float(t.get("size") or 0), ts=ts, role="TAKER"))
+            continue
+        taker_side, taker_tok = str(t.get("side", "")).upper(), str(t.get("asset_id"))
+        for mo in t.get("maker_orders") or []:
+            if str(mo.get("maker_address", "")).lower() != me:
+                continue
+            tok = str(mo.get("asset_id"))
+            side = str(mo.get("side") or "").upper() or (
+                ("SELL" if taker_side == "BUY" else "BUY") if tok == taker_tok else taker_side)
+            out.append(dict(id=f"{t.get('id')}:{mo.get('order_id')}", token=tok, side=side,
+                            price=float(mo.get("price") or 0), size=float(mo.get("matched_amount") or 0), ts=ts,
+                            role="MAKER"))
+    return out
+
+
 def account_value(user: str, get: Callable = None) -> Optional[float]:
     """Current value of all positions of `user` (data API, public); None if unavailable."""
     try:
@@ -191,14 +216,9 @@ class PolyExchange:
         return out
 
     def trades(self, after_ts: int) -> List[dict]:
-        """Own fills since `after_ts` (unix s): {id, token, side, price, size, ts, role}."""
+        """OUR fills since `after_ts` (unix s): {id, token, side, price, size, ts, role}."""
         from py_clob_client_v2.clob_types import TradeParams
-        out = []
-        for t in self.c.get_trades(TradeParams(after=int(after_ts))) or []:
-            out.append(dict(id=t.get("id"), token=str(t.get("asset_id")), side=str(t.get("side", "")).upper(),
-                            price=float(t.get("price") or 0), size=float(t.get("size") or 0),
-                            ts=float(t.get("match_time") or 0), role=t.get("trader_side", "")))
-        return out
+        return own_fills(self.c.get_trades(TradeParams(after=int(after_ts))) or [], self.user)
 
     def balance_usd(self, sig_type: Optional[int] = None) -> Optional[float]:
         """pUSD available for orders; `sig_type` asks as another signature type than the configured one."""

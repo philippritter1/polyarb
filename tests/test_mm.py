@@ -244,3 +244,37 @@ def test_breit_skips_large_min_sizes_and_caps_total_inventory(tmp_path):
     mk = mm.st.markets["a"]
     assert mk.qty_yes == 20 and mk.bid_yes is None and mk.bid_no is not None  # only the side that merges it away
     assert mm.scan["Bestandsgrenze erreicht"] == 1
+
+
+def test_exit_sells_old_inventory_first_resting_then_at_the_bid(tmp_path):
+    """exit: a one-sided position gets a sell order after after_h (filled only by a trade above it); what is
+    still held after dump_after_h is sold at the bid with the taker fee."""
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=1, dump_after_h=3)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 30, NOW + 5))  # 30 YES at 0.48
+    mm.clock.sleep(10)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.qty_yes == 30 and mk.ask is None  # too young to sell
+    mm.clock.sleep(3600)
+    mm.step()
+    assert mk.ask and mk.ask["side"] == "yes" and mk.ask["price"] == 0.52 and mk.ask["size"] == 30
+    store.trades.append(("aY", 0.52, 10, mm.clock.now()))  # at our price: not filled
+    store.trades.append(("aY", 0.53, 10, mm.clock.now() + 2))  # above: 10 sold at 0.52
+    mm.clock.sleep(10)
+    mm.step()
+    assert abs(mk.qty_yes - 20) < 1e-9 and abs(mm.st.exit_pnl - 10 * (0.52 - 0.48)) < 1e-9
+    assert mm.st.markets["a"].bid_no is not None  # the NO bid stays (merging also reduces the position)
+    mm.clock.sleep(2 * 3600)
+    mm.step()  # older than 3 h: the rest goes at the bid (0.48, fee 0 here)
+    assert mk.qty_yes == 0 and mk.ask is None and mm.scan["Bestand abgestoßen (Bid)"] == 1
+    assert abs(mm.st.exit_usd - (10 * 0.52 + 20 * 0.48)) < 1e-9
+    kinds = [r[0] for r in mm.store.db.execute("SELECT kind FROM settlements")]
+    assert kinds.count("exit") == 2
+    mm.st.save(mm.state_path)
+    again = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=1, dump_after_h=3)), Client([]), SimClock(NOW),
+                        books=BookStore(), pool=None)
+    assert abs(again.st.exit_usd - mm.st.exit_usd) < 1e-9

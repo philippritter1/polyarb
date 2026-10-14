@@ -17,6 +17,11 @@ mid scores ((v - s) / v)^2 * x. Side one = YES bids + NO asks, side two = YES as
 Q = max(min(Q1, Q2), max(Q1, Q2) / 3) when 0.10 <= mid <= 0.90, else min(Q1, Q2). Our share is
 Q_ours / (Q_ours + Q_others), the others read from the book. Per sample: daily_rate * share * dt / 1 day.
 The real payout depends on everyone's orders over the day, so this is an estimate, booked separately.
+
+Inventory exit (config `exit:`, off unless set): a one-sided position older than `after_h` gets a resting SELL
+order at the mid plus the quote distance (filled strictly by a trade ABOVE it, or a complementary trade below
+1 - price); still held after `dump_after_h`, it is sold at the best bid as a taker (fee paid). Without it the
+inventory waits for resolution – capital sits idle, possibly for weeks, and earns no rewards.
 """
 from __future__ import annotations
 
@@ -66,6 +71,8 @@ class MMMarket:
     cost_yes: float = 0.0
     cost_no: float = 0.0
     mid: Optional[float] = None
+    ask: Optional[dict] = None      # exit: resting sell order {side, price, size, placed_ts}
+    inv_ts: Optional[float] = None  # exit: since when the one-sided position is held
 
 
 @dataclass
@@ -77,6 +84,8 @@ class MMState:
     rewards_unbooked: float = 0.0
     rebates: float = 0.0
     fills: int = 0
+    exit_pnl: float = 0.0        # realized by selling inventory (part of realized)
+    exit_usd: float = 0.0        # proceeds of those sales
 
     def inventory_value(self) -> float:
         return sum(m.qty_yes * (m.mid if m.mid is not None else 0.5) + m.qty_no * (1 - (m.mid if m.mid is not None else 0.5))
@@ -97,6 +106,7 @@ class MMState:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(dict(cash=self.cash, realized=self.realized, rewards=self.rewards,
                            rewards_unbooked=self.rewards_unbooked, rebates=self.rebates, fills=self.fills,
+                           exit_pnl=self.exit_pnl, exit_usd=self.exit_usd,
                            markets=[asdict(m) for m in self.markets.values()]), f)
         os.replace(tmp, path)
 
@@ -108,7 +118,7 @@ class MMState:
             d = json.load(f)
         st = cls(cash=d["cash"], realized=d.get("realized", 0.0), rewards=d.get("rewards", 0.0),
                  rewards_unbooked=d.get("rewards_unbooked", 0.0), rebates=d.get("rebates", 0.0),
-                 fills=d.get("fills", 0))
+                 fills=d.get("fills", 0), exit_pnl=d.get("exit_pnl", 0.0), exit_usd=d.get("exit_usd", 0.0))
         for m in d.get("markets", []):
             st.markets[m["cid"]] = MMMarket(**m)
         return st
@@ -352,6 +362,63 @@ class MarketMaker:
         self.st.realized += pnl
         self.store.settlement(now, f"{self.name}:{mk.cid}", "merge", n, n, pnl)
 
+    def _sell(self, mk: MMMarket, side: str, qty: float, price: float, now: float, how: str, taker: bool) -> None:
+        held = mk.qty_yes if side == "yes" else mk.qty_no
+        qty = min(qty, held)
+        if qty <= 1e-9:
+            return
+        cost = (mk.cost_yes if side == "yes" else mk.cost_no) * qty / held
+        fee = mk.fee_rate * (price * (1 - price)) ** mk.fee_exp * qty if taker else 0.0
+        proceeds = price * qty - fee
+        if side == "yes":
+            mk.qty_yes -= qty
+            mk.cost_yes -= cost
+        else:
+            mk.qty_no -= qty
+            mk.cost_no -= cost
+        pnl = proceeds - cost
+        self.st.cash += proceeds
+        self.st.realized += pnl
+        self.st.exit_pnl += pnl
+        self.st.exit_usd += proceeds
+        self.store.settlement(now, f"{self.name}:{mk.cid}", "exit", qty, proceeds, pnl)
+        log.info("%s: %s %s %.2f @ %.3f (%s), PnL %+.2f", self.name, how, side.upper(), qty, price, mk.title[:50], pnl)
+
+    def manage_inventory(self, now: float, books: Dict[str, OrderBook]) -> None:
+        """exit: sell one-sided positions – first a resting order at mid + distance, later at the bid."""
+        ex = self.sc.get("exit")
+        if not ex:
+            return
+        after, dump = float(ex.get("after_h", 24)) * 3600, float(ex.get("dump_after_h", 96)) * 3600
+        frac = float(self.sc.get("quote_frac", 0.5))
+        for mk in self.st.markets.values():
+            net = mk.qty_yes - mk.qty_no
+            if abs(net) < 1e-6:
+                mk.ask, mk.inv_ts = None, None
+                continue
+            side = "yes" if net > 0 else "no"
+            if mk.inv_ts is None or (mk.ask and mk.ask["side"] != side):
+                mk.inv_ts, mk.ask = now, None
+            age = now - mk.inv_ts
+            bk = books.get(mk.yes if side == "yes" else mk.no)
+            if age < after or not bk or not bk.bids or not bk.asks:
+                continue
+            if age >= dump:
+                q = min(abs(net), bk.bids[0].size)
+                self._sell(mk, side, q, bk.best_bid, now, "abgestoßen zum Bid", taker=True)
+                self.scan["Bestand abgestoßen (Bid)"] = self.scan.get("Bestand abgestoßen (Bid)", 0) + 1
+                mk.ask = None
+                if abs(mk.qty_yes - mk.qty_no) < 1e-6:
+                    mk.inv_ts = None
+                continue
+            mid = (bk.best_bid + bk.best_ask) / 2
+            d = max(self.tick, mk.max_spread * frac)
+            price = round(max(math.ceil((mid + d) / self.tick - 1e-9) * self.tick, bk.best_bid + self.tick), 4)
+            if price >= 1:
+                continue
+            if not mk.ask or abs(mk.ask["price"] - price) > 1e-9 or abs(mk.ask["size"] - abs(net)) > 1e-6:
+                mk.ask = dict(side=side, price=price, size=abs(net), placed_ts=now)
+
     def process_trades(self, now: float) -> int:
         """Fill resting quotes from the trades seen since the last step (see module doc)."""
         by_tok = {}
@@ -366,6 +433,17 @@ class MarketMaker:
             if not hit:
                 continue
             mk, which = hit
+            a = mk.ask
+            if a and a["size"] > 0 and ts >= a["placed_ts"] + self.latency and (
+                    (a["side"] == which and price > a["price"] + 1e-9)
+                    or (a["side"] != which and price < 1 - a["price"] - 1e-9)):
+                q = min(a["size"], size)
+                self._sell(mk, a["side"], q, a["price"], now, "Verkaufsgebot", taker=False)
+                a["size"] -= q
+                size -= q  # the same trade cannot also fill a bid with these shares
+                n += 1
+                if size <= 1e-9:
+                    continue
             own, other = (mk.bid_yes, mk.bid_no) if which == "yes" else (mk.bid_no, mk.bid_yes)
             own_side, other_side = (which, "no" if which == "yes" else "yes")
             if own and ts >= own["placed_ts"] + self.latency and price < own["price"] - 1e-9 and own["size"] > 0:
@@ -517,6 +595,7 @@ class MarketMaker:
         self.process_trades(now)
         self.sample_rewards(now, books)
         self.quote(now, books)
+        self.manage_inventory(now, books)
         if self.gw is not None:
             self.sync_orders(now)
         if now - self._last["settle"] >= 1800:
@@ -548,6 +627,9 @@ class MarketMaker:
         scan = dict(self.scan, **{"Gebote aktiv": sum(bool(m.bid_yes) + bool(m.bid_no) for m in st.markets.values()),
                                   "Ausführungen": st.fills, "Spread/Auflösung $": round(st.realized, 2),
                                   "Rewards geschätzt $": round(st.rewards, 2), "Rebates $": round(st.rebates, 2),
+                                  **({"Bestand verkauft $": round(st.exit_usd, 2), "davon Ergebnis $": round(st.exit_pnl, 2),
+                                      "Verkaufsgebote aktiv": sum(1 for m in st.markets.values() if m.ask)}
+                                     if self.sc.get("exit") else {}),
                                   "Bestand $": round(st.inventory_value(), 2), "ts": now})
         try:
             with open(self.state_path.replace(".json", ".scan.json"), "w", encoding="utf-8") as f:

@@ -388,6 +388,32 @@ scenarios:
     max_total_inventory_usd: 1500  # Bestand über alle Märkte; darüber nur noch Gebote, die Positionen abbauen
     latency_s: 1
     step_s: 2
+  mm_abbau:
+    enabled: true
+    title: Market Making (Bestandsabbau)
+    strategy: mm                 # 14.10.: wie mm_neu2 (neue Märkte, Bestandsgrenze), plus aktiver Bestandsabbau –
+    # sonst sitzt das Kapital in einseitigen Positionen fest (Wochen bis Monate bis zur Auflösung) und bietet nicht.
+    exit:
+      after_h: 24                # einseitige Position älter als 24 h: Verkaufsgebot zur Mitte + Abstand
+      dump_after_h: 96           # nach 4 Tagen noch da: zum Bid verkaufen (Taker, Gebühr)
+    max_age_days: 3
+    rank: share
+    prefilter: 60
+    min_liquidity: 0
+    capital_usd: 2500
+    max_markets: 15
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   sharp_fussball:
     enabled: true
     title: Fußball vs. Pinnacle

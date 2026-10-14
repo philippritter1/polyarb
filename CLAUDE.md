@@ -95,6 +95,9 @@ Aktive Kandidaten im Live-Test:
 - `mm_neu2` (ab 12.10.): wie `mm_neu`, frisch mit 2.500 $ und Bestandsgrenze 1.500 $ gesamt. `mm_neu` selbst
   sitzt seit dem Fehler auf ~3.800 $ Altbestand fest (kaum Cash für Gebote) und läuft daneben weiter, damit man
   sieht, wie der Altbestand aus neuen Märkten auflöst. Vergleich bis 31.10.: mm_rewards / mm_breit / mm_neu2.
+- `mm_abbau` (ab 14.10.): wie `mm_neu2`, plus aktiver Bestandsabbau (`exit:` in arb/mm.py): einseitige Position
+  älter als 24 h bekommt ein Verkaufsgebot zur Mitte + Abstand (gefüllt nur durch Trades darüber), nach 96 h Verkauf
+  zum Bid (Taker-Gebühr). Frage: Verluste früh begrenzen und Kapital fürs Bieten freihalten vs. auf Auflösung warten.
 - `mm_breit` (ab 10.10.): wie `mm_rewards`, aber 40 Märkte nach erwartetem Reward (`rank: share`), 20 $ je Gebot,
   nur Märkte mit Reward-Mindestgröße ≤ 25 $ (`max_min_size_usd`), Bestand gesamt max. 1.500 $
   (`max_total_inventory_usd`, darüber nur Gebote, die Positionen abbauen). Frage: breit + klein besser als 15 groß?

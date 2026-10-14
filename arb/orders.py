@@ -87,6 +87,7 @@ class Gateway:
         self._geo: Optional[dict] = None
         self._last = dict(geo=-1e18, reconcile=-1e18, equity=-1e18, scoring=-1e18, rewards="")
         self.info: dict = {}
+        self.est: Dict[str, dict] = {}  # set by the strategy: condition id -> {q, rate, pct} (our estimated share)
         self.day_path = status_path.replace("live-status-", "live-day-")
         db.execute("""CREATE TABLE IF NOT EXISTS live_orders(ts REAL, mode TEXT, action TEXT, token TEXT, label TEXT,
                       price REAL, size REAL, oid TEXT, note TEXT)""")
@@ -94,6 +95,10 @@ class Gateway:
                       price REAL, size REAL, role TEXT)""")
         db.execute("CREATE TABLE IF NOT EXISTS live_rewards(day TEXT PRIMARY KEY, usd REAL, ts REAL)")
         db.execute("CREATE TABLE IF NOT EXISTS live_meta(k TEXT PRIMARY KEY, v TEXT)")
+        # every 10 min: Polymarket's own share of each pool we quote in, next to our estimate (counts also below
+        # the $1 payout minimum) – does our reward estimate, on which the whole case rests, match reality?
+        db.execute("""CREATE TABLE IF NOT EXISTS live_reward_share(ts REAL, cid TEXT, question TEXT, rate REAL,
+                      pm_pct REAL, est_pct REAL, pm_earned REAL)""")
         # drop the repeated rejections logged before they were deduplicated (keeps the first of each)
         db.execute("""DELETE FROM live_orders WHERE action='reject' AND rowid NOT IN
                       (SELECT MIN(rowid) FROM live_orders WHERE action='reject' GROUP BY token, price, size, note)""")
@@ -262,6 +267,7 @@ class Gateway:
                 self.info["scoring"] = f"{sum(sc.values())}/{len(sc)}"
             except Exception as e:  # noqa
                 self.info["scoring"] = f"? ({type(e).__name__})"
+            self._reward_share(now)
         day = _day(now - 86400)
         if self._last["rewards"] != day and datetime.fromtimestamp(now, timezone.utc).hour >= 1:
             self._last["rewards"] = day
@@ -269,6 +275,27 @@ class Gateway:
             if usd is not None:
                 self.db.execute("INSERT OR REPLACE INTO live_rewards VALUES(?,?,?)", (day, usd, now))
             self.info["rewards_yesterday"] = usd
+
+    def _reward_share(self, now: float) -> None:
+        fn = getattr(self.exchange, "reward_live", None)
+        if fn is None or not self.est:
+            return
+        try:
+            pm = fn()
+        except Exception as e:  # noqa
+            log.warning("%s: Reward-Anteil nicht abrufbar (%s)", self.name, type(e).__name__)
+            return
+        rows = []
+        for cid, e in self.est.items():
+            p = pm.get(cid, {})
+            row = (now, cid, str(e.get("q", ""))[:120], float(e.get("rate") or 0), p.get("pct"), e.get("pct"),
+                   p.get("earned"))
+            self.db.execute("INSERT INTO live_reward_share VALUES(?,?,?,?,?,?,?)", row)
+            rows.append(dict(q=row[2][:60], rate=row[3], pm_pct=row[4], est_pct=row[5], earned_today=row[6],
+                             pm_day=round(row[3] * row[4] / 100, 2) if row[4] is not None else None,
+                             est_day=round(row[3] * row[5] / 100, 2) if row[5] is not None else None))
+        self.db.commit()
+        self.info["reward_share"] = rows[:10]
 
     # ------------------------------------------------------------------ main
     def sync(self, now: float, want: Dict) -> str:

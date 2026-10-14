@@ -277,6 +277,35 @@ def rewards_compare(db_path: str) -> list:
             for d, p in sorted(paid.items(), reverse=True)]
 
 
+def reward_share_daily(db_path: str) -> list:
+    """Pilot: Polymarket's own share of the pools we quote in (sampled every 10 min, counts also below the $1
+    payout minimum) next to our estimate. Per UTC day, averaged over the samples:
+    [[day, estimate $/day, Polymarket $/day, Polymarket / estimate %, earned so far $, samples]]"""
+    try:
+        db = sqlite3.connect(db_path)
+        rows = db.execute("""SELECT date(ts, 'unixepoch'), ts, SUM(rate * est_pct / 100), SUM(rate * pm_pct / 100),
+                                    SUM(pm_earned) FROM live_reward_share GROUP BY ts ORDER BY ts""").fetchall()
+        db.close()
+    except sqlite3.Error:
+        return []
+    days: dict = {}
+    for d, _, est, pm, earned in rows:
+        x = days.setdefault(d, [0.0, 0.0, 0, 0, None])
+        x[0] += est or 0
+        if pm is not None:
+            x[1] += pm
+            x[3] += 1
+        x[2] += 1
+        x[4] = earned if earned is not None else x[4]
+    out = []
+    for d, (est, pm, n, n_pm, earned) in sorted(days.items(), reverse=True):
+        e, p = est / n, (pm / n_pm if n_pm else None)
+        out.append([d, round(e, 2), None if p is None else round(p, 2),
+                    round(p / e * 100) if p is not None and e > 0 else None,
+                    None if earned is None else round(earned, 4), n])
+    return out
+
+
 def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
           kind: str = "arb", nav: list | None = None, overview: list | None = None, scan: dict | None = None) -> str:
     data = collect(db_path, float(start_capital))
@@ -291,10 +320,11 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
             "utf-8-sig")
     metrics = mm_daily(db_path) if kind == "mm" else []
     rcmp = rewards_compare(db_path) if kind == "mm" else []
+    rshare = reward_share_daily(db_path) if kind == "mm" else []
     if metrics:
         _write(Path(out).with_name("kennzahlen.csv"), _csv(MM_DAILY_HEADER, metrics), "utf-8-sig")
     data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
-                metrics=metrics, rewards_cmp=rcmp,
+                metrics=metrics, rewards_cmp=rcmp, reward_share=rshare,
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -1069,7 +1099,7 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <div id="halt"></div>
 <div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
 <div class="kpis" id="kpis"></div>
-<div class="card" id="rwcard" style="display:none"><h2>Pilot: Rewards echt vs. geschätzt</h2><p class="note">Was Polymarket für unsere echten Gebote tatsächlich gezahlt hat (einmal täglich abgerechnet, Tag = UTC), neben unserer Schätzung für denselben Tag. Die Kernzahl des Pilots: liegt „echt / geschätzt“ deutlich unter 100 %, überschätzt die Simulation die Rewards.</p><div class="tblwrap"><table id="rwtbl"></table></div></div>
+<div class="card" id="rwcard" style="display:none"><h2>Pilot: Rewards echt vs. geschätzt</h2><p class="note">Was Polymarket für unsere echten Gebote tatsächlich gezahlt hat (einmal täglich abgerechnet, Tag = UTC), neben unserer Schätzung für denselben Tag. Die Kernzahl des Pilots: liegt „echt / geschätzt“ deutlich unter 100 %, überschätzt die Simulation die Rewards.</p><div class="tblwrap"><table id="rwtbl"></table></div><p class="note" id="rsnote" style="display:none">Laufend, auch unter der Auszahlungsgrenze von 1 $/Tag: Polymarkets eigener Anteil am Pool unserer Märkte (alle 10 Min. abgefragt) × Tagesbudget, neben unserer Schätzung zum selben Zeitpunkt. „bisher verdient“ = was Polymarket für den Tag schon ausweist.</p><div class="tblwrap"><table id="rstbl"></table></div></div>
 <div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
 <div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
 <div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i>Vermögen realisiert (Start + realisierter PnL)</span></div><div id="eq"></div></div>
@@ -1116,6 +1146,10 @@ const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Pos
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
 if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[6]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[7][2]="Preis unter der Strategie-Grenze"}
+if(D.reward_share&&D.reward_share.length){
+ $("rstbl").innerHTML=`<tr><th>Tag (UTC)</th><th class="num">geschätzt $/Tag</th><th class="num">Polymarket $/Tag</th><th class="num">Polymarket / geschätzt</th><th class="num">bisher verdient</th><th class="num">Abfragen</th></tr>`+
+  D.reward_share.map(r=>`<tr><td>${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${r[2]==null?"–":usd(r[2])}</td><td class="num">${r[3]==null?"–":r[3]+" %"}</td><td class="num">${r[4]==null?"–":"$ "+fmt(r[4],4)}</td><td class="num">${r[5]}</td></tr>`).join("");
+ $("rsnote").style.display="";$("rwcard").style.display=""}
 if(D.rewards_cmp&&D.rewards_cmp.length){
  $("rwtbl").innerHTML=`<tr><th>Tag (UTC)</th><th class="num">geschätzt</th><th class="num">echt gezahlt</th><th class="num">echt / geschätzt</th></tr>`+
   D.rewards_cmp.map(r=>`<tr><td>${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${usd(r[2])}</td><td class="num">${r[3]==null?"–":r[3]+" %"}</td></tr>`).join("");

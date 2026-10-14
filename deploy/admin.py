@@ -137,6 +137,11 @@ def live_section() -> str:
         for k, t in (("fills", "Fills"), ("scoring", "zählen für Rewards"), ("rewards_yesterday", "Rewards gestern $")):
             if st.get(k) is not None:
                 extra.append(f"{t} {e(st.get(k))}")
+        for r in st.get("reward_share") or []:  # Polymarket's own share of the pool vs. our estimate
+            pm = "?" if r.get("pm_pct") is None else f"{r['pm_pct']:.2f} % ≈ {r.get('pm_day')} $/Tag"
+            est = "?" if r.get("est_pct") is None else f"{r['est_pct']:.2f} % ≈ {r.get('est_day')} $/Tag"
+            extra.append(f"Reward-Anteil {e(r.get('q', ''))}: Polymarket {e(pm)}, geschätzt {e(est)}"
+                         + ("" if r.get("earned_today") is None else f", heute verdient {e(r['earned_today'])} $"))
         rows.append(f"<li><b>{e(st.get('scenario'))}</b>: {e(st.get('mode'))} · "
                     f"offen {st.get('open_orders', 0)} Orders / {st.get('open_usd', 0)} $ · gesetzt {st.get('gesetzt', 0)}"
                     f" · storniert {st.get('storniert', 0)} · abgelehnt {st.get('abgelehnt', 0)}"

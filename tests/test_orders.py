@@ -153,6 +153,9 @@ class FakeExchange:
     def rewards(self, day):
         return 1.23
 
+    def reward_live(self, day=None):
+        return {"c1": {"pct": 2.0, "earned": 0.12}}
+
 
 def _live(tmp_path, ex=None, geo=None, value=0.0, **lim):
     db = sqlite3.connect(":memory:")
@@ -419,3 +422,39 @@ def test_real_fills_drive_the_market_maker_in_live_mode(tmp_path):
     mm.clock.sleep(100)
     mm.step()
     assert mm.scan["echte Fills ohne Markt"] == 1 and mk.qty_yes == 7
+
+
+def test_reward_share_is_stored_next_to_the_estimate_and_shown(tmp_path):
+    import dashboard
+    ex = FakeExchange()
+    gw, db = _live(tmp_path, ex)
+    gw.est = {"c1": dict(q="Markt 1", rate=100.0, pct=2.5), "c2": dict(q="Markt 2", rate=50.0, pct=1.0)}
+    gw.sync(NOW, {("A", "BUY"): (0.48, 50, "A JA")})
+    gw.sync(NOW + 100, {("A", "BUY"): (0.48, 50, "A JA")})
+    rows = db.execute("SELECT cid, rate, pm_pct, est_pct, pm_earned FROM live_reward_share ORDER BY cid").fetchall()
+    assert rows == [("c1", 100.0, 2.0, 2.5, 0.12), ("c2", 50.0, None, 1.0, None)]
+    st = json.loads((tmp_path / "live-status-pilot.json").read_text())
+    assert st["reward_share"][0]["pm_day"] == 2.0 and st["reward_share"][0]["est_day"] == 2.5
+    assert st["reward_share"][1]["pm_day"] is None
+    db.commit()
+    path = str(tmp_path / "x.db")
+    disk = sqlite3.connect(path)
+    db.backup(disk)
+    disk.close()
+    day, est, pm, ratio, earned, n = dashboard.reward_share_daily(path)[0]
+    assert (est, pm, ratio, earned, n) == (3.0, 2.0, 67, 0.12, 1)
+
+
+def test_reward_live_reads_polymarkets_share_and_earnings():
+    from arb.exchange import PolyExchange
+
+    class C:
+        def get_reward_percentages(self):
+            return {"c1": 1.5, "c2": "x"}
+
+        def get_earnings_for_user_for_day(self, day):
+            return [dict(condition_id="c1", earnings=0.1), dict(condition_id="c1", earnings="0.05"),
+                    dict(condition_id="c3", earnings=0.2)]
+    ex = PolyExchange.__new__(PolyExchange)
+    ex._c = C()
+    assert ex.reward_live("2026-10-14") == {"c1": {"pct": 1.5, "earned": 0.15}, "c3": {"earned": 0.2}}

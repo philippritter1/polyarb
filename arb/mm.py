@@ -570,16 +570,20 @@ class MarketMaker:
             return
         dt = min(now - last, 600.0)
         self._acc["dt"] += dt
+        est = {}
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
             if not by or not bn or mk.mid is None or not (mk.bid_yes or mk.bid_no):
                 continue
             share = reward_share(by, bn, mk.bid_yes, mk.bid_no, mk.mid, mk.max_spread, mk.min_size)
+            est[mk.cid] = dict(q=mk.title, rate=mk.daily_rate, pct=round(share * 100, 4))
             r = mk.daily_rate * share * dt / DAY
             self.st.rewards += r
             self.st.rewards_unbooked += r
             self._acc["rew"] += r
             self._acc["pool_dt"] += mk.daily_rate * dt
+        if self.gw is not None:  # live: the gateway puts Polymarket's own share next to this estimate
+            self.gw.est = est
 
     def write_metrics(self, now: float) -> None:
         """One row per hour: the pools we quoted in, our estimated reward rate and share of those pools."""

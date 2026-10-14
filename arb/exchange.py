@@ -243,6 +243,33 @@ class PolyExchange:
         d = self.c.are_orders_scoring(OrdersScoringParams(orderIds=list(order_ids))) or {}
         return {k: bool(v) for k, v in d.items()}
 
+    def reward_live(self, day: Optional[str] = None) -> Dict[str, dict]:
+        """Polymarket's own view of our reward business, also below the $1 payout minimum:
+        {condition id: {"pct": our share of the market's pool right now in %, "earned": $ earned on `day` so far}}
+        (day YYYY-MM-DD UTC, default today). Either part may be missing if its endpoint fails."""
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        out: Dict[str, dict] = {}
+        try:
+            d = self.c.get_reward_percentages() or {}
+            d = d.get("data", d) if isinstance(d, dict) else {}
+            for cid, v in (d.items() if isinstance(d, dict) else []):
+                try:
+                    out.setdefault(str(cid), {})["pct"] = float(v)
+                except (TypeError, ValueError):
+                    pass
+        except Exception as e:  # noqa
+            log.warning("reward percentages: %s", type(e).__name__)
+        try:
+            for r in self.c.get_earnings_for_user_for_day(day) or []:
+                if isinstance(r, dict) and r.get("condition_id"):
+                    e = out.setdefault(str(r["condition_id"]), {})
+                    e["earned"] = round(e.get("earned", 0.0) + float(r.get("earnings", 0) or 0), 6)
+        except Exception as e:  # noqa
+            log.warning("reward earnings %s: %s", day, type(e).__name__)
+        log.info("reward_live %s: Anteil für %d Märkte, Verdienst für %d", day,
+                 sum("pct" in v for v in out.values()), sum("earned" in v for v in out.values()))
+        return out
+
     def rewards(self, day: Optional[str] = None) -> Optional[float]:
         """Liquidity rewards earned on `day` (YYYY-MM-DD, UTC; default yesterday); None if unavailable."""
         day = day or datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - 86400, timezone.utc).strftime("%Y-%m-%d")

@@ -269,7 +269,7 @@ def connection_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
             return None
     if step("Zugang (API-Schlüssel aus dem Private Key)", lambda: bool(ex.c) and "ok") is None:
         return steps
-    bal = step("Guthaben (USDC)", ex.balance_usd)
+    bal = step("Guthaben (pUSD)", ex.balance_usd)
     def two_sided():  # the most traded market whose book has a bid AND an ask (a finished match has neither)
         for c in (find or liquid_tokens)():
             b = ex.best(c["token"])

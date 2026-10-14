@@ -1,20 +1,31 @@
-"""Order gateway between a strategy and the exchange: off, dry run, (later) live.
+"""Order gateway between a strategy and the exchange: off, dry run, live.
 
 The strategy says which resting orders it wants right now; `sync` compares that with the orders the gateway
-holds and derives the actions – place, cancel, replace (price changed). In dry run every action is checked
-against hard limits and written to the scenario database (table live_orders) and data/live-status.json,
-nothing is sent. Live trading is not implemented: mode "live" is treated as dry run and says so.
+holds and derives the actions – place, cancel, replace (price changed). Every action is checked against hard
+limits and written to the scenario database (table live_orders) and data/live-status-<name>.json.
 
-Mode: data/live.json {"mode": "off" | "dry" | "live"}, set on the settings page (/admin/). Switching to "off"
-is the emergency stop: every held order is cancelled (logged) and nothing new is placed.
+Mode: data/live.json {"mode": "off" | "dry" | "live"}, set on the settings page (/admin/). "off" is the
+emergency stop: every held order is cancelled (at the exchange too, if live) and nothing new is placed.
+
+Real orders are sent only if ALL of these hold – otherwise the gateway runs as dry run and says why:
+  - mode "live" on /admin/                         (the owner's switch)
+  - `allow_real: true` in this scenario's `live:`  (a reviewed commit; the other scenarios stay dry)
+  - a usable wallet in data/secrets.env            (POLY_PRIVATE_KEY, POLY_FUNDER, POLY_SIG_TYPE – arb/exchange.py)
+  - Polymarket's geoblock check for the server's IP says not blocked (checked hourly; unknown = not allowed)
+  - the daily loss limit is not hit (cash + positions vs. the day's start, `max_daily_loss_usd`); hitting it
+    switches the mode to "off" for everyone and cancels all orders at the exchange
+On every switch into live all orders of the account are cancelled first, so the gateway's view starts clean.
 
 Hard limits (per scenario, config `live:`), independent of the strategy:
   max_order_usd    one order (price x size)
-  max_market_usd   all orders of one token
-  max_total_usd    all open orders together
-An order beyond a limit is rejected and logged, the strategy keeps running. A rejection is logged and counted once
-per (token, price, size, reason): sync runs every few seconds and would otherwise re-log the same rejection each time
-(505k rows in the first day). It is still re-checked on every sync, so it is placed as soon as there is room.
+  max_market_usd   all buy orders of one token
+  max_total_usd    all open buy orders together
+Sell orders (inventory exit) only need the shares, which the exchange checks. A rejection is logged and counted
+once per (order, price, size, reason): sync runs every few seconds and would otherwise re-log it each time.
+
+Live bookkeeping: open orders are reconciled with the exchange every minute (an order that is gone was filled or
+cancelled there), own fills go to live_fills, whether the orders score for rewards is sampled, and the rewards
+Polymarket paid are read once a day into live_rewards – next to the paper estimate, that is what the pilot checks.
 """
 from __future__ import annotations
 
@@ -22,10 +33,12 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 log = logging.getLogger("polyarb.orders")
 MODES = ("off", "dry", "live")
+Key = Tuple[str, str]  # (token, "BUY" | "SELL")
 
 
 def read_mode(path: str) -> str:
@@ -37,98 +50,262 @@ def read_mode(path: str) -> str:
         return "off"
 
 
-def write_mode(path: str, mode: str) -> None:
+def write_mode(path: str, mode: str, why: str = "") -> None:
     if mode not in MODES:
         raise ValueError(mode)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"mode": mode, "ts": time.time()}, f)
+        json.dump({"mode": mode, "ts": time.time(), **({"why": why} if why else {})}, f)
     os.replace(tmp, path)
 
 
+def _day(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+
+
 class Gateway:
-    def __init__(self, name: str, db, mode_path: str, status_path: str, limits: Optional[dict] = None):
+    def __init__(self, name: str, db, mode_path: str, status_path: str, limits: Optional[dict] = None,
+                 exchange=None, secrets_path: str = "", geo=None, value=None):
         self.name, self.db = name, db
         self.mode_path, self.status_path = mode_path, status_path
         lim = limits or {}
         self.max_order = float(lim.get("max_order_usd", 30))
         self.max_market = float(lim.get("max_market_usd", 60))
         self.max_total = float(lim.get("max_total_usd", 300))
-        self.orders: Dict[str, dict] = {}   # key (token) -> {price, size, oid, ts}
+        self.allow_real = bool(lim.get("allow_real", False))
+        self.max_loss = float(lim.get("max_daily_loss_usd", 50))
+        self.orders: Dict[Key, dict] = {}   # (token, side) -> {price, size, oid, ts, label}
         self.counts = {"gesetzt": 0, "storniert": 0, "abgelehnt": 0}
-        self.rejected: Dict[str, tuple] = {}  # token -> (price, size, reason) of the last logged rejection
+        self.rejected: Dict[Key, tuple] = {}  # last logged rejection per order
         self._seq = 0
         self.mode = "off"
+        self.live = False
+        self.why = ""
+        self._ex, self.secrets_path = exchange, secrets_path
+        from .exchange import account_value, geoblock
+        self._geo_fn, self._value_fn = geo or geoblock, value or account_value
+        self._geo: Optional[dict] = None
+        self._last = dict(geo=-1e18, reconcile=-1e18, equity=-1e18, scoring=-1e18, rewards="")
+        self.info: dict = {}
+        self.day_path = status_path.replace("live-status-", "live-day-")
         db.execute("""CREATE TABLE IF NOT EXISTS live_orders(ts REAL, mode TEXT, action TEXT, token TEXT, label TEXT,
                       price REAL, size REAL, oid TEXT, note TEXT)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS live_fills(id TEXT PRIMARY KEY, ts REAL, token TEXT, side TEXT,
+                      price REAL, size REAL, role TEXT)""")
+        db.execute("CREATE TABLE IF NOT EXISTS live_rewards(day TEXT PRIMARY KEY, usd REAL, ts REAL)")
         # drop the repeated rejections logged before they were deduplicated (keeps the first of each)
         db.execute("""DELETE FROM live_orders WHERE action='reject' AND rowid NOT IN
                       (SELECT MIN(rowid) FROM live_orders WHERE action='reject' GROUP BY token, price, size, note)""")
 
     # ------------------------------------------------------------------ helpers
-    def _log(self, now: float, action: str, token: str, label: str, price: float, size: float, oid: str, note: str = ""):
+    def _log(self, now: float, action: str, key: Key, label: str, price: float, size: float, oid: str, note: str = ""):
         self.db.execute("INSERT INTO live_orders VALUES(?,?,?,?,?,?,?,?,?)",
-                        (now, self.mode, action, token, label[:120], price, size, oid, note))
+                        (now, self.mode, action, key[0], (label + ("" if key[1] == "BUY" else " (Verkauf)"))[:120],
+                         price, size, oid, note))
 
     def open_usd(self) -> float:
-        return sum(o["price"] * o["size"] for o in self.orders.values())
+        return sum(o["price"] * o["size"] for k, o in self.orders.items() if k[1] == "BUY")
 
-    def _cancel(self, now: float, token: str, why: str) -> None:
-        o = self.orders.pop(token)
+    @property
+    def exchange(self):
+        if self._ex is None:
+            from .exchange import PolyExchange, read_wallet, wallet_problem
+            w = read_wallet(self.secrets_path)
+            if wallet_problem(w):
+                return None
+            self._ex = PolyExchange(w)
+        return self._ex
+
+    def _cancel(self, now: float, key: Key, why: str) -> None:
+        o = self.orders.pop(key)
+        if self.live and not o["oid"].startswith("dry-"):
+            try:
+                self.exchange.cancel(o["oid"])
+            except Exception as e:  # noqa – gone already (filled) or a hiccup: reconcile sorts it out
+                why += f" (Börse: {type(e).__name__})"
         self.counts["storniert"] += 1
-        self._log(now, "cancel", token, o.get("label", ""), o["price"], o["size"], o["oid"], why)
+        self._log(now, "cancel", key, o.get("label", ""), o["price"], o["size"], o["oid"], why)
 
-    def _place(self, now: float, token: str, label: str, price: float, size: float) -> None:
+    def _reject(self, now: float, key: Key, label: str, price: float, size: float, why: str) -> None:
+        if self.rejected.get(key) != (price, size, why):
+            self.rejected[key] = (price, size, why)
+            self.counts["abgelehnt"] += 1
+            self._log(now, "reject", key, label, price, size, "", why)
+
+    def _place(self, now: float, key: Key, label: str, price: float, size: float) -> None:
         usd = price * size
-        why = ("Order > max_order_usd" if usd > self.max_order + 1e-9 else
-               "Markt > max_market_usd" if usd > self.max_market + 1e-9 else
-               "gesamt > max_total_usd" if self.open_usd() + usd > self.max_total + 1e-9 else None)
+        why = None
+        if key[1] == "BUY":
+            same = sum(o["price"] * o["size"] for k, o in self.orders.items() if k == key)
+            why = ("Order > max_order_usd" if usd > self.max_order + 1e-9 else
+                   "Markt > max_market_usd" if same + usd > self.max_market + 1e-9 else
+                   "gesamt > max_total_usd" if self.open_usd() + usd > self.max_total + 1e-9 else None)
         if why:
-            if self.rejected.get(token) != (price, size, why):
-                self.rejected[token] = (price, size, why)
-                self.counts["abgelehnt"] += 1
-                self._log(now, "reject", token, label, price, size, "", why)
-            return
-        self.rejected.pop(token, None)
-        self._seq += 1
-        oid = f"{self.mode}-{self.name}-{self._seq}"
-        self.orders[token] = dict(price=price, size=size, oid=oid, ts=now, label=label)
+            return self._reject(now, key, label, price, size, why)
+        if self.live:
+            try:
+                oid = self.exchange.place(key[0], key[1], price, size)
+            except Exception as e:  # noqa – the exchange said no (post-only would cross, balance, tick, ...)
+                return self._reject(now, key, label, price, size, f"Börse: {str(e)[:100] or type(e).__name__}")
+        else:
+            self._seq += 1
+            oid = f"dry-{self.name}-{self._seq}"
+        self.rejected.pop(key, None)
+        self.orders[key] = dict(price=price, size=size, oid=oid, ts=now, label=label)
         self.counts["gesetzt"] += 1
-        self._log(now, "place", token, label, price, size, oid)
+        self._log(now, "place", key, label, price, size, oid)
+
+    # ------------------------------------------------------------------ safety
+    def _live_allowed(self, now: float, mode: str) -> str:
+        """'' if real orders may be sent, else why not."""
+        if mode != "live":
+            return "Modus Trockenlauf"
+        if not self.allow_real:
+            return "für dieses Szenario nicht freigegeben (allow_real)"
+        if self.exchange is None:
+            return "keine gültige Wallet in /admin/"
+        if now - self._last["geo"] > 3600 or self._geo is None:
+            self._last["geo"] = now
+            self._geo = self._geo_fn()
+        if self._geo.get("blocked") is None:
+            return "Geoblock-Prüfung nicht erreichbar"
+        if self._geo.get("blocked"):
+            return f"Polymarket sperrt diesen Server ({self._geo.get('country', '?')})"
+        return ""
+
+    def _equity_check(self, now: float) -> bool:
+        """Daily loss limit on cash + positions. False (and everything off) when it is hit."""
+        if now - self._last["equity"] < 300:
+            return True
+        self._last["equity"] = now
+        ex = self.exchange
+        try:
+            cash, pos = ex.balance_usd(), self._value_fn(ex.user)
+        except Exception as e:  # noqa
+            log.warning("%s: Kontostand nicht lesbar (%s)", self.name, type(e).__name__)
+            return True
+        if cash is None or pos is None:
+            return True
+        eq = cash + pos
+        day = _day(now)
+        try:
+            with open(self.day_path, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            d = {}
+        if d.get("day") != day:
+            d = dict(day=day, start=eq)
+            tmp = self.day_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(d, f)
+            os.replace(tmp, self.day_path)
+        self.info.update(cash=round(cash, 2), positions=round(pos, 2), equity=round(eq, 2), day_start=round(d["start"], 2))
+        if eq < d["start"] - self.max_loss:
+            why = f"Tagesverlust {d['start'] - eq:.2f} $ > {self.max_loss:.0f} $"
+            log.error("%s: %s – Not-Aus", self.name, why)
+            write_mode(self.mode_path, "off", why)
+            self._stop_all(now, why)
+            return False
+        return True
+
+    def _stop_all(self, now: float, why: str) -> None:
+        for k in list(self.orders):
+            self._cancel(now, k, why)
+        try:
+            self.exchange.cancel_all()
+        except Exception as e:  # noqa
+            log.error("%s: cancel_all fehlgeschlagen (%s)", self.name, type(e).__name__)
+
+    # ------------------------------------------------------------------ live bookkeeping
+    def _reconcile(self, now: float) -> None:
+        if now - self._last["reconcile"] < 60:
+            return
+        self._last["reconcile"] = now
+        ex = self.exchange
+        try:
+            open_ids = set(ex.open_orders())
+            for k, o in list(self.orders.items()):
+                if o["oid"] not in open_ids:  # filled (or cancelled by the exchange): place anew if still wanted
+                    self.orders.pop(k)
+                    self._log(now, "gone", k, o.get("label", ""), o["price"], o["size"], o["oid"], "nicht mehr offen")
+            last = self.db.execute("SELECT MAX(ts) FROM live_fills").fetchone()[0] or (now - 86400)
+            for t in ex.trades(int(last) - 60):
+                self.db.execute("INSERT OR IGNORE INTO live_fills VALUES(?,?,?,?,?,?,?)",
+                                (t["id"], t["ts"], t["token"], t["side"], t["price"], t["size"], t["role"]))
+            self.info["fills"] = self.db.execute("SELECT COUNT(*) FROM live_fills").fetchone()[0]
+        except Exception as e:  # noqa
+            log.warning("%s: Abgleich fehlgeschlagen (%s: %s)", self.name, type(e).__name__, str(e)[:120])
+        if now - self._last["scoring"] >= 600 and self.orders:
+            self._last["scoring"] = now
+            try:
+                sc = ex.scoring([o["oid"] for o in self.orders.values()])
+                self.info["scoring"] = f"{sum(sc.values())}/{len(sc)}"
+            except Exception as e:  # noqa
+                self.info["scoring"] = f"? ({type(e).__name__})"
+        day = _day(now - 86400)
+        if self._last["rewards"] != day and datetime.fromtimestamp(now, timezone.utc).hour >= 1:
+            self._last["rewards"] = day
+            usd = ex.rewards(day)
+            if usd is not None:
+                self.db.execute("INSERT OR REPLACE INTO live_rewards VALUES(?,?,?)", (day, usd, now))
+            self.info["rewards_yesterday"] = usd
 
     # ------------------------------------------------------------------ main
-    def sync(self, now: float, want: Dict[str, Tuple[float, float, str]]) -> str:
-        """want: token -> (price, size, label) of every order the strategy wants resting now."""
+    def sync(self, now: float, want: Dict) -> str:
+        """want: (token, "BUY"|"SELL") -> (price, size, label) of every order the strategy wants resting now
+        (a plain token key means a buy)."""
+        want = {(k if isinstance(k, tuple) else (k, "BUY")): v for k, v in want.items()}
         mode = read_mode(self.mode_path)
         if mode == "off":
-            if self.orders:  # emergency stop / switched off: cancel everything we hold
-                for t in list(self.orders):
-                    self._cancel(now, t, "ausgeschaltet")
-            self.mode = mode
+            if self.orders or self.live:  # emergency stop / switched off: cancel everything we hold
+                for k in list(self.orders):
+                    self._cancel(now, k, "ausgeschaltet")
+                if self.live:
+                    self._stop_all(now, "ausgeschaltet")
+            self.mode, self.live, self.why = mode, False, "ausgeschaltet"
             self._status(now, "aus")
             return mode
-        self.mode = "dry"  # live is not implemented: never send anything
-        for t in list(self.orders):
-            w = want.get(t)
+        why = self._live_allowed(now, mode)
+        live = not why
+        if live != self.live:  # switching between dry and real: start from a clean book on both sides
+            for k in list(self.orders):
+                self._cancel(now, k, "Moduswechsel")
+            if live:
+                try:
+                    self.exchange.cancel_all()
+                except Exception as e:  # noqa
+                    why, live = f"Börse nicht erreichbar ({type(e).__name__})", False
+        self.live, self.why = live, why
+        self.mode = "live" if live else "dry"
+        if live and not self._equity_check(now):
+            self.mode, self.live = "off", False
+            self._status(now, "aus (Tagesverlust)")
+            return "off"
+        if live:
+            self._reconcile(now)
+        for k in list(self.orders):
+            w = want.get(k)
             if w is None:
-                self._cancel(now, t, "nicht mehr gewollt")
-            elif abs(w[0] - self.orders[t]["price"]) > 1e-9:
-                self._cancel(now, t, f"Preis {self.orders[t]['price']:.3f} -> {w[0]:.3f}")
-        for t in [t for t in self.rejected if t not in want]:
-            del self.rejected[t]
-        for t, (price, size, label) in want.items():
-            if t not in self.orders and size > 0:
-                self._place(now, t, label, price, size)
-        self._status(now, "Trockenlauf" + (" (echt ist noch nicht freigeschaltet)" if mode == "live" else ""))
+                self._cancel(now, k, "nicht mehr gewollt")
+            elif abs(w[0] - self.orders[k]["price"]) > 1e-9:
+                self._cancel(now, k, f"Preis {self.orders[k]['price']:.3f} -> {w[0]:.3f}")
+        for k in [k for k in self.rejected if k not in want]:
+            del self.rejected[k]
+        for k, (price, size, label) in want.items():
+            if k not in self.orders and size > 0:
+                self._place(now, k, label, price, size)
+        self._status(now, "ECHT" if live else "Trockenlauf" + (f" – {why}" if mode == "live" else ""))
         return mode
 
     def _status(self, now: float, mode_text: str) -> None:
         try:
             tmp = self.status_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(dict(scenario=self.name, mode=mode_text, ts=now, open_orders=len(self.orders),
-                               open_usd=round(self.open_usd(), 2), limits=dict(max_order_usd=self.max_order,
-                               max_market_usd=self.max_market, max_total_usd=self.max_total), **self.counts), f)
+                json.dump(dict(scenario=self.name, mode=mode_text, live=self.live, ts=now, open_orders=len(self.orders),
+                               open_usd=round(self.open_usd(), 2), geoblock=self._geo,
+                               limits=dict(max_order_usd=self.max_order, max_market_usd=self.max_market,
+                                           max_total_usd=self.max_total, max_daily_loss_usd=self.max_loss,
+                                           allow_real=self.allow_real), **self.info, **self.counts), f)
             os.replace(tmp, self.status_path)
         except OSError:
             pass

@@ -509,7 +509,7 @@ scenarios:
     max_inventory_usd: 8
     max_total_inventory_usd: 8
     exit:
-      after_h: 1
+      after_h: 0                 # 14.10. Nutzer: bei Bestand sofort ein Verkaufsgebot (zählt für Rewards)
       dump_after_h: 2
     latency_s: 1
     step_s: 2

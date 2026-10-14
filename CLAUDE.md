@@ -140,7 +140,11 @@ Aktive Kandidaten im Live-Test:
   ~11 $ Cash, echt 4,6 $ + Position. Behoben: echt wird ein Fill-and-Kill-Verkauf zum Bid geschickt (`sell_now`,
   höchstens 1/min je Token), gebucht erst beim gemeldeten Fill; Konto-Abgleich alle 5 Min. (`reconcile_positions`,
   data-api /positions + Cash): Abweichung, die beim nächsten Lesen noch besteht, wird ans Konto angepasst + Push-Alarm
-  („Bestand an Konto angepasst“). Im Echtbetrieb kein simuliertes Zusammenlegen von JA+NEIN (on-chain Merge fehlt noch). Reward-Abgleich (`live_reward_share`, ab
+  („Bestand an Konto angepasst“). Im Echtbetrieb kein simuliertes Zusammenlegen von JA+NEIN (on-chain Merge fehlt noch).
+  20:32 Abgleich korrigierte nur das Cash (10,80 → 4,60): der Markt mit den 20 echten Anteilen war schon aus der
+  Liste gefallen. Behoben: Positionen in Märkten, die der Bot nicht mehr führt, werden wieder aufgenommen (Daten aus
+  /positions: conditionId, oppositeAsset, outcomeIndex). mm_probe jetzt `after_h: 0` (Nutzer: bei Bestand sofort
+  Verkaufsgebot), Verkauf zum Bid weiter nach 2 h. Für den Pilot `after_h: 0` erwägen (mm_sofort misst es). Reward-Abgleich (`live_reward_share`, ab
   Commit acea21e, alle 10 Min.): erste Werte Polymarket-Anteil 47,6 % vs. geschätzt 14,3 %, „heute verdient“ aber
   nur 0,006 $ – Bedeutung von get_reward_percentages noch unklar, mehr Abfragen abwarten.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus

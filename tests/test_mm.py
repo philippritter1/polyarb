@@ -404,3 +404,27 @@ def test_live_inventory_follows_the_account_when_a_difference_persists(tmp_path)
     mm.clock.sleep(2)
     mm.step()
     assert mk.qty_yes == 20
+
+
+def test_live_takes_back_a_held_position_of_a_dropped_market(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=0, dump_after_h=2), live=dict(quote_usd=20)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    mm.gw = gw = FakeGW()
+    _book(store, "a", 0.48, 0.52)
+    _book(store, "z", 0.30, 0.34)
+    mm.step()
+    gw.pos = {"zN": dict(size=20.0, avg=0.32, cid="z", title="CT-02", opposite="zY", index=1, end=None)}
+    mm.clock.sleep(2)
+    mm.step()
+    assert "z" not in mm.st.markets
+    mm.clock.sleep(2)
+    mm.step()
+    mk = mm.st.markets["z"]
+    assert (mk.yes, mk.no, mk.qty_no, mk.qty_yes) == ("zY", "zN", 20.0, 0.0) and abs(mk.cost_no - 6.4) < 1e-9
+    assert "wieder aufgenommen" in gw.info["abgleich"]
+    mm.clock.sleep(2)
+    mm.step()
+    mm.clock.sleep(2)
+    mm.step()
+    assert ("zN", "SELL") in gw.want and ("zY", "BUY") not in gw.want and ("zN", "BUY") not in gw.want

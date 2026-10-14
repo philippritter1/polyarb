@@ -494,6 +494,23 @@ class MarketMaker:
                 else:
                     mk.qty_no, mk.cost_no = size, cost
                 notes.append(f"{mk.title[:40]} {which.upper()} {have:.2f} -> {size:.2f}")
+        known = {t for mk in self.st.markets.values() for t in (mk.yes, mk.no)}
+        for tok, r in real.items():  # held in the account, but the bot no longer tracks the market (e.g. dropped
+            size = float(r.get("size", 0))  # after a sale it only booked): take it back so the exit sells it
+            if tok in known or size <= 0.01 or not r.get("cid") or not r.get("opposite"):
+                continue
+            seen[tok] = size
+            if self._mismatch.get(tok) is None or abs(self._mismatch[tok] - size) > 0.01:
+                continue
+            first = r.get("index") == 0 if r.get("index") is not None else str(r.get("outcome")).lower() == "yes"
+            yes, no = (tok, r["opposite"]) if first else (r["opposite"], tok)
+            mk = MMMarket(r["cid"], (r.get("title") or "")[:200], yes, no, _parse_ts(r.get("end")), 0.0, 0.0, 0.0, "")
+            if first:
+                mk.qty_yes, mk.cost_yes = size, size * float(r.get("avg") or 0)
+            else:
+                mk.qty_no, mk.cost_no = size, size * float(r.get("avg") or 0)
+            self.st.markets[mk.cid] = mk
+            notes.append(f"{mk.title[:40]} {'YES' if first else 'NO'} 0.00 -> {size:.2f} (Markt wieder aufgenommen)")
         cash = self.gw.info.get("cash")
         if cash is not None and abs(cash - self.st.cash) > 0.05:
             if self._mismatch.get("cash") is not None and abs(self._mismatch["cash"] - cash) <= 0.05:

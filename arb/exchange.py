@@ -162,7 +162,11 @@ def positions(user: str, get: Callable = None) -> Optional[Dict[str, dict]]:
         out = {}
         for p in d:
             if isinstance(p, dict) and p.get("asset") is not None:
-                out[str(p["asset"])] = dict(size=float(p.get("size") or 0), avg=float(p.get("avgPrice") or 0))
+                out[str(p["asset"])] = dict(size=float(p.get("size") or 0), avg=float(p.get("avgPrice") or 0),
+                                            cid=str(p.get("conditionId") or ""), title=str(p.get("title") or ""),
+                                            opposite=str(p.get("oppositeAsset") or ""),
+                                            index=p.get("outcomeIndex"), outcome=str(p.get("outcome") or ""),
+                                            end=p.get("endDate"))
         return out
     except Exception:  # noqa
         return None

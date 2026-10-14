@@ -514,8 +514,10 @@ def test_positions_and_fill_and_kill_sell_without_network(monkeypatch):
         monkeypatch.setitem(sys.modules, "py_clob_client_v2.order_builder", types.ModuleType("ob"))
         monkeypatch.setitem(sys.modules, "py_clob_client_v2.order_builder.constants",
                             types.SimpleNamespace(BUY="BUY", SELL="SELL"))
-    assert positions("0x1", lambda *a, **k: [dict(asset="t1", size="20", avgPrice="0.32"), dict(x=1)]) == \
-        {"t1": {"size": 20.0, "avg": 0.32}}
+    pos = positions("0x1", lambda *a, **k: [dict(asset="t1", size="20", avgPrice="0.32", conditionId="c",
+                                                  oppositeAsset="t2", outcomeIndex=1), dict(x=1)])
+    assert list(pos) == ["t1"] and pos["t1"]["size"] == 20.0 and pos["t1"]["avg"] == 0.32
+    assert pos["t1"]["opposite"] == "t2" and pos["t1"]["index"] == 1
     assert positions("0x1", lambda *a, **k: {"error": "x"}) is None
 
     class C:

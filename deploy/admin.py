@@ -350,6 +350,14 @@ class Handler(BaseHTTPRequestHandler):
     def run_reward(self) -> list:  # tests: replaced by a fake exchange
         return run_reward_test()
 
+    def _done(self, msg: str, ok: bool = True) -> None:
+        """After an action: redirect to the plain page (Post/Redirect/Get) – reloading it shows the result but does
+        not repeat the action (a reload of /admin/reward-test re-ran the test, 14.10.)."""
+        self.send_response(303)
+        self.send_header("Location", "/admin/?" + urllib.parse.urlencode({"msg": msg, "ok": "1" if ok else "0"}))
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _send(self, body: str, code: int = 200, ctype: str = "text/html") -> None:
         data = body.encode("utf-8")
         self.send_response(code)
@@ -363,7 +371,8 @@ class Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         path = path.rstrip("/")
         if path in ("/admin", ""):
-            return self._send(page())
+            q = urllib.parse.parse_qs(query)
+            return self._send(page((q.get("msg") or [""])[0][:300], (q.get("ok") or ["1"])[0] == "1"))
         if path == "/admin/diag":
             return self._send(diag_page(self.diag()))
         if path == "/admin/diag.json":
@@ -397,8 +406,8 @@ class Handler(BaseHTTPRequestHandler):
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             from arb.exchange import test_passed
             ok = test_passed(steps)
-            return self._send(page("Verbindungstest " + ("erfolgreich – Order gesetzt, gefunden, storniert." if ok
-                                                          else "NICHT bestanden – siehe Liste unten."), bool(ok)))
+            return self._done("Verbindungstest " + ("erfolgreich – Order gesetzt, gefunden, storniert." if ok
+                                                    else "NICHT bestanden – siehe Liste unten."), bool(ok))
         if path == "/admin/reward-test":
             if wallet_info()[0]:
                 return self._send(page("Erst eine Wallet speichern.", False), 400)
@@ -412,11 +421,11 @@ class Handler(BaseHTTPRequestHandler):
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             from arb.exchange import reward_test_passed
             ok = reward_test_passed(steps)
-            return self._send(page("Reward-Test " + ("bestanden – unser Gebot zählt für Rewards." if ok
-                                                     else "NICHT bestanden – siehe Liste unten."), bool(ok)))
+            return self._done("Reward-Test " + ("bestanden – unser Gebot zählt für Rewards." if ok
+                                               else "NICHT bestanden – siehe Liste unten."), bool(ok))
         if path == "/admin/wallet-delete":
             remove_secrets({"POLY_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIG_TYPE"})
-            return self._send(page("Wallet gelöscht."))
+            return self._done("Wallet gelöscht.")
         if path == "/admin/wallet":
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             from arb.exchange import wallet_problem
@@ -430,7 +439,7 @@ class Handler(BaseHTTPRequestHandler):
             write_secret("POLY_PRIVATE_KEY", key)
             write_secret("POLY_FUNDER", funder)
             write_secret("POLY_SIG_TYPE", str(w["sig_type"]))
-            return self._send(page("Wallet gespeichert."))
+            return self._done("Wallet gespeichert.")
         if path == "/admin/live-mode":
             mode = (form.get("mode") or [""])[0]
             allowed = ("off", "dry") + (("live",) if released() and not wallet_info()[0] else ())
@@ -441,9 +450,9 @@ class Handler(BaseHTTPRequestHandler):
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"mode": mode, "ts": time.time()}, f)
             os.replace(tmp, os.path.join(DATA, "live.json"))
-            return self._send(page("Order-Modul: " + {"off": "aus – alle Orders werden storniert.",
+            return self._done("Order-Modul: " + {"off": "aus – alle Orders werden storniert.",
                                                        "dry": "Trockenlauf – Orders werden nur protokolliert.",
-                                                       "live": "ECHT – freigegebene Szenarien senden echte Orders."}[mode]))
+                                                       "live": "ECHT – freigegebene Szenarien senden echte Orders."}[mode])
         key = (form.get("key") or [""])[0].strip()
         if not KEY_RE.match(key):
             return self._send(page("Das sieht nicht wie ein Odds-API-Key aus (16–64 Buchstaben/Ziffern).", False), 400)
@@ -451,7 +460,7 @@ class Handler(BaseHTTPRequestHandler):
         if why.startswith("Key abgelehnt"):
             return self._send(page(f"{why} – nicht gespeichert.", False), 400)
         write_secret("ODDS_API_KEY", key)
-        self._send(page("Gespeichert." + (f" Hinweis: {why}." if why else " Key von der Odds API bestätigt.")))
+        self._done("Gespeichert." + (f" Hinweis: {why}." if why else " Key von der Odds API bestätigt."))
 
     def log_message(self, fmt, *args):  # no request lines (they would contain nothing secret, but keep it quiet)
         pass

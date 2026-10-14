@@ -131,7 +131,19 @@ def test_connection_test_button_needs_a_wallet_and_shows_the_steps(tmp_path, mon
         code, body = post("/admin/live-test")
         assert code == 200 and "erfolgreich" in body and "Order stornieren" in body and calls == [1]
         assert "✅ bestanden" in body
+        # the action redirects (303) to the plain page; reloading that page shows the result without a new test
+        import http.client
+        host, port = base.split("//")[1].split(":")
+        conn = http.client.HTTPConnection(host, int(port), timeout=5)
+        conn.request("GET", "/admin/")
+        r = conn.getresponse()
+        assert r.status == 200 and "Order stornieren" in r.read().decode() and calls == [1]
         assert post("/admin/live-test")[0] == 429  # once a minute at most
+        conn = http.client.HTTPConnection(host, int(port), timeout=5)
+        admin.os.utime(admin.LIVE_TEST_PATH(), (0, 0))  # a minute later
+        conn.request("POST", "/admin/live-test", body="", headers={"Content-Length": "0"})
+        r = conn.getresponse()
+        assert r.status == 303 and r.getheader("Location").startswith("/admin/?msg=")
     finally:
         srv.shutdown()
 

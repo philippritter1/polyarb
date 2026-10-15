@@ -450,6 +450,34 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_nah:
+    enabled: true
+    title: Market Making (nah an der Mitte)
+    strategy: mm                 # 15.10. Nutzer-Frage: wo verdient man mehr, nah an der Mitte oder weiter weg? Wie
+    # mm_sofort, aber Gebote (und das Verkaufsgebot) bei 1/4 statt 1/2 des Reward-Abstands: Reward-Punkte
+    # ((v-s)/v)^2 = 56 % statt 25 % (gut das Doppelte), dafür häufiger ausgeführt (Verluste an Informierte).
+    exit:
+      after_h: 0                 # sofort: Verkaufsgebot zur Mitte + Abstand (gefüllt nur durch Trades darüber)
+      dump_after_h: 96           # nach 4 Tagen noch da: zum Bid verkaufen (wie mm_abbau)
+    reward_asks: true
+    max_age_days: 3
+    rank: share
+    prefilter: 60
+    min_liquidity: 0
+    capital_usd: 2500
+    max_markets: 15
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.25
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_ueberbucht:
     enabled: true
     title: Market Making (überbucht)

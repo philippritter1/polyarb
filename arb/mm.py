@@ -483,7 +483,7 @@ class MarketMaker:
                 have = mk.qty_yes if which == "yes" else mk.qty_no
                 r = real.get(tok, {})
                 size = float(r.get("size", 0))
-                if abs(size - have) <= 0.1  # rounding of fills (26.00 vs 26.01) is no difference:
+                if abs(size - have) <= 0.1:  # rounding of fills (26.00 vs 26.01) is no difference
                     continue
                 seen[tok] = size
                 if self._mismatch.get(tok) is None or abs(self._mismatch[tok] - size) > 0.01:

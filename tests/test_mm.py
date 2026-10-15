@@ -467,3 +467,19 @@ def test_overcommit_bids_beyond_cash_but_fills_only_what_the_cash_pays(tmp_path)
     mm.step()
     if mk.ask:  # the exit sells a quarter of the reward distance above the mid, not half
         assert mk.ask["price"] <= 0.50 + 0.04 * 0.25 + 0.01 + 1e-9
+
+
+def test_exit_decay_steps_the_sell_order_down_every_hour(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=0, decay_h=4, dump_after_h=96)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.40, 0.60)  # wide book: room between the mid and the bid
+    mm.step()
+    mk = mm.st.markets["a"]
+    mk.qty_yes, mk.cost_yes = 20.0, 9.0
+    prices = []
+    for _ in range(6):
+        mm.step()
+        prices.append(mk.ask["price"])
+        mm.clock.sleep(3600)
+    assert prices[0] == 0.52 and prices == sorted(prices, reverse=True) and prices[-1] == 0.41

@@ -446,6 +446,10 @@ class MarketMaker:
             mid = (bk.best_bid + bk.best_ask) / 2
             d = max(self.tick, mk.max_spread * float(ex.get("ask_frac", frac)))  # ask_frac: sell closer to the mid
             price = round(max(math.ceil((mid + d) / self.tick - 1e-9) * self.tick, bk.best_bid + self.tick), 4)
+            if ex.get("decay_h"):  # step the sell order down every hour, from mid + d to 1 tick above the bid
+                done = min(1.0, math.floor((age - after) / 3600) / float(ex["decay_h"]))
+                low = bk.best_bid + self.tick
+                price = round(max(low, math.ceil((price - (price - low) * done) / self.tick - 1e-9) * self.tick), 4)
             if price >= 1:
                 continue
             if not mk.ask or abs(mk.ask["price"] - price) > 1e-9 or abs(mk.ask["size"] - abs(net)) > 1e-6:

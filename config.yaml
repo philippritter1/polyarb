@@ -450,6 +450,35 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_treppe:
+    enabled: true
+    title: Market Making (Abbau-Treppe)
+    strategy: mm                 # 15.10. Nutzer-Idee: wie mm_sofort (Verkaufsgebot sofort), aber das Verkaufsgebot rückt
+    # jede Stunde ein Stück näher: von Mitte + Abstand in 6 Stufen bis 1 Tick über das beste Gebot (bleibt Maker, keine
+    # Gebühr). Frage: Bestand schneller los, bevor sich Verluste ansammeln – kostet das weniger als es spart?
+    exit:
+      after_h: 0                 # sofort: Verkaufsgebot zur Mitte + Abstand (gefüllt nur durch Trades darüber)
+      decay_h: 6                 # stündlich näher, nach 6 h bei Bid + 1 Tick
+      dump_after_h: 96           # nach 4 Tagen noch da: zum Bid verkaufen (wie mm_abbau)
+    reward_asks: true
+    max_age_days: 3
+    rank: share
+    prefilter: 60
+    min_liquidity: 0
+    capital_usd: 2500
+    max_markets: 15
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_nah:
     enabled: true
     title: Market Making (nah an der Mitte)

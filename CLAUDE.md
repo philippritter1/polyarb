@@ -88,7 +88,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_nah, mm_ueberbucht, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
+Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_nah, mm_ueberbucht, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
 
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
@@ -124,6 +124,8 @@ Aktive Kandidaten im Live-Test:
   „davon Rewards aus Verkaufsgeboten“). Anlass: in der Generalprobe zählte das echte Verkaufsgebot für Rewards.
   Frage: schneller wieder Cash + Spread + Rewards auf dem Bestand vs. 24 h warten (mm_abbau). Bei mm_abbau und den
   anderen zählen Verkaufsgebote NICHT für die Schätzung (unterschätzt sie leicht) – Regeln nicht geändert.
+- `mm_treppe` (ab 15.10., Nutzer-Idee): wie `mm_sofort`, aber das Verkaufsgebot rückt stündlich näher (`exit: decay_h: 6`):
+  von Mitte + Abstand in 6 Stufen bis Bid + 1 Tick (Maker, keine Gebühr). Frage: Bestand loswerden, bevor Verluste wachsen.
 - `mm_nah` (ab 15.10., Nutzer-Frage): wie `mm_sofort`, aber `quote_frac: 0.25` – Gebote und Verkaufsgebot bei 1/4 statt
   1/2 des Reward-Abstands (Reward-Punkte 56 % statt 25 %, dafür mehr Fills). Frage: nah vs. weiter weg (mm_sofort).
 - `mm_ueberbucht` (ab 15.10., Nutzer-Idee): wie `mm_sofort`, aber Gebote zusammen bis 2x das Cash (`overcommit: 2`;

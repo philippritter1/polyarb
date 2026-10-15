@@ -483,7 +483,7 @@ class MarketMaker:
                 have = mk.qty_yes if which == "yes" else mk.qty_no
                 r = real.get(tok, {})
                 size = float(r.get("size", 0))
-                if abs(size - have) <= 0.01:
+                if abs(size - have) <= 0.1  # rounding of fills (26.00 vs 26.01) is no difference:
                     continue
                 seen[tok] = size
                 if self._mismatch.get(tok) is None or abs(self._mismatch[tok] - size) > 0.01:
@@ -497,7 +497,7 @@ class MarketMaker:
         known = {t for mk in self.st.markets.values() for t in (mk.yes, mk.no)}
         for tok, r in real.items():  # held in the account, but the bot no longer tracks the market (e.g. dropped
             size = float(r.get("size", 0))  # after a sale it only booked): take it back so the exit sells it
-            if tok in known or size <= 0.01 or not r.get("cid") or not r.get("opposite"):
+            if tok in known or size <= 0.1 or not r.get("cid") or not r.get("opposite"):
                 continue
             seen[tok] = size
             if self._mismatch.get(tok) is None or abs(self._mismatch[tok] - size) > 0.01:

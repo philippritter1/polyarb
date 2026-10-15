@@ -480,6 +480,39 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_ruhig:
+    enabled: true
+    title: Market Making (Pause bei Sprüngen)
+    strategy: mm                 # 15.10. Nutzer: Hebel gegen schlechte Fills – wie mm_treppe, aber springt die Mitte binnen
+    # 5 Min. um >= 3 Ticks, keine Gebote in diesem Markt für 10 Min. (dann handeln oft Informierte). Vergleich mit
+    # mm_treppe: weniger Fills mit Kursbewegung gegen uns (Scan „Kursbewegung nach Fill“) vs. weniger Rewards.
+    exit:
+      after_h: 0                 # sofort: Verkaufsgebot zur Mitte + Abstand (gefüllt nur durch Trades darüber)
+      decay_h: 6                 # stündlich näher, nach 6 h an der Mitte (zählt dort am meisten)
+      dump_after_h: 96           # nach 4 Tagen noch da: zum Bid verkaufen (wie mm_abbau)
+    reward_asks: true
+    pause:
+      ticks: 3
+      window_s: 300
+      pause_s: 600
+    max_age_days: 3
+    rank: share
+    prefilter: 60
+    min_liquidity: 0
+    capital_usd: 2500
+    max_markets: 15
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_nah:
     enabled: true
     title: Market Making (nah an der Mitte)

@@ -485,3 +485,39 @@ def test_exit_decay_steps_the_sell_order_down_every_hour(tmp_path):
     # from mid + 2 ct down to the mid itself – always inside the reward band (mid .. mid + 4 ct), never below the mid
     assert prices[0] == 0.52 and prices == sorted(prices, reverse=True) and prices[-1] == 0.50
     assert all(0.50 <= p < 0.54 for p in prices)
+
+
+def test_markout_measures_the_price_move_after_a_fill(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path), Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW),
+                     books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 30, NOW + 5))  # 30 YES bought at 0.48
+    mm.clock.sleep(10)
+    mm.step()
+    _book(store, "a", 0.40, 0.44)  # the price falls after our fill: adverse selection
+    mm.clock.sleep(301)
+    mm.step()
+    m5 = mm.store.db.execute("SELECT m5 FROM mm_markout").fetchone()[0]
+    assert abs(m5 - 30 * (0.42 - 0.48)) < 1e-9
+    mm.clock.sleep(3600)
+    mm.step()
+    assert mm.store.db.execute("SELECT m60 FROM mm_markout").fetchone()[0] is not None and not mm._markout
+
+
+def test_pause_pulls_the_bids_after_a_fast_move(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, pause=dict(ticks=3, window_s=300, pause_s=600)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes
+    _book(store, "a", 0.52, 0.56)  # mid +4 ticks within a minute
+    mm.clock.sleep(60)
+    mm.step()
+    assert mk.bid_yes is None and mk.bid_no is None and mm.scan["Pausen (schnelle Kursbewegung)"] == 1
+    mm.clock.sleep(601)
+    mm.step()
+    assert mk.bid_yes  # quiet again: back in the book

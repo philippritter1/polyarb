@@ -209,6 +209,14 @@ class MarketMaker:
             rewards_per_day REAL, share_pct REAL, realized REAL, rewards REAL, rebates REAL, inventory REAL,
             markets INTEGER, quotes INTEGER, fills INTEGER)""")
         self._acc = dict(dt=0.0, rew=0.0, pool_dt=0.0)
+        # markout (measured only): how far the price moved for us 5 / 60 min after each fill – negative = we were
+        # filled by someone who knew better (adverse selection), the cost the rewards have to cover
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_markout(ts REAL, cid TEXT, token TEXT, side TEXT,
+            price REAL, qty REAL, m5 REAL, m60 REAL)""")
+        self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m5=r[5]) for r in
+                         self.store.db.execute("SELECT rowid, ts, token, price, qty, m5 FROM mm_markout WHERE m60 IS NULL")]
+        self._mids: Dict[str, list] = {}    # pause: recent (ts, mid) per market
+        self._paused: Dict[str, float] = {}  # pause: market -> no bids until
         self._dumps: list = []      # live: fill-and-kill sells of the exit, sent after the next gateway sync
         self._mismatch: dict = {}   # live: account differences seen at the last read (corrected if they persist)
         self.gw = None  # order gateway (arb/orders.py): mirrors the quotes at pilot size, dry run only for now
@@ -355,6 +363,10 @@ class MarketMaker:
     def _fill(self, mk: MMMarket, q: dict, side: str, qty: float, now: float) -> None:
         price = q["price"]
         cost = price * qty
+        tok = mk.yes if side == "yes" else mk.no
+        cur = self.store.db.execute("INSERT INTO mm_markout VALUES(?,?,?,?,?,?,NULL,NULL)",
+                                    (now, mk.cid, tok, side, price, qty))
+        self._markout.append(dict(rowid=cur.lastrowid, ts=now, token=tok, price=price, qty=qty, m5=None))
         self.st.cash -= cost
         if side == "yes":
             mk.qty_yes += qty
@@ -500,6 +512,25 @@ class MarketMaker:
             self.scan["echte Fills"] = self.scan.get("echte Fills", 0) + n
         return n
 
+    def update_markouts(self, now: float, books: Dict[str, OrderBook]) -> None:
+        """Fill price vs. the token's mid 5 and 60 minutes later, times the shares (+ = the price rose after we
+        bought). Books of dropped markets may be missing: such fills are given up after 2 hours."""
+        keep = []
+        for m in self._markout:
+            age = now - m["ts"]
+            bk = books.get(m["token"])
+            mid = (bk.best_bid + bk.best_ask) / 2 if bk and bk.bids and bk.asks else None
+            if mid is not None and m["m5"] is None and age >= 300:
+                m["m5"] = round((mid - m["price"]) * m["qty"], 4)
+                self.store.db.execute("UPDATE mm_markout SET m5=? WHERE rowid=?", (m["m5"], m["rowid"]))
+            if mid is not None and age >= 3600:
+                self.store.db.execute("UPDATE mm_markout SET m60=? WHERE rowid=?",
+                                      (round((mid - m["price"]) * m["qty"], 4), m["rowid"]))
+                continue
+            if age < 7200:
+                keep.append(m)
+        self._markout = keep
+
     def reconcile_positions(self, now: float) -> None:
         """Live mode: the account is the truth. Every 5 min the real positions are compared with the inventory;
         a difference that is still there at the next read (a fill may simply not be booked yet) is corrected to
@@ -619,6 +650,20 @@ class MarketMaker:
                 continue
             mid = (by.best_bid + by.best_ask) / 2
             mk.mid = mid
+            pz = sc.get("pause")
+            if pz:  # the mid jumped by >= ticks within window_s: no bids for pause_s (informed traders are active)
+                hist = [x for x in self._mids.get(mk.cid, []) if now - x[0] <= float(pz.get("window_s", 300))]
+                hist.append((now, mid))
+                self._mids[mk.cid] = hist
+                ms = [x[1] for x in hist]
+                if max(ms) - min(ms) >= float(pz.get("ticks", 3)) * self.tick - 1e-9:
+                    if now >= self._paused.get(mk.cid, 0):
+                        self.scan["Pausen (schnelle Kursbewegung)"] = self.scan.get("Pausen (schnelle Kursbewegung)", 0) + 1
+                    self._paused[mk.cid] = now + float(pz.get("pause_s", 600))
+                    self._mids[mk.cid] = [(now, mid)]
+                if now < self._paused.get(mk.cid, 0):
+                    mk.bid_yes = mk.bid_no = None
+                    continue
             if by.best_ask - by.best_bid > 2 * mk.max_spread:
                 mk.bid_yes = mk.bid_no = None  # book too wide to qualify: nobody to quote against
                 continue
@@ -779,6 +824,7 @@ class MarketMaker:
         else:
             self.process_trades(now)
         self.sample_rewards(now, books)
+        self.update_markouts(now, books)
         self.quote(now, books)
         self.manage_inventory(now, books)
         if self.gw is not None:
@@ -812,6 +858,15 @@ class MarketMaker:
                               "Orders storniert": self.gw.counts["storniert"],
                               "Orders abgelehnt (Limits)": self.gw.counts["abgelehnt"],
                               "Orders offen $": round(self.gw.open_usd(), 2)})
+        try:
+            n, m5, n60, m60 = self.store.db.execute(
+                "SELECT COUNT(m5), SUM(m5), COUNT(m60), SUM(m60) FROM mm_markout").fetchone()
+            if n:
+                self.scan["Kursbewegung nach Fill 5 Min $"] = f"{m5 or 0:+.2f} ({n} Fills)"
+            if n60:
+                self.scan["Kursbewegung nach Fill 60 Min $"] = f"{m60 or 0:+.2f} ({n60} Fills)"
+        except Exception:  # noqa
+            pass
         scan = dict(self.scan, **{"Gebote aktiv": sum(bool(m.bid_yes) + bool(m.bid_no) for m in st.markets.values()),
                                   "Ausführungen": st.fills, "Spread/Auflösung $": round(st.realized, 2),
                                   "Rewards geschätzt $": round(st.rewards, 2), "Rebates $": round(st.rebates, 2),

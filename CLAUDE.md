@@ -88,7 +88,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_nah, mm_ueberbucht, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
+Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
 
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
@@ -127,6 +127,11 @@ Aktive Kandidaten im Live-Test:
 - `mm_treppe` (ab 15.10., Nutzer-Idee): wie `mm_sofort`, aber das Verkaufsgebot rückt stündlich näher (`exit: decay_h: 6`):
   von Mitte + Abstand in 6 Stufen bis zur Mitte – immer im Reward-Bereich (Mitte .. Mitte + max_spread, Nutzer-Vorgabe),
   nie unter der Mitte, nie am Bid. Frage: Bestand loswerden, bevor Verluste wachsen. Seit 15.10. auch in mm_probe (echt).
+- `mm_ruhig` (ab 15.10.): wie `mm_treppe`, plus `pause:` – springt die Mitte binnen 5 Min. um ≥ 3 Ticks, 10 Min. keine
+  Gebote in dem Markt. Frage: weniger schlechte Fills vs. weniger Rewards. Dazu für alle MM-Szenarien gemessen
+  (`mm_markout`, Scan „Kursbewegung nach Fill 5/60 Min $“): Mitte 5 und 60 Min. nach jedem Fill minus Fill-Preis ×
+  Menge – negativ = Verlust an Informierte, das müssen die Rewards decken. Auswertung ab 11.10. (Export): Gewinn
+  kam fast nur aus Rewards; JA+NEIN-Paare selten (jede 5.–10. Ausführung) und ≈ 0 $; große Verluste aus Auflösungen.
 - `mm_nah` (ab 15.10., Nutzer-Frage): wie `mm_sofort`, aber `quote_frac: 0.25` – Gebote und Verkaufsgebot bei 1/4 statt
   1/2 des Reward-Abstands (Reward-Punkte 56 % statt 25 %, dafür mehr Fills). Frage: nah vs. weiter weg (mm_sofort).
 - `mm_ueberbucht` (ab 15.10., Nutzer-Idee): wie `mm_sofort`, aber Gebote zusammen bis 2x das Cash (`overcommit: 2`;

@@ -247,11 +247,11 @@ def test_no_scenario_is_released_for_real_orders_by_accident():
     import yaml
     cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8"))
     released = [n for n, sc in cfg["scenarios"].items() if (sc.get("live") or {}).get("allow_real")]
-    # 14.10.: only the tiny dress rehearsal is released (owner's decision) – nothing with real size
+    # 14.10.: only the dress rehearsal is released (owner's decision); 15.10. owner raised it to ~60 $
     assert released in ([], ["mm_probe"])
     for n in released:
         lim = cfg["scenarios"][n]["live"]
-        assert lim["max_total_usd"] <= 15 and lim["max_daily_loss_usd"] <= 5 and lim["max_order_usd"] <= 10
+        assert lim["max_total_usd"] <= 60 and lim["max_daily_loss_usd"] <= 8 and lim["max_order_usd"] <= 12
     pilot = cfg["scenarios"]["mm_pilot"]
     assert pilot["live"]["quote_usd"] == pilot["quote_usd"] and pilot["live"]["max_daily_loss_usd"] <= 50
 

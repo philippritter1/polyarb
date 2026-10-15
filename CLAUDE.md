@@ -127,8 +127,7 @@ Aktive Kandidaten im Live-Test:
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit
-  `allow_real: true`: 1 Markt, Gebote ~5 $, echte Orders zusammen max. 11 $, Not-Aus ab 3 $ Tagesverlust, Abbau nach
-  1 h / 2 h. Echt nur, wenn auf /admin/ „Echt“ gewählt ist. Nach der Probe allow_real aus und ins Archiv.
+  `allow_real: true` (anfangs 1 Markt, ~5 $, max. 11 $; seit 15.10. siehe unten). Echt nur, wenn auf /admin/ „Echt“ gewählt ist. Nach der Probe allow_real aus und ins Archiv.
   **Gestartet 14.10. ~16:38 (Nutzer hat „Echt“ gewählt):** 1 Order ~5 $, zählt für Rewards (1/1). Beobachtung: sehr
   häufiges Umsetzen (12 gesetzt / 11 storniert in wenigen Minuten, Mitte flackert um 1 Tick) – für den Pilot Toleranz
   (erst ab 2 Ticks umsetzen) als neues Szenario/Option prüfen. „Could not create api key“ im Log ist harmlos.
@@ -149,6 +148,12 @@ Aktive Kandidaten im Live-Test:
   nur 0,006 $ – Bedeutung von get_reward_percentages noch unklar, mehr Abfragen abwarten. Abends: API-Tag 14.10. = 0,0386 $ =
   polymarket.com „Oct 15 Earnings“ 0,04 $ (Website beschriftet mit dem Auszahlungstag, API mit dem Verdiensttag;
   der Verdienst wird verzögert verbucht). Schätzung desselben Tags ~0,15 $. Verkaufsgebot CT-02: Polymarket-Anteil 3,9 %.
+  CT-02 nach 2 h per Fill-and-Kill zum Bid verkauft (20 @ 0,30, −0,56 $ inkl. Gebühr) – ganze Schleife echt geprüft.
+  Nacht 14./15.: 5 Fills, Konto 12,36 $ (inkl. Position), echte Rewards 14.10. = 0,19 $ (unter 1-$-Auszahlungsgrenze);
+  echt seit Start ~0,28 $ vs. geschätzt ~0,47 $ (→ für den Pilot ~60 % der Schätzung ansetzen).
+  **15.10. Nutzer stockt auf ~60 $ auf:** mm_probe 60 $ Kapital, 3 Märkte, Gebote ~8 $, Bestand max. 30 $, echte Orders
+  max. 60 $, Not-Aus ab 8 $ Tagesverlust, Notverkauf erst nach 24 h, `reprice_ticks: 2` (neue Option: Gebot erst
+  umsetzen, wenn das Ziel ≥ 2 Ticks entfernt ist, solange es noch für Rewards zählt). Guard-Test entsprechend.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

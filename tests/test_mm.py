@@ -428,3 +428,21 @@ def test_live_takes_back_a_held_position_of_a_dropped_market(tmp_path):
     mm.clock.sleep(2)
     mm.step()
     assert ("zN", "SELL") in gw.want and ("zY", "BUY") not in gw.want and ("zN", "BUY") not in gw.want
+
+
+def test_reprice_ticks_keeps_a_bid_while_the_mid_flickers(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, reprice_ticks=2), Client([_m("a", "Will the Fed cut rates?", 0.50)]),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    mk = mm.st.markets["a"]
+    first = mk.bid_yes["price"]
+    _book(store, "a", 0.49, 0.53)  # mid +1 tick: keep the resting bid (still within the reward distance)
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.bid_yes["price"] == first
+    _book(store, "a", 0.51, 0.55)  # mid +3 ticks: move
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.bid_yes["price"] > first

@@ -575,6 +575,7 @@ class MarketMaker:
         if cap:
             self.scan["Bestandsgrenze erreicht"] = int(over)
         cash_free = self.st.cash - float(sc.get("cash_buffer_pct", 0.10)) * self.st.equity
+        hyst = float(sc.get("reprice_ticks", 1))  # move a resting bid only when the target is this many ticks away
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
             if (self.quoted is not None and mk.cid not in self.quoted) or not by or not by.bids or not by.asks \
@@ -605,6 +606,11 @@ class MarketMaker:
                     size = max(mk.min_size, math.floor(usd / price))
                     if cur and abs(cur["price"] - price) < 1e-9 and cur["size"] > 0:
                         continue  # unchanged: keep the place in the queue
+                    if cur and cur["size"] > 0 and abs(cur["price"] - price) < hyst * self.tick - 1e-9:
+                        own_mid = mid if side == "yes" else 1 - mid
+                        book = by if side == "yes" else bn
+                        if 0 <= own_mid - cur["price"] < mk.max_spread and cur["price"] < book.best_ask - 1e-9:
+                            continue  # reprice_ticks: the mid flickers by a tick – keep the order while it qualifies
                     have = (cur["price"] * cur["size"]) if cur else 0.0
                     if price * size > cash_free + have:
                         new = None

@@ -74,6 +74,9 @@ class Gateway:
         self.max_total = float(lim.get("max_total_usd", 300))
         self.allow_real = bool(lim.get("allow_real", False))
         self.max_loss = float(lim.get("max_daily_loss_usd", 50))
+        # all money paid in so far (config, kept up to date by hand): a deposit must not look like a profit that
+        # hides the day's losses from the limit below, and the result since the start is equity - deposits
+        self.deposits = float(lim.get("deposits_usd", 0) or 0)
         self.orders: Dict[Key, dict] = {}   # (token, side) -> {price, size, oid, ts, label}
         self.counts = {"gesetzt": 0, "storniert": 0, "abgelehnt": 0}
         self.rejected: Dict[Key, tuple] = {}  # last logged rejection per order
@@ -232,13 +235,14 @@ class Gateway:
                 d = json.load(f)
         except (OSError, ValueError):
             d = {}
-        if d.get("day") != day:
-            d = dict(day=day, start=eq)
+        if d.get("day") != day or d.get("dep") != self.deposits:  # new day, or money was paid in/out: new base
+            d = dict(day=day, start=eq, dep=self.deposits)
             tmp = self.day_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(d, f)
             os.replace(tmp, self.day_path)
-        self.info.update(cash=round(cash, 2), positions=round(pos, 2), equity=round(eq, 2), day_start=round(d["start"], 2))
+        self.info.update(cash=round(cash, 2), positions=round(pos, 2), equity=round(eq, 2), day_start=round(d["start"], 2),
+                         deposits=self.deposits, pnl_total=round(eq - self.deposits, 2) if self.deposits else None)
         if eq < d["start"] - self.max_loss:
             why = f"Tagesverlust {d['start'] - eq:.2f} $ > {self.max_loss:.0f} $"
             log.error("%s: %s – Not-Aus", self.name, why)

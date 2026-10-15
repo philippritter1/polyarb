@@ -71,7 +71,7 @@ def live_numbers(data_dir: Path) -> Optional[dict]:
         return None
     out = dict(live=st.get("live"), equity=st.get("equity"), cash=st.get("cash"), positions=st.get("positions"),
                fills=st.get("fills"), scoring=st.get("scoring"), yesterday=st.get("rewards_yesterday"),
-               today=st.get("earned_today"))
+               today=st.get("earned_today"), pnl_total=st.get("pnl_total"), deposits=st.get("deposits"))
     db_path = data_dir / "scenario-mm_probe.sqlite"
     if db_path.exists():
         db = sqlite3.connect(str(db_path))
@@ -163,6 +163,9 @@ def page_body(scen: List[dict], live: Optional[dict]) -> str:
                      'Topf gegen unsere Schätzung (über 100 % = wir unterschätzen).</p>')
         parts.append(_tiles([
             ("Kontowert", f'{_de(live.get("equity"))} $', f'Cash {_de(live.get("cash"))} $ + Positionen {_de(live.get("positions"))} $', ""),
+            ("Handel seit Start (echt)", f'{_de(live.get("pnl_total"), sign=True)} $',
+             f'Kontowert − Einzahlungen {_de(live.get("deposits"))} $, ohne noch nicht gezahlte Rewards',
+             "pos" if (live.get("pnl_total") or 0) > 0 else "neg" if (live.get("pnl_total") or 0) < 0 else ""),
             ("Rewards heute (echt)", f'{_de(live.get("today"), 3)} $', "alle Märkte des Tages, laut Polymarket; Auszahlung ab 1 $/Tag", ""),
             ("Rewards gestern (echt)", f'{_de(live.get("yesterday"), 3)} $', " · ".join(f"{d[5:]}: {_de(u, 2)}" for d, u in paid[:4]), ""),
             ("Anteil echt / geschätzt", "–" if ratio is None else f"{ratio * 100:.0f} %",

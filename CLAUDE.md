@@ -188,6 +188,11 @@ Aktive Kandidaten im Live-Test:
   15.10. 20:10: Konto 85,30 $ (Tagesstart inkl. Einzahlung ~86,44), echte Rewards heute 0,63 $; Polymarket-Anteil
   jetzt nur 41 % der Schätzung (0,53 vs. 1,29 $/Tag) – Verhältnis schwankt stark (morgens 190 %). Sim-Markout 60 Min.
   nach Fill in allen Szenarien negativ (ca. −1 bis −2 $ je Fill bei 50-$-Geboten; mm_nah −26 $ auf 12 Fills).
+  Korrekturen 15.10. abends: „Rewards heute“ war nur die Summe der gerade bespielten Märkte (0,63 $) – richtig 1,90 $
+  (Gateway `earned_today` = alle Märkte des Tages). Tagesverlust-Limit verglich mit dem Tagesstart VOR der Einzahlung
+  (10,44 $) – eine Einzahlung verdeckte Verluste. Jetzt `live: deposits_usd` (eingezahlt gesamt, 87,00 $; bei jeder
+  Ein-/Auszahlung anpassen!): ändert er sich, beginnt die Tagesbasis neu; `pnl_total` = Kontowert − Einzahlungen
+  (Cockpit/admin „Handel seit Start“). Polymarket 15.10. 20:42: Portfolio 86,00 $, verfügbar 72,97 $, P/L 24 h −3,10 $.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

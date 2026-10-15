@@ -582,3 +582,16 @@ def test_earned_today_counts_every_market_of_the_day(tmp_path):
     gw.sync(NOW + 100, {("A", "BUY"): (0.48, 50, "A JA")})
     st = json.loads((tmp_path / "live-status-pilot.json").read_text())
     assert st["earned_today"] == 1.9 and st["reward_share"][0]["earned_today"] == 0.5
+
+
+def test_a_deposit_does_not_hide_the_days_losses(tmp_path):
+    ex = FakeExchange(cash=10.0)
+    gw, _ = _live(tmp_path, ex, max_daily_loss_usd=5, deposits_usd=11)
+    gw.sync(NOW, {})
+    st = json.loads((tmp_path / "live-status-pilot.json").read_text())
+    assert st["pnl_total"] == -1.0
+    ex.cash, gw.deposits = 86.0, 87.0  # 76 $ paid in, config updated: the day's base starts again at 86
+    gw.sync(NOW + 400, {})
+    ex.cash = 80.0  # −6 $ since the deposit: over the 5 $ limit although 80 > the morning's 10
+    gw.sync(NOW + 800, {})
+    assert read_mode(str(tmp_path / "live.json")) == "off"

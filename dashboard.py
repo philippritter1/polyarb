@@ -403,7 +403,7 @@ def build_all(cfg: dict, out: str) -> list:
                               kind=sc.get("strategy", name), start=float(sc.get("capital_usd", 2500)),
                               out=root / name / "index.html", title=f"Szenario: {sc.get('title', name)} – Paper"))
     rets = {p["key"]: _summary(p["db"], p["start"]) for p in pages}
-    extra = [("study", "Studie")] + ([("wxobs", "Wetter-Messwerte")] if services.get("wxobs_study", True) else []) \
+    extra = [("cockpit", "Cockpit"), ("study", "Studie")] + ([("wxobs", "Wetter-Messwerte")] if services.get("wxobs_study", True) else []) \
         + [("kalshi", "Kalshi"), ("export", "Export")]
 
     archived = [p for p in pages if p.get("done")]
@@ -439,6 +439,15 @@ def build_all(cfg: dict, out: str) -> list:
             return {}
 
     scans = {p["key"]: scan_of(p) for p in pages}
+    try:  # cockpit: all market-making scenarios on one page (light, every run)
+        from arb import cockpit
+        scen = [dict(key=p["key"], label=p["label"], n=cockpit.scenario_numbers(p["db"], p["start"], scans[p["key"]]))
+                for p in pages if p["kind"] == "mm" and not p.get("done") and p["key"] != "mm_probe"]
+        (root / "cockpit").mkdir(parents=True, exist_ok=True)
+        _write(root / "cockpit" / "index.html", _page("Cockpit", nav_for("cockpit"),
+               cockpit.page_body(scen, cockpit.live_numbers(data_dir))), "utf-8")
+    except Exception as e:  # noqa – never let the cockpit break the scenario pages
+        print("cockpit failed:", type(e).__name__, e)
     built = [build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav_for(p["key"]),
                    overview=overview if not p["key"] else None, scan=scans[p["key"]])
              for p in pages]

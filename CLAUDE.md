@@ -52,6 +52,9 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
 - `arb/sharp.py` – Pinnacle-Quoten (The Odds API) vs. Polymarket-Fußball (Strategie `sharp`)
 - `arb/kalshi.py` – Kalshi-Studie; `arb/ladder.py` + `arb/scanner.py` – Arbitrage
 - `dashboard.py` – statisches Dashboard + Exporte; `deploy/notify.py` – 4-h-Bericht per Push
+- `arb/cockpit.py` – Reiter „Cockpit“ (`/cockpit/`, ab 15.10.): Echtgeld-Kacheln der Generalprobe (Kontowert, echte
+  Rewards heute/gestern, Polymarket-Anteil vs. Schätzung) und alle aktiven MM-Szenarien seit 11.10.: Rewards vs. Handel
+  (Balken), Rendite-Verlauf (Kleinbilder), Kennzahlen (netto/Tag, Handel je 1 $ Rewards, Bestand, Kurs nach Fill).
 
 ## Stand der Erkenntnisse
 Widerlegt / kein Edge: echte Arbitrage (praktisch nie erreichbar), Endgame, Longshot, Krypto, E-Sports- und

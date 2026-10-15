@@ -132,7 +132,8 @@ Aktive Kandidaten im Live-Test:
   Überbuchungs-Test (dritter Knopf auf /admin/, `overbook_test`): setzt EIN Gebot bei der Hälfte des besten Gebots
   eines großen Markts, das allein ins Guthaben passt, zusammen mit den offenen Geboten des Bots aber darüber liegt;
   angenommen = Überbuchen geht, „not enough balance“ = geht nicht; immer storniert. polymarket.com zeigte 15.10.
-  „available to trade“ = volles Cash trotz ~56 $ offener Gebote (Hinweis, kein Beweis).
+  „available to trade“ = volles Cash trotz ~56 $ offener Gebote (Hinweis, kein Beweis). **Test 15.10. 08:12: Überbuchen GEHT** –
+  Testgebot 24,84 $ + offene 75,20 $ = 100,04 $ bei 82,97 $ Guthaben wurde angenommen (danach storniert).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit
@@ -165,6 +166,9 @@ Aktive Kandidaten im Live-Test:
   umsetzen, wenn das Ziel ≥ 2 Ticks entfernt ist, solange es noch für Rewards zählt). Guard-Test entsprechend.
   Nutzer hat 76 $ eingezahlt (Konto ~88 $): 4 Märkte, Orders max. 85 $, Bestand max. 40 $, Not-Aus 10 $. Achtung:
   `capital_usd` NICHT ändern – jede Änderung startet das Szenario neu (Daten ins Archiv); live zählt ohnehin das echte Cash.
+  15.10. 08:15: 9 Orders / 75 $, alle 9 zählen; Polymarket-Anteil meist ÜBER unserer Schätzung (z. B. 26,9 % vs. 12,7 %,
+  6,5 % vs. 5,2 %) – hochgerechnet ~3 $/Tag (Polymarket) vs. ~1,9 $/Tag (Schätzung). reprice_ticks wirkt: 13 gesetzt /
+  4 storniert in ~15 Min. (vorher ~1 Umsetzung pro Minute).
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

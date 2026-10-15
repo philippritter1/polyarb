@@ -331,6 +331,18 @@ class MarketMaker:
         return [c for _, c in scored]
 
     # ------------------------------------------------------------------ fills
+    def _cash_cap(self, q: dict, qty: float) -> float:
+        """overcommit: the bids together may exceed the cash, so a fill can find too little cash – then only what
+        the cash pays is filled and the rest of that bid is gone (the exchange would refuse it)."""
+        if float(self.sc.get("overcommit", 1)) <= 1:
+            return qty
+        can = math.floor(max(0.0, self.st.cash) / q["price"] * 100) / 100
+        if can >= qty:
+            return qty
+        q["size"] = 0.0
+        self.scan["Fills ohne Cash (überbucht)"] = self.scan.get("Fills ohne Cash (überbucht)", 0) + 1
+        return can
+
     def _fill(self, mk: MMMarket, q: dict, side: str, qty: float, now: float) -> None:
         price = q["price"]
         cost = price * qty
@@ -432,7 +444,7 @@ class MarketMaker:
                     mk.inv_ts = None
                 continue
             mid = (bk.best_bid + bk.best_ask) / 2
-            d = max(self.tick, mk.max_spread * frac)
+            d = max(self.tick, mk.max_spread * float(ex.get("ask_frac", frac)))  # ask_frac: sell closer to the mid
             price = round(max(math.ceil((mid + d) / self.tick - 1e-9) * self.tick, bk.best_bid + self.tick), 4)
             if price >= 1:
                 continue
@@ -553,14 +565,16 @@ class MarketMaker:
             own, other = (mk.bid_yes, mk.bid_no) if which == "yes" else (mk.bid_no, mk.bid_yes)
             own_side, other_side = (which, "no" if which == "yes" else "yes")
             if own and ts >= own["placed_ts"] + self.latency and price < own["price"] - 1e-9 and own["size"] > 0:
-                q = min(own["size"], size)
-                self._fill(mk, own, own_side, q, now)
-                n += 1
+                q = self._cash_cap(own, min(own["size"], size))
+                if q > 0:
+                    self._fill(mk, own, own_side, q, now)
+                    n += 1
             elif other and ts >= other["placed_ts"] + self.latency and price > 1 - other["price"] + 1e-9 \
                     and other["size"] > 0:
-                q = min(other["size"], size)
-                self._fill(mk, other, other_side, q, now)
-                n += 1
+                q = self._cash_cap(other, min(other["size"], size))
+                if q > 0:
+                    self._fill(mk, other, other_side, q, now)
+                    n += 1
         return n
 
     # ------------------------------------------------------------------ quoting
@@ -574,7 +588,8 @@ class MarketMaker:
         over = bool(cap) and self.st.inventory_cost() >= float(cap)
         if cap:
             self.scan["Bestandsgrenze erreicht"] = int(over)
-        cash_free = self.st.cash - float(sc.get("cash_buffer_pct", 0.10)) * self.st.equity
+        cash_free = self.st.cash * max(1.0, float(sc.get("overcommit", 1))) \
+            - float(sc.get("cash_buffer_pct", 0.10)) * self.st.equity  # overcommit: bids may add up to N x the cash
         hyst = float(sc.get("reprice_ticks", 1))  # move a resting bid only when the target is this many ticks away
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)

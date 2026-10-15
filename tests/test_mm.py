@@ -446,3 +446,24 @@ def test_reprice_ticks_keeps_a_bid_while_the_mid_flickers(tmp_path):
     mm.clock.sleep(2)
     mm.step()
     assert mk.bid_yes["price"] > first
+
+
+def test_overcommit_bids_beyond_cash_but_fills_only_what_the_cash_pays(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, overcommit=2, capital_usd=30, quote_usd=20, cash_buffer_pct=0,
+                                        exit=dict(after_h=0, ask_frac=0.25, dump_after_h=96)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes and mk.bid_no  # 2 x ~20 $ resting with 30 $ cash
+    assert mk.bid_yes["price"] * mk.bid_yes["size"] + mk.bid_no["price"] * mk.bid_no["size"] > mm.st.cash
+    store.trades.append(("aY", 0.47, 100, NOW + 5))  # takes the whole YES bid
+    store.trades.append(("aN", 0.47, 100, NOW + 6))  # and the NO bid – but the cash is short
+    mm.clock.sleep(10)
+    mm.step()
+    assert mm.st.cash >= -1e-9 and mm.scan["Fills ohne Cash (überbucht)"] == 1
+    mm.clock.sleep(2)
+    mm.step()
+    if mk.ask:  # the exit sells a quarter of the reward distance above the mid, not half
+        assert mk.ask["price"] <= 0.50 + 0.04 * 0.25 + 0.01 + 1e-9

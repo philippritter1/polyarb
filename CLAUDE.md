@@ -193,6 +193,8 @@ Aktive Kandidaten im Live-Test:
   (10,44 $) – eine Einzahlung verdeckte Verluste. Jetzt `live: deposits_usd` (eingezahlt gesamt, 87,00 $; bei jeder
   Ein-/Auszahlung anpassen!): ändert er sich, beginnt die Tagesbasis neu; `pnl_total` = Kontowert − Einzahlungen
   (Cockpit/admin „Handel seit Start“). Polymarket 15.10. 20:42: Portfolio 86,00 $, verfügbar 72,97 $, P/L 24 h −3,10 $.
+  Rewards unter 1 $ STAPELN (Nutzer, laut polymarket.com): die 1,90 $ „Oct 16 Earnings“ enthalten die 0,19 $ vom 14.10.
+  Auch die API-Tagessumme für den 15.10. (1,907 $) enthält sie offenbar – beim Vergleich echt/geschätzt nicht doppelt zählen.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

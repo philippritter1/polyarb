@@ -154,6 +154,8 @@ Aktive Kandidaten im Live-Test:
   **15.10. Nutzer stockt auf ~60 $ auf:** mm_probe 60 $ Kapital, 3 Märkte, Gebote ~8 $, Bestand max. 30 $, echte Orders
   max. 60 $, Not-Aus ab 8 $ Tagesverlust, Notverkauf erst nach 24 h, `reprice_ticks: 2` (neue Option: Gebot erst
   umsetzen, wenn das Ziel ≥ 2 Ticks entfernt ist, solange es noch für Rewards zählt). Guard-Test entsprechend.
+  Nutzer hat 76 $ eingezahlt (Konto ~88 $): 4 Märkte, Orders max. 85 $, Bestand max. 40 $, Not-Aus 10 $. Achtung:
+  `capital_usd` NICHT ändern – jede Änderung startet das Szenario neu (Daten ins Archiv); live zählt ohnehin das echte Cash.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

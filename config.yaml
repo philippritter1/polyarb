@@ -491,7 +491,7 @@ scenarios:
     # durchlaufen (bieten, Fill, Verkaufsgebot, Notverkauf, Konto-Abgleich). 15.10. Nutzer: auf ~60 $ aufgestockt, damit
     # die Rewards die 1-$-Auszahlungsgrenze pro Tag erreichen – 3 Märkte, Gebote ~8 $, Not-Aus ab 8 $ Tagesverlust.
     capital_usd: 60
-    max_markets: 3
+    max_markets: 4               # 15.10.: Nutzer hat ~76 $ eingezahlt (Konto ~88 $) – 4 Märkte, max. 85 $ in Orders
     rank: share
     prefilter: 120
     max_min_size_usd: 12         # Reward-Mindestgröße auf der teureren Seite bis 12 $
@@ -507,7 +507,7 @@ scenarios:
     reprice_ticks: 2             # 15.10.: erst umsetzen, wenn das Ziel 2 Ticks entfernt ist (Mitte flackert um 1 Tick;
                                  # über Nacht 295 gesetzt / 293 storniert, dazwischen zählte die Order nicht)
     max_inventory_usd: 15
-    max_total_inventory_usd: 30
+    max_total_inventory_usd: 40
     exit:
       after_h: 0                 # 14.10. Nutzer: bei Bestand sofort ein Verkaufsgebot (zählt für Rewards)
       dump_after_h: 24           # Notverkauf zum Bid (kostet Gebühr) erst nach 24 h
@@ -518,8 +518,8 @@ scenarios:
       quote_usd: 8
       max_order_usd: 12
       max_market_usd: 12
-      max_total_usd: 60
-      max_daily_loss_usd: 8
+      max_total_usd: 85
+      max_daily_loss_usd: 10
   sharp_fussball:
     enabled: true
     wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus

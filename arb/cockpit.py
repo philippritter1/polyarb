@@ -70,7 +70,8 @@ def live_numbers(data_dir: Path) -> Optional[dict]:
     except (OSError, ValueError):
         return None
     out = dict(live=st.get("live"), equity=st.get("equity"), cash=st.get("cash"), positions=st.get("positions"),
-               fills=st.get("fills"), scoring=st.get("scoring"), yesterday=st.get("rewards_yesterday"))
+               fills=st.get("fills"), scoring=st.get("scoring"), yesterday=st.get("rewards_yesterday"),
+               today=st.get("earned_today"))
     db_path = data_dir / "scenario-mm_probe.sqlite"
     if db_path.exists():
         db = sqlite3.connect(str(db_path))
@@ -79,7 +80,9 @@ def live_numbers(data_dir: Path) -> Optional[dict]:
             if ts:
                 r = db.execute("""SELECT SUM(pm_earned), SUM(rate * pm_pct / 100), SUM(rate * est_pct / 100)
                                   FROM live_reward_share WHERE ts = ?""", (ts,)).fetchone()
-                out.update(today=r[0], pm_day=r[1], est_day=r[2])
+                out.update(pm_day=r[1], est_day=r[2])
+                if out.get("today") is None:  # older status files: only the markets quoted right now
+                    out["today"] = r[0]
             out["paid"] = db.execute("SELECT day, usd FROM live_rewards ORDER BY day DESC LIMIT 7").fetchall()
         except sqlite3.OperationalError:
             pass
@@ -160,7 +163,7 @@ def page_body(scen: List[dict], live: Optional[dict]) -> str:
                      'Topf gegen unsere Schätzung (über 100 % = wir unterschätzen).</p>')
         parts.append(_tiles([
             ("Kontowert", f'{_de(live.get("equity"))} $', f'Cash {_de(live.get("cash"))} $ + Positionen {_de(live.get("positions"))} $', ""),
-            ("Rewards heute (echt)", f'{_de(live.get("today"), 3)} $', "laut Polymarket, Auszahlung ab 1 $/Tag", ""),
+            ("Rewards heute (echt)", f'{_de(live.get("today"), 3)} $', "alle Märkte des Tages, laut Polymarket; Auszahlung ab 1 $/Tag", ""),
             ("Rewards gestern (echt)", f'{_de(live.get("yesterday"), 3)} $', " · ".join(f"{d[5:]}: {_de(u, 2)}" for d, u in paid[:4]), ""),
             ("Anteil echt / geschätzt", "–" if ratio is None else f"{ratio * 100:.0f} %",
              f'≈ {_de(live.get("pm_day"))} vs. {_de(live.get("est_day"))} $/Tag', "pos" if ratio and ratio >= 1 else ""),

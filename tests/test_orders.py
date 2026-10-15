@@ -571,3 +571,14 @@ def test_overbook_test_reports_both_answers_and_always_cancels():
     ex = Ex(opened=0)  # the bot is not bidding: no meaningful test, nothing placed
     steps = overbook_test(ex, find=find, wait=lambda s: None)
     assert not ex.calls and not overbook_test_passed(steps)
+
+
+def test_earned_today_counts_every_market_of_the_day(tmp_path):
+    ex = FakeExchange()
+    ex.reward_live = lambda day=None: {"c1": {"pct": 2.0, "earned": 0.5}, "gone": {"earned": 1.4}}
+    gw, _ = _live(tmp_path, ex)
+    gw.est = {"c1": dict(q="Markt 1", rate=100.0, pct=2.5)}
+    gw.sync(NOW, {("A", "BUY"): (0.48, 50, "A JA")})
+    gw.sync(NOW + 100, {("A", "BUY"): (0.48, 50, "A JA")})
+    st = json.loads((tmp_path / "live-status-pilot.json").read_text())
+    assert st["earned_today"] == 1.9 and st["reward_share"][0]["earned_today"] == 0.5

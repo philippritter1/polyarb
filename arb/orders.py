@@ -318,6 +318,9 @@ class Gateway:
         except Exception as e:  # noqa
             log.warning("%s: Reward-Anteil nicht abrufbar (%s)", self.name, type(e).__name__)
             return
+        # all markets of the day, also the ones we left meanwhile (the bot only compares the current ones below)
+        self.info["earned_today"] = round(sum(float(v.get("earned") or 0) for v in pm.values()), 4)
+        self.info["earned_ts"] = now
         rows = []
         for cid, e in self.est.items():
             p = pm.get(cid, {})

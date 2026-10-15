@@ -454,11 +454,12 @@ scenarios:
     enabled: true
     title: Market Making (Abbau-Treppe)
     strategy: mm                 # 15.10. Nutzer-Idee: wie mm_sofort (Verkaufsgebot sofort), aber das Verkaufsgebot rückt
-    # jede Stunde ein Stück näher: von Mitte + Abstand in 6 Stufen bis 1 Tick über das beste Gebot (bleibt Maker, keine
-    # Gebühr). Frage: Bestand schneller los, bevor sich Verluste ansammeln – kostet das weniger als es spart?
+    # jede Stunde ein Stück näher: von Mitte + Abstand in 6 Stufen bis zur Mitte – immer im Reward-Bereich (Nutzer:
+    # Verkaufsgebote müssen für Rewards zählen), nie unter der Mitte. Frage: Bestand schneller los, bevor sich Verluste
+    # ansammeln – kostet das weniger als es spart?
     exit:
       after_h: 0                 # sofort: Verkaufsgebot zur Mitte + Abstand (gefüllt nur durch Trades darüber)
-      decay_h: 6                 # stündlich näher, nach 6 h bei Bid + 1 Tick
+      decay_h: 6                 # stündlich näher, nach 6 h an der Mitte (zählt dort am meisten)
       dump_after_h: 96           # nach 4 Tagen noch da: zum Bid verkaufen (wie mm_abbau)
     reward_asks: true
     max_age_days: 3
@@ -598,6 +599,7 @@ scenarios:
     max_total_inventory_usd: 40
     exit:
       after_h: 0                 # 14.10. Nutzer: bei Bestand sofort ein Verkaufsgebot (zählt für Rewards)
+      decay_h: 6                 # 15.10. Nutzer: Verkaufsgebot stündlich näher an die Mitte, immer im Reward-Bereich
       dump_after_h: 24           # Notverkauf zum Bid (kostet Gebühr) erst nach 24 h
     latency_s: 1
     step_s: 2

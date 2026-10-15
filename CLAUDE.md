@@ -125,7 +125,8 @@ Aktive Kandidaten im Live-Test:
   Frage: schneller wieder Cash + Spread + Rewards auf dem Bestand vs. 24 h warten (mm_abbau). Bei mm_abbau und den
   anderen zählen Verkaufsgebote NICHT für die Schätzung (unterschätzt sie leicht) – Regeln nicht geändert.
 - `mm_treppe` (ab 15.10., Nutzer-Idee): wie `mm_sofort`, aber das Verkaufsgebot rückt stündlich näher (`exit: decay_h: 6`):
-  von Mitte + Abstand in 6 Stufen bis Bid + 1 Tick (Maker, keine Gebühr). Frage: Bestand loswerden, bevor Verluste wachsen.
+  von Mitte + Abstand in 6 Stufen bis zur Mitte – immer im Reward-Bereich (Mitte .. Mitte + max_spread, Nutzer-Vorgabe),
+  nie unter der Mitte, nie am Bid. Frage: Bestand loswerden, bevor Verluste wachsen. Seit 15.10. auch in mm_probe (echt).
 - `mm_nah` (ab 15.10., Nutzer-Frage): wie `mm_sofort`, aber `quote_frac: 0.25` – Gebote und Verkaufsgebot bei 1/4 statt
   1/2 des Reward-Abstands (Reward-Punkte 56 % statt 25 %, dafür mehr Fills). Frage: nah vs. weiter weg (mm_sofort).
 - `mm_ueberbucht` (ab 15.10., Nutzer-Idee): wie `mm_sofort`, aber Gebote zusammen bis 2x das Cash (`overcommit: 2`;

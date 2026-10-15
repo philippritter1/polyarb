@@ -473,7 +473,7 @@ def test_exit_decay_steps_the_sell_order_down_every_hour(tmp_path):
     store = BookStore()
     mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=0, decay_h=4, dump_after_h=96)),
                      Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
-    _book(store, "a", 0.40, 0.60)  # wide book: room between the mid and the bid
+    _book(store, "a", 0.46, 0.54)
     mm.step()
     mk = mm.st.markets["a"]
     mk.qty_yes, mk.cost_yes = 20.0, 9.0
@@ -482,4 +482,6 @@ def test_exit_decay_steps_the_sell_order_down_every_hour(tmp_path):
         mm.step()
         prices.append(mk.ask["price"])
         mm.clock.sleep(3600)
-    assert prices[0] == 0.52 and prices == sorted(prices, reverse=True) and prices[-1] == 0.41
+    # from mid + 2 ct down to the mid itself – always inside the reward band (mid .. mid + 4 ct), never below the mid
+    assert prices[0] == 0.52 and prices == sorted(prices, reverse=True) and prices[-1] == 0.50
+    assert all(0.50 <= p < 0.54 for p in prices)

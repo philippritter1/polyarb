@@ -185,6 +185,9 @@ Aktive Kandidaten im Live-Test:
   15.10. 13:00: Tag bisher ≈ −2,30 $ Handelsergebnis (v. a. ein Fill: 20 NEIN „Wahlbeteiligung 70 %“ zu ~0,55 gekauft,
   zu 0,46 verkauft, −1,80 $) gegen ≈ +0,70 $ echte Rewards. Nutzer: mm_probe `min_days_to_end: 14` (statt 3), um
   nachrichtenträchtige Märkte mit nahem Ereignis zu meiden.
+  15.10. 20:10: Konto 85,30 $ (Tagesstart inkl. Einzahlung ~86,44), echte Rewards heute 0,63 $; Polymarket-Anteil
+  jetzt nur 41 % der Schätzung (0,53 vs. 1,29 $/Tag) – Verhältnis schwankt stark (morgens 190 %). Sim-Markout 60 Min.
+  nach Fill in allen Szenarien negativ (ca. −1 bis −2 $ je Fill bei 50-$-Geboten; mm_nah −26 $ auf 12 Fills).
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

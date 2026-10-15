@@ -239,11 +239,17 @@ class MarketMaker:
         from .study import categorize
         st = {"gelistet": len(markets)}
         cands = []
+        pools = {}  # measured only: reward pools by time to the end (where do the big pools sit?)
         for m in markets:
             rate, v, size = rewards_of(m)
             toks = _parse_json_list(m.get("clobTokenIds"))
             prices = _parse_json_list(m.get("outcomePrices"))
             end = _parse_ts(m.get("endDate"))
+            if rate > 0 and end:
+                days = (end - now) / DAY
+                b = ("< 3 T" if days < 3 else "3–14 T" if days < 14 else "14–60 T" if days < 60 else "> 60 T")
+                n, tot, top = pools.get(b, (0, 0.0, 0.0))
+                pools[b] = (n + 1, tot + rate, max(top, rate))
             why = None
             if rate < float(sc.get("min_daily_rate", 5)) or v < 2 * self.tick:
                 why = "keine/kleine Rewards"
@@ -294,6 +300,9 @@ class MarketMaker:
         st["ausgewählt"] = len(picked)
         st["nur Bestand (keine Gebote)"] = len(chosen) - len(picked)
         st["Reward-Pool $/Tag"] = round(sum(chosen[c].daily_rate for c in picked), 2)
+        for b in ("< 3 T", "3–14 T", "14–60 T", "> 60 T"):
+            n, tot, top = pools.get(b, (0, 0.0, 0.0))
+            st[f"Reward-Töpfe {b}"] = f"{n} Märkte, {tot:.0f} $/Tag, Ø {tot / n if n else 0:.0f}, max {top:.0f}"
         self.scan = st
         if self.pool is not None:
             self.pool.set_assets([t for m in chosen.values() for t in (m.yes, m.no)])

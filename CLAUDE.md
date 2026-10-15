@@ -129,6 +129,10 @@ Aktive Kandidaten im Live-Test:
   (`exit: ask_frac: 0.25` statt quote_frac 0,5). Fehlt beim Fill das Cash, wird nur der bezahlbare Teil gefüllt, der
   Rest des Gebots fällt weg (Scan „Fills ohne Cash (überbucht)“). Echt NICHT freigegeben – ob Polymarket offene Orders
   gegen das Guthaben rechnet, ist ungeklärt. Frage: mehr Rewards pro $ vs. Risiko gleichzeitiger Fills.
+  Überbuchungs-Test (dritter Knopf auf /admin/, `overbook_test`): setzt EIN Gebot bei der Hälfte des besten Gebots
+  eines großen Markts, das allein ins Guthaben passt, zusammen mit den offenen Geboten des Bots aber darüber liegt;
+  angenommen = Überbuchen geht, „not enough balance“ = geht nicht; immer storniert. polymarket.com zeigte 15.10.
+  „available to trade“ = volles Cash trotz ~56 $ offener Gebote (Hinweis, kein Beweis).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

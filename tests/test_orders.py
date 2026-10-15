@@ -530,3 +530,44 @@ def test_positions_and_fill_and_kill_sell_without_network(monkeypatch):
     ex = PolyExchange.__new__(PolyExchange)
     ex._c = C()
     assert ex.sell_now("t1", 0.48, 20) == "0xf" and ex._c.sent == ("SELL", 0.48, 20.0, "FAK", False)
+
+
+def test_overbook_test_reports_both_answers_and_always_cancels():
+    from arb.exchange import overbook_test, overbook_test_passed
+
+    class Ex:
+        def __init__(self, refuse=False, opened=56.0):
+            self.refuse, self.calls = refuse, []
+            self.open = {"bot": dict(token="x", side="BUY", price=0.5, size=opened / 0.5, matched=0)}
+
+        def balance_usd(self):
+            return 83.0
+
+        def open_orders(self):
+            return dict(self.open)
+
+        def best(self, token):
+            return dict(bid=0.47, ask=0.48, tick=0.01, min_size=5)
+
+        def place(self, token, side, price, size):
+            self.calls.append(("place", token, side, price, size))
+            if self.refuse:
+                raise RuntimeError("not enough balance / allowance: the balance is not enough")
+            self.open["t"] = dict(token=token, side=side, price=price, size=size, matched=0)
+            return "t"
+
+        def cancel(self, oid):
+            self.calls.append(("cancel", oid))
+            self.open.pop(oid, None)
+    find = lambda: [dict(token="T", question="Big market?")]  # noqa: E731
+    ex = Ex()
+    steps = overbook_test(ex, find=find, wait=lambda s: None)
+    _, tok, side, price, size = ex.calls[0]
+    assert price == 0.23 and 56 + price * size > 83 and price * size < 83  # alone it fits, together it does not
+    assert ("cancel", "t") in ex.calls and "GEHT" in steps[-3]["info"] and overbook_test_passed(steps)
+    ex = Ex(refuse=True)
+    steps = overbook_test(ex, find=find, wait=lambda s: None)
+    assert "NICHT" in steps[-1]["info"] and overbook_test_passed(steps) and not any(c[0] == "cancel" for c in ex.calls)
+    ex = Ex(opened=0)  # the bot is not bidding: no meaningful test, nothing placed
+    steps = overbook_test(ex, find=find, wait=lambda s: None)
+    assert not ex.calls and not overbook_test_passed(steps)

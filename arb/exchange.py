@@ -513,3 +513,81 @@ def reward_test(ex: "PolyExchange", find=None, wait=None, checks: int = 4, every
 def reward_test_passed(steps: List[dict]) -> bool:
     return any(x.get("step", "").startswith("Zählt für Rewards") and x.get("ok") for x in steps) \
         and any(x.get("step") == "Order weg" and x.get("ok") for x in steps)
+
+
+def overbook_test(ex: "PolyExchange", find=None, wait=None) -> List[dict]:
+    """Does Polymarket accept resting buys that add up to MORE than the cash? (Limit orders move no money until they
+    fill; polymarket.com shows open orders as still "available to trade".) Takes the buys already open (the bot's),
+    then places ONE post-only buy far below the market (half the best bid of a busy market – practically never
+    filled) that alone fits the cash but together with the open ones exceeds it. Accepted -> overbooking works;
+    "not enough balance" -> it does not. The test order is always cancelled."""
+    import time as _t
+    pause = wait or _t.sleep
+    steps, oid = [], ""
+
+    def step(name, fn):
+        try:
+            v = fn()
+            steps.append(dict(step=name, ok=True, info=v))
+            return v
+        except Exception as e:  # noqa
+            steps.append(dict(step=name, ok=False, info=f"{type(e).__name__}: {str(e)[:160]}"))
+            return None
+    bal = step("Guthaben (pUSD)", ex.balance_usd)
+    if not bal:
+        return steps
+    opened = step("Offene Kaufgebote", lambda: round(sum(o["price"] * (o["size"] - o["matched"])
+                                                         for o in ex.open_orders().values() if o["side"] == "BUY"), 2))
+    if opened is None:
+        return steps
+
+    def market():
+        for c in (find or liquid_tokens)():
+            b = ex.best(c["token"])
+            if b["bid"] is not None and b["ask"] is not None and b["bid"] >= 0.1:
+                return dict(c, book=b)
+        raise RuntimeError("kein Markt mit Geboten auf beiden Seiten gefunden")
+    m = step("Markt für den Test", market)
+    if not m:
+        return steps
+    bk = m.pop("book")
+    steps[-1]["info"] = f"{m['question'][:80]} – bestes Gebot {bk['bid']:.2f}"
+    price = round(max(bk["tick"], math.floor(bk["bid"] / 2 / bk["tick"]) * bk["tick"]), 4)
+    want = max(bal - opened + 1.0, bal * 0.3)  # pushes the open total past the cash by at least 1 $
+    if want > bal * 0.95:
+        steps.append(dict(step="Testgebot", ok=False, info=f"zu wenig offene Gebote: offen {opened:.2f} $ bei "
+                          f"{bal:.2f} $ Guthaben – erst wenn der Bot bietet (Modus Echt) aussagekräftig"))
+        return steps
+    size = max(bk["min_size"], 5.0, math.floor(want / price))
+    info = (f"KAUF {size:g} @ {price:.2f} = {price * size:.2f} $ – zusammen mit den offenen {opened:.2f} $ "
+            f"= {opened + price * size:.2f} $ bei {bal:.2f} $ Guthaben")
+    try:
+        try:
+            oid = ex.place(m["token"], "BUY", price, size)
+            steps.append(dict(step="Testgebot setzen", ok=True, info=info))
+        except Exception as e:  # noqa
+            msg = str(e)[:200]
+            refused = "balance" in msg.lower()
+            steps.append(dict(step="Testgebot setzen", ok=refused, info=f"{info} – abgelehnt: {msg}"))
+            steps.append(dict(step="Ergebnis", ok=refused, info=(
+                "Überbuchen geht NICHT: Polymarket rechnet offene Gebote gegen das Guthaben" if refused else
+                "abgelehnt aus einem anderen Grund – Ergebnis offen")))
+            return steps
+        pause(2)
+        step("Gebot bei Polymarket offen", lambda: oid in ex.open_orders() or (_ for _ in ()).throw(RuntimeError("nicht gefunden")))
+        steps.append(dict(step="Ergebnis", ok=True, info=(
+            "Überbuchen GEHT: Polymarket nimmt Gebote über das Guthaben hinaus an (gefüllt wird nur, was bezahlt "
+            "werden kann)")))
+    finally:
+        if oid:
+            step("Order stornieren", lambda: ex.cancel(oid) or "ok")
+            pause(2)
+            step("Order weg", lambda: oid not in ex.open_orders() or (_ for _ in ()).throw(RuntimeError("noch offen!")))
+    return steps
+
+
+def overbook_test_passed(steps: List[dict]) -> bool:
+    """Completed with a clear answer (either way) and nothing left open."""
+    res = [x for x in steps if x.get("step") == "Ergebnis" and x.get("ok")]
+    placed = any(x.get("step") == "Testgebot setzen" and "abgelehnt" not in str(x.get("info")) for x in steps)
+    return bool(res) and (not placed or any(x.get("step") == "Order weg" and x.get("ok") for x in steps))

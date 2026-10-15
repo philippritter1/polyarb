@@ -189,6 +189,19 @@ def run_reward_test(ex=None, find=None, wait=None) -> list:
     return steps
 
 
+OVERBOOK_TEST_PATH = lambda: os.path.join(DATA, "overbook-test.json")  # noqa: E731
+
+
+def run_overbook_test(ex=None, find=None, wait=None) -> list:
+    """The overbooking test (arb/exchange.overbook_test): may resting buys exceed the cash? Result kept for the page."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from arb.exchange import PolyExchange, overbook_test, read_wallet
+    steps = overbook_test(ex or PolyExchange(read_wallet(SECRETS)), find=find, wait=wait)
+    with open(OVERBOOK_TEST_PATH(), "w", encoding="utf-8") as f:
+        json.dump(dict(ts=time.time(), steps=steps), f, default=str)
+    return steps
+
+
 def live_test_html(path_fn=None, passed=None) -> str:
     try:
         with open((path_fn or LIVE_TEST_PATH)(), encoding="utf-8") as f:
@@ -247,7 +260,20 @@ def wallet_section() -> str:
             "Dauert gut eine Minute.</p>"
             + (reward_test_html() if not prob else "")
             + ('<form method="post" action="/admin/reward-test"><button type="submit">Reward-Test starten</button></form>'
-               if not prob else ""))
+               if not prob else "")
+            + "<h2>Überbuchungs-Test</h2><p>Prüft, ob Polymarket Kaufgebote annimmt, die zusammen MEHR als das Guthaben "
+            "ergeben (Limit-Orders binden kein Geld, bis sie ausgeführt werden). Setzt EIN Gebot bei der Hälfte des "
+            "besten Gebots eines großen Markts (wird praktisch nie ausgeführt), das zusammen mit den offenen Geboten des "
+            "Bots über dem Guthaben liegt, und storniert es sofort. Aussagekräftig nur, wenn der Bot gerade bietet.</p>"
+            + (overbook_test_html() if not prob else "")
+            + ('<form method="post" action="/admin/overbook-test"><button type="submit">Überbuchungs-Test starten'
+               '</button></form>' if not prob else ""))
+
+
+def overbook_test_html() -> str:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from arb.exchange import overbook_test_passed
+    return live_test_html(OVERBOOK_TEST_PATH, overbook_test_passed)
 
 
 def reward_test_html() -> str:
@@ -356,6 +382,9 @@ class Handler(BaseHTTPRequestHandler):
     def run_reward(self) -> list:  # tests: replaced by a fake exchange
         return run_reward_test()
 
+    def run_overbook(self) -> list:  # tests: replaced by a fake exchange
+        return run_overbook_test()
+
     def _done(self, msg: str, ok: bool = True) -> None:
         """After an action: redirect to the plain page (Post/Redirect/Get) – reloading it shows the result but does
         not repeat the action (a reload of /admin/reward-test re-ran the test, 14.10.)."""
@@ -393,7 +422,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         path = self.path.rstrip("/")
         if path not in ("/admin/odds-key", "/admin/live-mode", "/admin/wallet", "/admin/wallet-delete", "/admin/live-test",
-                        "/admin/reward-test"):
+                        "/admin/reward-test", "/admin/overbook-test"):
             return self._send("not found", 404)
         n = int(self.headers.get("Content-Length") or 0)
         if n > 4096:
@@ -429,6 +458,19 @@ class Handler(BaseHTTPRequestHandler):
             ok = reward_test_passed(steps)
             return self._done("Reward-Test " + ("bestanden – unser Gebot zählt für Rewards." if ok
                                                else "NICHT bestanden – siehe Liste unten."), bool(ok))
+        if path == "/admin/overbook-test":
+            if wallet_info()[0]:
+                return self._send(page("Erst eine Wallet speichern.", False), 400)
+            try:
+                last = os.path.getmtime(OVERBOOK_TEST_PATH())
+            except OSError:
+                last = 0
+            if time.time() - last < 60:
+                return self._send(page("Bitte eine Minute warten bis zum nächsten Test.", False), 429)
+            steps = self.run_overbook()
+            res = next((x for x in steps if x.get("step") == "Ergebnis"), None)
+            return self._done("Überbuchungs-Test: " + (str(res["info"]) if res else "kein Ergebnis – siehe Liste unten."),
+                              bool(res and res.get("ok")))
         if path == "/admin/wallet-delete":
             remove_secrets({"POLY_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIG_TYPE"})
             return self._done("Wallet gelöscht.")

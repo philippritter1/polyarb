@@ -172,8 +172,8 @@ def page_body(scen: List[dict], live: Optional[dict]) -> str:
         tot_t = sum(r["n"]["trading"] for r in rows)
         best = rows[0]
         parts.append('<h2 style="margin-top:18px">Simulation – alle Market-Making-Szenarien</h2><p class="note">'
-                     'Seit 11.10. (davor durch den Auswahl-Fehler aufgebläht) bzw. seit Start. Rewards sind geschätzt – '
-                     'echt zahlte Polymarket bisher etwa gleich viel bis mehr. Handel = Spread, Auflösungen, Verkäufe und '
+                     'Seit 11.10. (davor durch den Auswahl-Fehler aufgebläht) bzw. seit Start. Rewards sind geschätzt – wie '
+                     'nah sie an der Wirklichkeit liegen, zeigt oben „Anteil echt / geschätzt“ (schwankt noch stark). Handel = Spread, Auflösungen, Verkäufe und '
                      'die Wertänderung des gehaltenen Bestands.</p>')
         parts.append(_tiles([
             ("Rewards (geschätzt), alle", f"{_de(tot_r, 0)} $", f"{len(rows)} Szenarien", "pos"),

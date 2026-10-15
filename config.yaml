@@ -586,7 +586,8 @@ scenarios:
     max_min_size_usd: 12         # Reward-Mindestgröße auf der teureren Seite bis 12 $
     min_daily_rate: 5
     skip_categories: [Sport, Krypto]
-    min_days_to_end: 3
+    min_days_to_end: 14          # 15.10. Nutzer: nachrichtenträchtige Märkte meiden (Ereignis „bis 20.10.“, Wahlbeteiligung –
+                                 # dort kam der echte Verlust −1,80 $); nur Märkte, die frühestens in 2 Wochen enden
     stop_hours_before_end: 24
     min_mid: 0.15
     max_mid: 0.85

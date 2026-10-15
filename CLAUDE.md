@@ -174,6 +174,9 @@ Aktive Kandidaten im Live-Test:
   15.10. 08:15: 9 Orders / 75 $, alle 9 zählen; Polymarket-Anteil meist ÜBER unserer Schätzung (z. B. 26,9 % vs. 12,7 %,
   6,5 % vs. 5,2 %) – hochgerechnet ~3 $/Tag (Polymarket) vs. ~1,9 $/Tag (Schätzung). reprice_ticks wirkt: 13 gesetzt /
   4 storniert in ~15 Min. (vorher ~1 Umsetzung pro Minute).
+  15.10. 13:00: Tag bisher ≈ −2,30 $ Handelsergebnis (v. a. ein Fill: 20 NEIN „Wahlbeteiligung 70 %“ zu ~0,55 gekauft,
+  zu 0,46 verkauft, −1,80 $) gegen ≈ +0,70 $ echte Rewards. Nutzer: mm_probe `min_days_to_end: 14` (statt 3), um
+  nachrichtenträchtige Märkte mit nahem Ereignis zu meiden.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

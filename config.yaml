@@ -549,6 +549,7 @@ scenarios:
       - '\b(nhl|nba|nfl|mlb|wnba|mls|ncaa|ufc|nascar|f1|formula 1|premier league|la liga|bundesliga|serie a|ligue 1)\b'
       - '\b(champions league|europa league|stanley cup|super bowl|world series|world cup|playoffs?|mvp|grand prix)\b'
       - '\b(pga|atp|wta|heisman|ballon d.or|rookie of the year|conference finals?|regular season|championship)\b'
+      - '\b(golf|ryder cup|masters|us open|olympics?|medals?|tour de france|cricket|rugby|boxing|ufc|darts|snooker|wimbledon|roland garros|team europe|team usa|relegat\w*|top scorer|golden boot|cy young|world series|nba finals|super bowl)\b'   # 16.10.: Ryder Cup rutschte durch
       - '\b\d+\+ ?(points|wins|goals|touchdowns|games)\b|\brecord \d+'
       - '\b(panthers|maple leafs|bruins|rangers|oilers|canucks|flames|avalanche|lightning|capitals|penguins|blackhawks)\b'
       - '\b(lakers|celtics|warriors|knicks|bucks|nuggets|76ers|mavericks|cavaliers|thunder|timberwolves|clippers)\b'
@@ -675,6 +676,7 @@ scenarios:
       - '\b(nhl|nba|nfl|mlb|wnba|mls|ncaa|ufc|nascar|f1|formula 1|premier league|la liga|bundesliga|serie a|ligue 1)\b'
       - '\b(champions league|europa league|stanley cup|super bowl|world series|world cup|playoffs?|mvp|grand prix)\b'
       - '\b(pga|atp|wta|heisman|ballon d.or|rookie of the year|conference finals?|regular season|championship)\b'
+      - '\b(golf|ryder cup|masters|us open|olympics?|medals?|tour de france|cricket|rugby|boxing|ufc|darts|snooker|wimbledon|roland garros|team europe|team usa|relegat\w*|top scorer|golden boot|cy young|world series|nba finals|super bowl)\b'   # 16.10.: Ryder Cup rutschte durch
       - '\b\d+\+ ?(points|wins|goals|touchdowns|games)\b|\brecord \d+'
       - '\b(panthers|maple leafs|bruins|rangers|oilers|canucks|flames|avalanche|lightning|capitals|penguins|blackhawks)\b'
       - '\b(lakers|celtics|warriors|knicks|bucks|nuggets|76ers|mavericks|cavaliers|thunder|timberwolves|clippers)\b'

@@ -325,6 +325,8 @@ class MarketMaker:
                     chosen[cid] = mk  # holds inventory: keep until resolution
         # only the chosen ones are quoted; markets kept for their inventory just wait for resolution (until 10.10.
         # quote() bid in every kept market too, so the book grew past max_markets: mm_neu ~100 markets)
+        if picked != (self.quoted or set()):
+            log.info("%s: Märkte: %s", self.name, " | ".join(chosen[c].title[:50] for c in picked))
         self.quoted = picked
         self.st.markets = chosen
         st["ausgewählt"] = len(picked)

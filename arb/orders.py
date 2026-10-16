@@ -77,6 +77,7 @@ class Gateway:
         # all money paid in so far (config, kept up to date by hand): a deposit must not look like a profit that
         # hides the day's losses from the limit below, and the result since the start is equity - deposits
         self.deposits = float(lim.get("deposits_usd", 0) or 0)
+        self.day_reset = str(lim.get("day_reset", "") or "")  # changed by a commit: the day's base starts afresh
         self.orders: Dict[Key, dict] = {}   # (token, side) -> {price, size, oid, ts, label}
         self.counts = {"gesetzt": 0, "storniert": 0, "abgelehnt": 0}
         self.rejected: Dict[Key, tuple] = {}  # last logged rejection per order
@@ -236,8 +237,9 @@ class Gateway:
                 d = json.load(f)
         except (OSError, ValueError):
             d = {}
-        if d.get("day") != day or d.get("dep") != self.deposits:  # new day, or money was paid in/out: new base
-            d = dict(day=day, start=eq, dep=self.deposits)
+        if d.get("day") != day or d.get("dep") != self.deposits or d.get("reset", "") != self.day_reset:
+            d = dict(day=day, start=eq, dep=self.deposits, reset=self.day_reset)  # new day, money paid in/out or
+            # a manual reset (live: day_reset, user decision): the base starts again at the current value
             tmp = self.day_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(d, f)

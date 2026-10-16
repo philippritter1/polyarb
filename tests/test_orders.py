@@ -611,3 +611,19 @@ def test_a_single_bad_account_read_does_not_trigger_the_emergency_stop(tmp_path)
     gw.sync(NOW + 400, {})  # 66.48 < 76.48 − 5, but only once
     gw.sync(NOW + 461, {})  # re-read: 76.48 again
     assert read_mode(str(tmp_path / "live.json")) != "off" and gw._breach is False
+
+
+def test_day_reset_starts_the_days_base_again(tmp_path):
+    ex = FakeExchange(cash=83.0)
+    gw, _ = _live(tmp_path, ex, max_daily_loss_usd=10, deposits_usd=87)
+    gw.sync(NOW, {})
+    ex.cash = 75.0
+    gw.sync(NOW + 400, {})
+    gw.day_reset = "2026-10-16 Nutzer"
+    gw.sync(NOW + 800, {})
+    st = json.loads((tmp_path / "live-status-pilot.json").read_text())
+    assert st["day_start"] == 75.0
+    ex.cash = 70.0  # −5 $ from the new base: below the limit
+    gw.sync(NOW + 1200, {})
+    gw.sync(NOW + 1261, {})
+    assert read_mode(str(tmp_path / "live.json")) != "off"

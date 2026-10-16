@@ -717,6 +717,7 @@ scenarios:
       max_market_usd: 12
       max_total_usd: 85
       max_daily_loss_usd: 10
+      day_reset: "2026-10-16 Nutzer"  # 16.10. Nutzer: Tagesbasis neu (Text ändern = neuer Tagesstart beim aktuellen Konto)
       deposits_usd: 87.0         # eingezahlt insgesamt (14.10. 11,00 + 15.10. 76,00) – bei jeder Ein-/Auszahlung anpassen
   sharp_fussball:
     enabled: true

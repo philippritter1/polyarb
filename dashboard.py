@@ -131,7 +131,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
                   "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell",
-                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "sharp_fussball_buy": "Fußball vs. Pinnacle"}
+                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "sharp_fussball_buy": "Fußball vs. Pinnacle"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -236,6 +236,33 @@ MM_DAILY_HEADER = ["Tag", "Reward-Pool ausgewählt $/Tag", "Pool unserer Gebote 
                    "Märkte", "Ausführungen (Tag)", "Stunden"]
 
 
+MARKOUT_HEADER = ["Zeit (UTC)", "Stunde (UTC)", "Markt", "Kategorie", "Seite", "Preis", "Menge", "Betrag $",
+                  "Mitte beim Fill", "Abstand zur Mitte (ct)", "Tage bis Ende", "Kursbewegung 5 Min $",
+                  "Kursbewegung 60 Min $", "Kursbewegung 60 Min je Anteil (ct)"]
+
+
+def markout_rows(db_path: str) -> list:
+    """One row per fill of a market-making scenario: what it was and how the price moved 5 / 60 min later."""
+    try:
+        db = sqlite3.connect(db_path)
+        cols = {r[1] for r in db.execute("PRAGMA table_info(mm_markout)")}
+        if not cols:
+            return []
+        ext = all(c in cols for c in ("title", "cat", "mid", "days_left", "usd"))
+        q = ("SELECT ts, title, cat, side, price, qty, usd, mid, days_left, m5, m60 FROM mm_markout ORDER BY ts" if ext else
+             "SELECT ts, NULL, NULL, side, price, qty, price * qty, NULL, NULL, m5, m60 FROM mm_markout ORDER BY ts")
+        out = []
+        for ts, title, cat, side, price, qty, usd, mid, days, m5, m60 in db.execute(q):
+            t = _time.gmtime(ts)
+            out.append([_time.strftime("%Y-%m-%d %H:%M", t), t.tm_hour, title or "", cat or "", "JA" if side == "yes" else "NEIN",
+                        price, qty, usd, mid, None if mid is None else round((mid - price) * 100, 2), days, m5, m60,
+                        None if m60 is None or not qty else round(m60 / qty * 100, 2)])
+        db.close()
+        return out
+    except sqlite3.Error:
+        return []
+
+
 def mm_daily(db_path: str) -> list:
     """Market making trend per day from the hourly mm_metrics rows: pool size, our share, the day's result."""
     try:
@@ -323,6 +350,9 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     rshare = reward_share_daily(db_path) if kind == "mm" else []
     if metrics:
         _write(Path(out).with_name("kennzahlen.csv"), _csv(MM_DAILY_HEADER, metrics), "utf-8-sig")
+    mo = markout_rows(db_path) if kind == "mm" else []
+    if mo:
+        _write(Path(out).with_name("fills.csv"), _csv(MARKOUT_HEADER, mo), "utf-8-sig")
     data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
                 metrics=metrics, rewards_cmp=rcmp, reward_share=rshare,
                 title=title or "Polymarket Arbitrage – Paper Trading")
@@ -563,6 +593,9 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
         if (folder / "kennzahlen.csv").exists():
             files.append((p["label"], "Market Making je Tag: Pool, unser Anteil, Spread, Rewards (Trend)", rel + "kennzahlen.csv",
                           folder / "kennzahlen.csv", f"{slug}/kennzahlen.csv"))
+        if (folder / "fills.csv").exists():
+            files.append((p["label"], "Jeder Fill: Markt, Kategorie, Abstand, Kursbewegung 5/60 Min. danach", rel + "fills.csv",
+                          folder / "fills.csv", f"{slug}/fills.csv"))
         if (folder / "scan.csv").exists():
             files.append((p["label"], "Letzter Scan: wo Märkte am Filter hängen bleiben", rel + "scan.csv",
                           folder / "scan.csv", f"{slug}/scan.csv"))

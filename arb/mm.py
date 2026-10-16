@@ -223,6 +223,10 @@ class MarketMaker:
         # filled by someone who knew better (adverse selection), the cost the rewards have to cover
         self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_markout(ts REAL, cid TEXT, token TEXT, side TEXT,
             price REAL, qty REAL, m5 REAL, m60 REAL)""")
+        have = {r[1] for r in self.store.db.execute("PRAGMA table_info(mm_markout)")}
+        for col, typ in (("title", "TEXT"), ("cat", "TEXT"), ("mid", "REAL"), ("days_left", "REAL"), ("usd", "REAL")):
+            if col not in have:  # 16.10.: per fill also what it was, for the export (does the move depend on it?)
+                self.store.db.execute(f"ALTER TABLE mm_markout ADD COLUMN {col} {typ}")
         self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m5=r[5], cid=r[6]) for r in
                          self.store.db.execute("SELECT rowid, ts, token, price, qty, m5, cid FROM mm_markout WHERE m60 IS NULL")]
         # learn (self-learning, 16.10.): per market the estimated rewards against the markout of our fills; a market
@@ -403,8 +407,12 @@ class MarketMaker:
         price = q["price"]
         cost = price * qty
         tok = mk.yes if side == "yes" else mk.no
-        cur = self.store.db.execute("INSERT INTO mm_markout VALUES(?,?,?,?,?,?,NULL,NULL)",
-                                    (now, mk.cid, tok, side, price, qty))
+        own_mid = None if mk.mid is None else (mk.mid if side == "yes" else 1 - mk.mid)
+        cur = self.store.db.execute(
+            "INSERT INTO mm_markout(ts, cid, token, side, price, qty, title, cat, mid, days_left, usd) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (now, mk.cid, tok, side, price, qty, mk.title[:200], mk.category, own_mid,
+             round((mk.end_ts - now) / DAY, 2) if mk.end_ts else None, round(cost, 2)))
         self._markout.append(dict(rowid=cur.lastrowid, ts=now, token=tok, price=price, qty=qty, m5=None, cid=mk.cid))
         self.st.cash -= cost
         if side == "yes":
@@ -489,9 +497,18 @@ class MarketMaker:
                 mk.inv_ts, mk.ask = now, None
             age = now - mk.inv_ts
             bk = books.get(mk.yes if side == "yes" else mk.no)
-            if age < after or not bk or not bk.bids or not bk.asks:
+            if not bk or not bk.bids or not bk.asks:
                 continue
-            if age >= dump:
+            stop = False
+            if ex.get("stop_ticks"):  # stop-loss: the own side's mid fell stop_ticks below the average buy price –
+                held = mk.qty_yes if side == "yes" else mk.qty_no  # the move tends to go on, sell at the bid
+                avg = (mk.cost_yes if side == "yes" else mk.cost_no) / held if held > 1e-9 else 0.0
+                stop = (bk.best_bid + bk.best_ask) / 2 <= avg - float(ex["stop_ticks"]) * self.tick + 1e-9
+                if stop:
+                    self.scan["Stop-Loss ausgelöst"] = self.scan.get("Stop-Loss ausgelöst", 0) + 1
+            if age < after and not stop:
+                continue
+            if age >= dump or stop:
                 q = min(abs(net), bk.bids[0].size)
                 if self.gw is not None and self.gw.live:  # real: send a fill-and-kill sell after the resting ask is
                     # cancelled (sync_orders); booked only when the exchange reports the fill (apply_real_fills)

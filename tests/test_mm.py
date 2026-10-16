@@ -614,3 +614,28 @@ def test_fill_cooldown_stops_buying_into_the_move(tmp_path):
     mm.clock.sleep(3601)
     mm.step()
     assert mk.bid_yes  # an hour later: back in the book
+
+
+def test_stop_loss_sells_at_the_bid_and_fills_are_exported(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit=dict(after_h=24, stop_ticks=3, dump_after_h=96)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 30, NOW + 5))  # 30 YES bought at 0.48
+    mm.clock.sleep(10)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert abs(mk.qty_yes - 30) < 1e-9
+    _book(store, "a", 0.46, 0.50)  # mid 0.48: not 3 ticks below the 0.48 entry yet
+    mm.clock.sleep(10)
+    mm.step()
+    assert mk.qty_yes > 0
+    _book(store, "a", 0.43, 0.47)  # mid 0.45 = 3 ticks below: sold at the bid at once (well before after_h)
+    mm.clock.sleep(10)
+    mm.step()
+    assert mk.qty_yes < 1e-9 and mm.scan["Stop-Loss ausgelöst"] >= 1
+    mm.store.commit()
+    import dashboard
+    rows = dashboard.markout_rows(str(tmp_path / "scenario-mm_rewards.sqlite"))
+    assert rows and rows[0][2] == "Will the Fed cut rates?" and rows[0][4] == "JA" and rows[0][9] == 2.0

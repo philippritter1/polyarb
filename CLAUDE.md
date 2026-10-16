@@ -91,7 +91,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_schutz_neu, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
+Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_schutz_neu, mm_stop, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
 
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
@@ -158,6 +158,9 @@ Aktive Kandidaten im Live-Test:
   offen) = 30 % (breit/neu2/sofort) bis 77 % (mm_nah) der Rewards, mm_probe echt ~370 %. Echte Rewards > Schätzung.
 - `mm_schutz_neu` (ab 16.10.): wie `mm_schutz`, aber nur neue Märkte (`max_age_days: 3`, `min_liquidity: 0`) und
   `fill_cooldown_s: 3600` (nach Fill 60 Min. kein Gebot auf derselben Seite). Beides seit 16.10. auch in mm_probe (echt).
+- `mm_stop` (ab 16.10.): wie `mm_schutz_neu` plus Stop-Loss (`exit: stop_ticks: 3`: Mitte der gehaltenen Seite 3 Ticks
+  unter Einstand → zum Bid verkaufen). Export je Szenario jetzt auch `fills.csv` (jeder Fill: Markt, Kategorie, Abstand
+  zur Mitte, Tage bis Ende, Kursbewegung 5/60 Min.; Spalten ab 16.10., ältere Fills nur Preis/Menge/Kursbewegung).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

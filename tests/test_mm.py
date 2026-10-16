@@ -535,3 +535,54 @@ def test_pause_pulls_the_bids_after_a_fast_move(tmp_path):
     mm.clock.sleep(601)
     mm.step()
     assert mk.bid_yes  # quiet again: back in the book
+
+
+def test_learn_blocks_a_market_whose_fills_cost_more_than_its_rewards(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, learn=dict(min_fills=1, block_h=72)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 30, NOW + 5))  # 30 YES bought at 0.48
+    mm.clock.sleep(10)
+    mm.step()
+    _book(store, "a", 0.40, 0.44)  # the price falls: −1.80 $ markout, far more than the rewards of an hour
+    mm.clock.sleep(3601)
+    mm.step()
+    assert mm.blocked("a", mm.clock.now()) and "Fills kosteten" in mm._ledger["a"]["why"]
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes is None and mk.bid_no is None and mm._ledger["a"]["fills"] == 0  # fresh start afterwards
+    mm.select(mm.clock.now())
+    assert mm.scan["gelernt: gesperrt"] == 1 and "a" not in mm.quoted
+    # remembered across a restart, and the next block lasts twice as long
+    mm2 = MarketMaker("mm_rewards", _cfg(tmp_path, learn=dict(min_fills=1, block_h=72)),
+                      Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(mm.clock.now()), books=store, pool=None)
+    assert mm2.blocked("a", mm.clock.now()) and mm2._ledger["a"]["blocks"] == 1
+
+
+def test_learn_blocks_a_market_that_keeps_jumping(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, pause=dict(ticks=3, window_s=300, pause_s=60),
+                                        learn=dict(max_jumps=2, block_h=24)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    for i, (b, a) in enumerate([(0.48, 0.52), (0.52, 0.56), (0.48, 0.52), (0.52, 0.56)]):
+        _book(store, "a", b, a)
+        mm.step()
+        mm.clock.sleep(120)
+    assert mm.blocked("a", mm.clock.now()) and "Kurssprünge" in mm._ledger["a"]["why"]
+
+
+def test_microprice_and_pair_frac_shift_the_bids(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, fair="micro", pair_frac=0.25),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    store.snapshot("aY", [{"price": 0.48, "size": 50}], [{"price": 0.52, "size": 950}], NOW)  # sellers dominate
+    store.snapshot("aN", [{"price": 0.48, "size": 950}], [{"price": 0.52, "size": 50}], NOW)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes["price"] < 0.48 and mk.bid_no["price"] == 0.48  # YES bid moved down, NO stays at the mid's
+    _book(store, "a", 0.48, 0.52)
+    mk.qty_yes, mk.cost_yes = 30.0, 30 * 0.48  # holding YES: the NO bid comes closer, the pair stays below 1 $
+    mm.clock.sleep(10)
+    mm.step()
+    assert mk.bid_no["price"] == 0.49 and mk.bid_no["price"] + 0.48 < 1

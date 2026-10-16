@@ -91,7 +91,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
+Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
 
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
@@ -147,6 +147,11 @@ Aktive Kandidaten im Live-Test:
   angenommen = Überbuchen geht, „not enough balance“ = geht nicht; immer storniert. polymarket.com zeigte 15.10.
   „available to trade“ = volles Cash trotz ~56 $ offener Gebote (Hinweis, kein Beweis). **Test 15.10. 08:12: Überbuchen GEHT** –
   Testgebot 24,84 $ + offene 75,20 $ = 100,04 $ bei 82,97 $ Guthaben wurde angenommen (danach storniert).
+- `mm_schutz` (ab 16.10., nach MM-Recherche): wie `mm_ruhig`, dazu Finanz/Sport-Saison/Kursmärkte raus (`skip_re`),
+  `quote_frac: 0.7`, `fair: micro` (Gebot vom ungünstigeren Wert aus Mitte und Microprice), `pair_frac: 0.25` (bei Bestand
+  Gegenseite näher, Paar nie über 1 $) und **Selbstlernen** `learn:` (Tabelle `mm_ledger` je Markt: geschätzte Rewards +
+  Kursbewegung 60 Min. nach Fill; < 0 nach 2 Fills oder 3 Sprünge/24 h → 3 Tage gesperrt, Wiederholung doppelt; Scan
+  „gelernt: jetzt gesperrt“). learn/micro/pair_frac seit 16.10. auch in mm_probe (echt). Frage: Rewards − Markout > 0?
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

@@ -223,8 +223,15 @@ class MarketMaker:
         # filled by someone who knew better (adverse selection), the cost the rewards have to cover
         self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_markout(ts REAL, cid TEXT, token TEXT, side TEXT,
             price REAL, qty REAL, m5 REAL, m60 REAL)""")
-        self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m5=r[5]) for r in
-                         self.store.db.execute("SELECT rowid, ts, token, price, qty, m5 FROM mm_markout WHERE m60 IS NULL")]
+        self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m5=r[5], cid=r[6]) for r in
+                         self.store.db.execute("SELECT rowid, ts, token, price, qty, m5, cid FROM mm_markout WHERE m60 IS NULL")]
+        # learn (self-learning, 16.10.): per market the estimated rewards against the markout of our fills; a market
+        # whose fills cost more than it paid (or that keeps jumping) is blocked for a while, longer on each repeat
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_ledger(cid TEXT PRIMARY KEY, title TEXT, rew REAL, mo REAL,
+            fills INTEGER, jumps TEXT, blocked_until REAL, blocks INTEGER, why TEXT)""")
+        self._ledger: Dict[str, dict] = {r[0]: dict(title=r[1], rew=r[2], mo=r[3], fills=r[4], jumps=json.loads(r[5] or "[]"),
+                                                     blocked_until=r[6] or 0.0, blocks=r[7] or 0, why=r[8] or "")
+                                         for r in self.store.db.execute("SELECT * FROM mm_ledger")}
         self._mids: Dict[str, list] = {}    # pause: recent (ts, mid) per market
         self._paused: Dict[str, float] = {}  # pause: market -> no bids until
         self._dumps: list = []      # live: fill-and-kill sells of the exit, sent after the next gateway sync
@@ -280,6 +287,8 @@ class MarketMaker:
                 why = "Kategorie ausgelassen"
             elif skip_re and skip_re.search(_market_text(m)):
                 why = "Muster ausgelassen"  # skip_re: e.g. sport season markets, price thresholds
+            elif self.blocked(str(m.get("conditionId") or m.get("id")), now):
+                why = "gelernt: gesperrt"  # learn: this market cost more than it paid
             elif sc.get("max_min_size_usd") and size * max(float(prices[0]), 1 - float(prices[0])) \
                     > float(sc["max_min_size_usd"]):
                 why = "Mindestgröße zu groß"  # small quotes would not qualify for rewards there
@@ -379,7 +388,7 @@ class MarketMaker:
         tok = mk.yes if side == "yes" else mk.no
         cur = self.store.db.execute("INSERT INTO mm_markout VALUES(?,?,?,?,?,?,NULL,NULL)",
                                     (now, mk.cid, tok, side, price, qty))
-        self._markout.append(dict(rowid=cur.lastrowid, ts=now, token=tok, price=price, qty=qty, m5=None))
+        self._markout.append(dict(rowid=cur.lastrowid, ts=now, token=tok, price=price, qty=qty, m5=None, cid=mk.cid))
         self.st.cash -= cost
         if side == "yes":
             mk.qty_yes += qty
@@ -525,6 +534,45 @@ class MarketMaker:
             self.scan["echte Fills"] = self.scan.get("echte Fills", 0) + n
         return n
 
+    # ------------------------------------------------------------------ learn
+    def _ledger_of(self, cid: str) -> dict:
+        e = self._ledger.get(cid)
+        if e is None:
+            mk = self.st.markets.get(cid)
+            e = self._ledger[cid] = dict(title=mk.title if mk else "", rew=0.0, mo=0.0, fills=0, jumps=[],
+                                         blocked_until=0.0, blocks=0, why="")
+        return e
+
+    def _save_ledger(self, cid: str) -> None:
+        e = self._ledger[cid]
+        self.store.db.execute("INSERT OR REPLACE INTO mm_ledger VALUES(?,?,?,?,?,?,?,?,?)", (
+            cid, e["title"], round(e["rew"], 6), round(e["mo"], 6), e["fills"], json.dumps(e["jumps"]),
+            e["blocked_until"], e["blocks"], e["why"]))
+
+    def _learn_check(self, cid: str, now: float) -> None:
+        """Block a market whose fills cost more than its rewards (after min_fills fills), or that jumped
+        max_jumps times within 24 h. Block for block_h, doubled on every repeat; afterwards it starts afresh."""
+        lc, e = self.sc["learn"], self._ledger[cid]
+        e["jumps"] = [t for t in e["jumps"] if now - t <= DAY]
+        why = ""
+        if e["fills"] >= int(lc.get("min_fills", 2)) and e["rew"] + e["mo"] < -float(lc.get("min_loss_usd", 0)):
+            why = f"Fills kosteten {-e['mo']:.2f} $, Rewards {e['rew']:.2f} $"
+        elif lc.get("max_jumps") and len(e["jumps"]) >= int(lc["max_jumps"]):
+            why = f"{len(e['jumps'])} Kurssprünge in 24 h"
+        if why and now >= e["blocked_until"]:
+            e["blocks"] += 1
+            e["blocked_until"] = now + float(lc.get("block_h", 72)) * 3600 * 2 ** (e["blocks"] - 1)
+            e["why"] = why
+            e["rew"], e["mo"], e["fills"], e["jumps"] = 0.0, 0.0, 0, []  # a fresh start after the block
+            self.scan["gelernt: Märkte gesperrt"] = self.scan.get("gelernt: Märkte gesperrt", 0) + 1
+            log.info("%s: lernt – %s gesperrt bis %s (%s)", self.name, e["title"][:60],
+                     time.strftime("%d.%m. %H:%M", time.gmtime(e["blocked_until"])), why)
+        self._save_ledger(cid)
+
+    def blocked(self, cid: str, now: float) -> bool:
+        e = self._ledger.get(cid)
+        return bool(self.sc.get("learn")) and e is not None and now < e["blocked_until"]
+
     def update_markouts(self, now: float, books: Dict[str, OrderBook]) -> None:
         """Fill price vs. the token's mid 5 and 60 minutes later, times the shares (+ = the price rose after we
         bought). Books of dropped markets may be missing: such fills are given up after 2 hours."""
@@ -537,8 +585,13 @@ class MarketMaker:
                 m["m5"] = round((mid - m["price"]) * m["qty"], 4)
                 self.store.db.execute("UPDATE mm_markout SET m5=? WHERE rowid=?", (m["m5"], m["rowid"]))
             if mid is not None and age >= 3600:
-                self.store.db.execute("UPDATE mm_markout SET m60=? WHERE rowid=?",
-                                      (round((mid - m["price"]) * m["qty"], 4), m["rowid"]))
+                m60 = round((mid - m["price"]) * m["qty"], 4)
+                self.store.db.execute("UPDATE mm_markout SET m60=? WHERE rowid=?", (m60, m["rowid"]))
+                if self.sc.get("learn") and m.get("cid"):
+                    e = self._ledger_of(m["cid"])
+                    e["mo"] += m60
+                    e["fills"] += 1
+                    self._learn_check(m["cid"], now)
                 continue
             if age < 7200:
                 keep.append(m)
@@ -656,7 +709,7 @@ class MarketMaker:
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
             if (self.quoted is not None and mk.cid not in self.quoted) or not by or not by.bids or not by.asks \
-                    or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0:
+                    or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0 or self.blocked(mk.cid, now):
                 mk.bid_yes = mk.bid_no = None
                 if self.gw is not None and self.gw.live and by and by.bids and by.asks:
                     mk.mid = (by.best_bid + by.best_ask) / 2  # live: value held positions at the current book
@@ -672,6 +725,9 @@ class MarketMaker:
                 if max(ms) - min(ms) >= float(pz.get("ticks", 3)) * self.tick - 1e-9:
                     if now >= self._paused.get(mk.cid, 0):
                         self.scan["Pausen (schnelle Kursbewegung)"] = self.scan.get("Pausen (schnelle Kursbewegung)", 0) + 1
+                        if sc.get("learn"):
+                            self._ledger_of(mk.cid)["jumps"].append(now)
+                            self._learn_check(mk.cid, now)
                     self._paused[mk.cid] = now + float(pz.get("pause_s", 600))
                     self._mids[mk.cid] = [(now, mid)]
                 if now < self._paused.get(mk.cid, 0):
@@ -681,8 +737,23 @@ class MarketMaker:
                 mk.bid_yes = mk.bid_no = None  # book too wide to qualify: nobody to quote against
                 continue
             d = max(self.tick, mk.max_spread * frac)
-            want_yes = math.floor((mid - d) / self.tick + 1e-9) * self.tick
-            want_no = math.floor((1 - mid - d) / self.tick + 1e-9) * self.tick
+            fy, fn = mid, 1 - mid
+            if sc.get("fair") == "micro":  # book imbalance: much more size on the ask = the price is about to fall –
+                # each side bids from the lower of mid and microprice (still within the reward band around the mid)
+                bs, as_ = by.bids[0].size, by.asks[0].size
+                if bs + as_ > 0:
+                    micro = (by.best_bid * as_ + by.best_ask * bs) / (bs + as_)
+                    fy, fn = min(mid, micro), min(1 - mid, 1 - micro)
+            dy = dn = d
+            pf = sc.get("pair_frac")
+            if pf is not None:  # holding one side: bid the other side closer (a filled pair is worth 1 $ for sure),
+                # but never so high that the pair would cost more than 1 $
+                if mk.qty_yes > mk.qty_no + 1e-9:
+                    dn = max(self.tick, mk.max_spread * float(pf), mk.cost_yes / mk.qty_yes - mid + self.tick)
+                elif mk.qty_no > mk.qty_yes + 1e-9:
+                    dy = max(self.tick, mk.max_spread * float(pf), mk.cost_no / mk.qty_no - (1 - mid) + self.tick)
+            want_yes = math.floor((fy - dy) / self.tick + 1e-9) * self.tick
+            want_no = math.floor((fn - dn) / self.tick + 1e-9) * self.tick
             want_yes = min(want_yes, by.best_ask - self.tick)
             if bn and bn.asks:
                 want_no = min(want_no, bn.best_ask - self.tick)
@@ -774,6 +845,8 @@ class MarketMaker:
             if asks:
                 self.st.ask_rewards += mk.daily_rate * (full - base) * dt / DAY
             r = mk.daily_rate * share * dt / DAY
+            if self.sc.get("learn"):
+                self._ledger_of(mk.cid)["rew"] += r
             self.st.rewards += r
             self.st.rewards_unbooked += r
             self._acc["rew"] += r
@@ -880,6 +953,15 @@ class MarketMaker:
                 self.scan["Kursbewegung nach Fill 60 Min $"] = f"{m60 or 0:+.2f} ({n60} Fills)"
         except Exception:  # noqa
             pass
+        if self.sc.get("learn"):
+            for cid in list(self._ledger):
+                self._save_ledger(cid)  # rewards accrue every step: written with the equity row
+            now_b = [e for e in self._ledger.values() if now < e["blocked_until"]]
+            self.scan["gelernt: jetzt gesperrt"] = "; ".join(
+                f"{e['title'][:40]} bis {time.strftime('%d.%m. %H:%M', time.gmtime(e['blocked_until']))} UTC ({e['why']})"
+                for e in now_b) or "keiner"
+            live = [e for e in self._ledger.values() if e["fills"] or e["rew"]]
+            self.scan["gelernt: Bilanz offener Märkte $"] = round(sum(e["rew"] + e["mo"] for e in live), 2)
         scan = dict(self.scan, **{"Gebote aktiv": sum(bool(m.bid_yes) + bool(m.bid_no) for m in st.markets.values()),
                                   "Ausführungen": st.fills, "Spread/Auflösung $": round(st.realized, 2),
                                   "Rewards geschätzt $": round(st.rewards, 2), "Rebates $": round(st.rebates, 2),

@@ -265,7 +265,8 @@ scenarios:
     max_new_per_step: 10
     max_open_positions: 200
   wetter_no_maker:
-    enabled: true
+    enabled: false               # 16.10.: ausgelaufen (keine offenen Positionen) – archiviert
+    archive: true
     wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus
     title: Wetter-NO Maker
     strategy: band

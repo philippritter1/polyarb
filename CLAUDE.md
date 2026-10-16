@@ -195,6 +195,12 @@ Aktive Kandidaten im Live-Test:
   (Cockpit/admin „Handel seit Start“). Polymarket 15.10. 20:42: Portfolio 86,00 $, verfügbar 72,97 $, P/L 24 h −3,10 $.
   Rewards unter 1 $ STAPELN (Nutzer, laut polymarket.com): die 1,90 $ „Oct 16 Earnings“ enthalten die 0,19 $ vom 14.10.
   Auch die API-Tagessumme für den 15.10. (1,907 $) enthält sie offenbar – beim Vergleich echt/geschätzt nicht doppelt zählen.
+  **Nacht 15./16.: schwere Verluste.** Konto 76,48 $ bei 87 $ Einzahlung (−10,52 $), obwohl ~2,39 $ Rewards gezahlt wurden
+  (Cash-Sprung 02:08; API-Summe 15.10. = 2,48 $). Realisiert −11,22 $ aus wenigen Fills: Gebote, die nach schnellen Kurs-
+  sprüngen ÜBER der neuen Mitte standen (EWY: NEIN-Gebot 0,41 bei NEIN-Mitte 0,37 → −3,8 $; Florida Panthers (NHL-
+  Saisonmarkt, rutschte durch den Sport-Filter): JA 0,50 bei Mitte 0,385 → −2,6 $, NEIN 0,57 → −1,2 $; Wahlbeteiligung
+  −1,8 $; −1,8 $ Altposition). Finanzmärkte (EWY/SPY „hit … in October“) und Sport-Saisonmärkte sind gefährlich.
+  16.10.: wetter_no_maker archiviert (offen 0); ladder (offen 1, ohne Ergebnis) und sharp_fussball (offen 1) noch aktiv.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei
   Not-Aus, vielen Ablehnungen, wenig Scoring, stummem Order-Modul.

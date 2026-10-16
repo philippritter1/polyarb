@@ -224,6 +224,10 @@ def test_exchange_rejection_is_logged_once_and_daily_loss_switches_everything_of
     # cash falls by 25 $ (> 20 $ limit) within the day: off for everyone, all cancelled at the exchange
     ex.cash = 275.0
     gw.sync(NOW + 400, {("A", "BUY"): (0.48, 50, "A JA")})
+    assert read_mode(str(tmp_path / "live.json")) != "off" and ("A", "BUY") in gw.orders  # one read is not enough
+    gw.sync(NOW + 430, {("A", "BUY"): (0.48, 50, "A JA")})
+    assert read_mode(str(tmp_path / "live.json")) != "off"  # re-read only after 60 s
+    gw.sync(NOW + 461, {("A", "BUY"): (0.48, 50, "A JA")})
     assert read_mode(str(tmp_path / "live.json")) == "off" and not gw.orders and ("cancel_all",) in ex.calls
     assert "Tagesverlust" in json.loads((tmp_path / "live.json").read_text())["why"]
 
@@ -594,4 +598,16 @@ def test_a_deposit_does_not_hide_the_days_losses(tmp_path):
     gw.sync(NOW + 400, {})
     ex.cash = 80.0  # −6 $ since the deposit: over the 5 $ limit although 80 > the morning's 10
     gw.sync(NOW + 800, {})
+    gw.sync(NOW + 861, {})  # confirmed on the second read
     assert read_mode(str(tmp_path / "live.json")) == "off"
+
+
+def test_a_single_bad_account_read_does_not_trigger_the_emergency_stop(tmp_path):
+    ex = FakeExchange(cash=66.48)
+    vals = iter([10.0, 0.0, 10.0, 10.0])  # 16.10.: positions once read as 0 $ although 10 $ were held
+    gw, _ = _live(tmp_path, ex, max_daily_loss_usd=5, deposits_usd=87)
+    gw._value_fn = lambda user: next(vals)
+    gw.sync(NOW, {})
+    gw.sync(NOW + 400, {})  # 66.48 < 76.48 − 5, but only once
+    gw.sync(NOW + 461, {})  # re-read: 76.48 again
+    assert read_mode(str(tmp_path / "live.json")) != "off" and gw._breach is False

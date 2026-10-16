@@ -92,6 +92,7 @@ class Gateway:
         self._geo_fn, self._value_fn = geo or geoblock, value or account_value
         self._geo: Optional[dict] = None
         self._last = dict(geo=-1e18, reconcile=-1e18, equity=-1e18, scoring=-1e18, rewards="")
+        self._breach = False  # daily loss limit exceeded on the last read, waiting for a confirming one
         self.info: dict = {}
         self.est: Dict[str, dict] = {}  # set by the strategy: condition id -> {q, rate, pct} (our estimated share)
         self.day_path = status_path.replace("live-status-", "live-day-")
@@ -245,10 +246,16 @@ class Gateway:
                          deposits=self.deposits, pnl_total=round(eq - self.deposits, 2) if self.deposits else None)
         if eq < d["start"] - self.max_loss:
             why = f"Tagesverlust {d['start'] - eq:.2f} $ > {self.max_loss:.0f} $"
+            if not self._breach:  # one bad read (16.10.: positions read as 0 $) must not stop everything: re-read in 60 s
+                self._breach = True
+                self._last["equity"] = now - 240
+                log.warning("%s: %s (Cash %.2f + Positionen %.2f) – prüfe in 60 s erneut", self.name, why, cash, pos)
+                return True
             log.error("%s: %s – Not-Aus", self.name, why)
             write_mode(self.mode_path, "off", why)
             self._stop_all(now, why)
             return False
+        self._breach = False
         return True
 
     def _stop_all(self, now: float, why: str) -> None:

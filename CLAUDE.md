@@ -200,6 +200,9 @@ Aktive Kandidaten im Live-Test:
   sprüngen ÜBER der neuen Mitte standen (EWY: NEIN-Gebot 0,41 bei NEIN-Mitte 0,37 → −3,8 $; Florida Panthers (NHL-
   Saisonmarkt, rutschte durch den Sport-Filter): JA 0,50 bei Mitte 0,385 → −2,6 $, NEIN 0,57 → −1,2 $; Wahlbeteiligung
   −1,8 $; −1,8 $ Altposition). Finanzmärkte (EWY/SPY „hit … in October“) und Sport-Saisonmärkte sind gefährlich.
+  16.10. 07:02 MESZ **falscher Not-Aus**: data-api /value lieferte einmal 0 $ Positionen (echt 20 Panthers-NEIN = 10 $),
+  Konto also 66,48 statt 76,48 $ → „Tagesverlust 16,80 $“. Behoben: Not-Aus erst, wenn ein zweites Lesen 60 s später
+  das Limit ebenfalls zeigt. Echter Tagesverlust zu dem Zeitpunkt ≈ −6,80 $ (Polymarket: 1D −12,54 $ inkl. Nacht).
   16.10.: wetter_no_maker archiviert (offen 0); ladder (offen 1, ohne Ergebnis) und sharp_fussball (offen 1) noch aktiv.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei

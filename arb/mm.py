@@ -234,6 +234,7 @@ class MarketMaker:
                                          for r in self.store.db.execute("SELECT * FROM mm_ledger")}
         self._mids: Dict[str, list] = {}    # pause: recent (ts, mid) per market
         self._paused: Dict[str, float] = {}  # pause: market -> no bids until
+        self._cool: Dict[tuple, float] = {}  # fill_cooldown_s: (market, side) -> no new bid on that side until
         self._dumps: list = []      # live: fill-and-kill sells of the exit, sent after the next gateway sync
         self._mismatch: dict = {}   # live: account differences seen at the last read (corrected if they persist)
         self.gw = None  # order gateway (arb/orders.py): mirrors the quotes at pilot size, dry run only for now
@@ -414,6 +415,8 @@ class MarketMaker:
             mk.cost_no += cost
         q["size"] -= qty
         self.st.fills += 1
+        if self.sc.get("fill_cooldown_s"):  # the price tends to keep moving after a fill (markout 60 min ≈ 2 x 5 min):
+            self._cool[(mk.cid, side)] = now + float(self.sc["fill_cooldown_s"])  # don't buy more into the move
         taker_fee = mk.fee_rate * (price * (1 - price)) ** mk.fee_exp * qty
         rebate = taker_fee * REBATE_SHARE.get(mk.category, 0.25)
         self.st.rebates += rebate
@@ -778,8 +781,9 @@ class MarketMaker:
                 cur = mk.bid_yes if side == "yes" else mk.bid_no
                 long_this = (side == "yes" and mk.qty_yes > mk.qty_no) or (side == "no" and mk.qty_no > mk.qty_yes)
                 short_this = (side == "yes" and mk.qty_yes < mk.qty_no) or (side == "no" and mk.qty_no < mk.qty_yes)
-                if price < self.tick or (long_this and abs(net) >= max_inv) or (over and not short_this):
-                    new = None  # skew: stop buying the side we already hold too much of
+                if price < self.tick or (long_this and abs(net) >= max_inv) or (over and not short_this) \
+                        or now < self._cool.get((mk.cid, side), 0):
+                    new = None  # skew: stop buying the side we already hold too much of (or just got filled on)
                 else:
                     size = max(mk.min_size, math.floor(usd / price))
                     if cur and abs(cur["price"] - price) < 1e-9 and cur["size"] > 0:

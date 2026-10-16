@@ -598,3 +598,19 @@ def test_list_orders_merge_several_listings(tmp_path):
                      SimClock(NOW), books=BookStore(), pool=None)
     mm.select(NOW)
     assert mm.scan["gelistet"] == 2 and sorted(mm.st.markets) == ["a", "b"]
+
+
+def test_fill_cooldown_stops_buying_into_the_move(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, fill_cooldown_s=3600), Client([_m("a", "Will the Fed cut rates?", 0.50)]),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 500, NOW + 5))  # our YES bid filled completely
+    mm.clock.sleep(10)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.qty_yes > 0 and mk.bid_yes is None and mk.bid_no  # no new YES bid, NO side still quoted
+    mm.clock.sleep(3601)
+    mm.step()
+    assert mk.bid_yes  # an hour later: back in the book

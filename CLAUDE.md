@@ -91,7 +91,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
+Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_neu, mm_neu2, mm_abbau, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_schutz_neu, mm_pilot, mm_probe) plus Studie/Kalshi-Studie.
 
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,
@@ -152,6 +152,12 @@ Aktive Kandidaten im Live-Test:
   Gegenseite näher, Paar nie über 1 $) und **Selbstlernen** `learn:` (Tabelle `mm_ledger` je Markt: geschätzte Rewards +
   Kursbewegung 60 Min. nach Fill; < 0 nach 2 Fills oder 3 Sprünge/24 h → 3 Tage gesperrt, Wiederholung doppelt; Scan
   „gelernt: jetzt gesperrt“). learn/micro/pair_frac seit 16.10. auch in mm_probe (echt). Frage: Rewards − Markout > 0?
+- **Datenauswertung 16.10.** (alle MM seit 11.10.): Rewards je $ im Buch/Tag in neuen Märkten (< 3 Tage, mm_sofort &
+  Co.) ~15–22 %, breite Auswahl (mm_breit, mm_pilot, mm_probe) ~2 % – mm_pilot verliert auch in der Sim. Kursbewegung 60 Min.
+  nach Fill ≈ 2x 5 Min. (Kurs läuft weiter gegen uns). Offener Bestand 10–25 % unter Einstand; Handel gesamt (realisiert +
+  offen) = 30 % (breit/neu2/sofort) bis 77 % (mm_nah) der Rewards, mm_probe echt ~370 %. Echte Rewards > Schätzung.
+- `mm_schutz_neu` (ab 16.10.): wie `mm_schutz`, aber nur neue Märkte (`max_age_days: 3`, `min_liquidity: 0`) und
+  `fill_cooldown_s: 3600` (nach Fill 60 Min. kein Gebot auf derselben Seite). Beides seit 16.10. auch in mm_probe (echt).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

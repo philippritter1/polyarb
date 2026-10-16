@@ -71,6 +71,20 @@ def test_selection_skips_sport_short_extreme_and_unrewarded(tmp_path):
     assert mm.scan["Kategorie ausgelassen"] == 1 and mm.scan["endet zu bald"] == 1
 
 
+
+def test_skip_re_drops_season_and_price_markets_also_via_the_event(tmp_path):
+    import yaml
+    probe = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]["mm_probe"]
+    ms = [_m("a", "Will the Fed cut rates in December?", 0.40),
+          _m("b", "Will the Florida Panthers record 100+ points?", 0.40),
+          _m("c", "Will the Ornn A100 Index be between $0.75 and $1.00 on November 30?", 0.40),
+          _m("d", "Will Smith finish top 3?", 0.40, events=[{"title": "NHL Awards", "slug": "nhl-awards"}]),
+          _m("e", "Will Anthropic's IPO occur in November?", 0.40)]
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, skip_re=probe["skip_re"]), Client(ms), SimClock(NOW),
+                     books=BookStore(), pool=None)
+    mm.select(NOW)
+    assert sorted(mm.st.markets) == ["a", "e"] and mm.scan["Muster ausgelassen"] == 3
+
 def test_quotes_fill_strictly_merge_and_earn_rewards(tmp_path):
     store = BookStore()
     mm = MarketMaker("mm_rewards", _cfg(tmp_path), Client([_m("a", "Will the Fed cut rates?", 0.50)]),

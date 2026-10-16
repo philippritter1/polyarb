@@ -203,6 +203,9 @@ Aktive Kandidaten im Live-Test:
   16.10. 07:02 MESZ **falscher Not-Aus**: data-api /value lieferte einmal 0 $ Positionen (echt 20 Panthers-NEIN = 10 $),
   Konto also 66,48 statt 76,48 $ → „Tagesverlust 16,80 $“. Behoben: Not-Aus erst, wenn ein zweites Lesen 60 s später
   das Limit ebenfalls zeigt. Echter Tagesverlust zu dem Zeitpunkt ≈ −6,80 $ (Polymarket: 1D −12,54 $ inkl. Nacht).
+  16.10. Nutzer: mm_probe meidet jetzt Finanz (`skip_categories`), Sport-Saison- und Kursmärkte (neue Option `skip_re`:
+  Regex auf Frage/Slug/Event-Titel, Scan „Muster ausgelassen“) und pausiert nach Kurssprüngen (`pause:` wie mm_ruhig).
+  Rest-Bestand 20 Panthers-NEIN bekommt im Echtbetrieb weiter ein Verkaufsgebot (Treppe zur Mitte).
   16.10.: wetter_no_maker archiviert (offen 0); ladder (offen 1, ohne Ergebnis) und sharp_fussball (offen 1) noch aktiv.
   Im echten Modus kommen Bestand/Cash aus den echten Fills (`apply_real_fills`, `own_fills` liest Maker-Seite aus
   maker_orders), echte Rewards je UTC-Tag stehen neben der Schätzung (Dashboard-Karte, 4-h-Bericht), Push-Alarme bei

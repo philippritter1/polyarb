@@ -25,6 +25,7 @@ inventory waits for resolution – capital sits idle, possibly for weeks, and ea
 """
 from __future__ import annotations
 
+import re
 import json
 import logging
 import math
@@ -41,6 +42,15 @@ from .storage import Store
 log = logging.getLogger("polyarb.mm")
 DAY = 86_400
 REBATE_SHARE = {"Sport": 0.15, "Krypto": 0.20}  # rest: 0.25
+
+
+def _market_text(m: dict) -> str:
+    """Question, slug and the event titles/slugs of a Gamma market – what skip_re is matched against."""
+    parts = [m.get("question"), m.get("slug"), m.get("groupItemTitle")]
+    for e in m.get("events") or []:
+        if isinstance(e, dict):
+            parts += [e.get("title"), e.get("slug"), e.get("seriesSlug"), e.get("ticker")]
+    return " ".join(str(x) for x in parts if x)
 
 
 @dataclass
@@ -239,6 +249,7 @@ class MarketMaker:
         skip = set(sc.get("skip_categories", ["Sport", "Krypto"]))
         lo, hi = float(sc.get("min_mid", 0.15)), float(sc.get("max_mid", 0.85))
         max_age = sc.get("max_age_days")
+        skip_re = re.compile("|".join(f"(?:{r})" for r in sc["skip_re"]), re.I) if sc.get("skip_re") else None
         params = {"active": "true", "closed": "false", "liquidity_num_min": sc.get("min_liquidity", 1000),
                   "order": "volume", "ascending": "false"}
         if max_age:
@@ -267,6 +278,8 @@ class MarketMaker:
                 why = "endet zu bald"
             elif categorize(m) in skip:
                 why = "Kategorie ausgelassen"
+            elif skip_re and skip_re.search(_market_text(m)):
+                why = "Muster ausgelassen"  # skip_re: e.g. sport season markets, price thresholds
             elif sc.get("max_min_size_usd") and size * max(float(prices[0]), 1 - float(prices[0])) \
                     > float(sc["max_min_size_usd"]):
                 why = "Mindestgröße zu groß"  # small quotes would not qualify for rewards there

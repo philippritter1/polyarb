@@ -619,7 +619,21 @@ scenarios:
     prefilter: 120
     max_min_size_usd: 12         # Reward-Mindestgröße auf der teureren Seite bis 12 $
     min_daily_rate: 5
-    skip_categories: [Sport, Krypto]
+    skip_categories: [Sport, Krypto, Finanz]   # 16.10. Nutzer: Finanz dazu (EWY/SPY „hit … in October“ −3,8 $)
+    skip_re:                     # 16.10. Nutzer: Sport-Saison- und Kursmärkte meiden (dort kamen die echten Verluste)
+      - '\b(nhl|nba|nfl|mlb|wnba|mls|ncaa|ufc|nascar|f1|formula 1|premier league|la liga|bundesliga|serie a|ligue 1)\b'
+      - '\b(champions league|europa league|stanley cup|super bowl|world series|world cup|playoffs?|mvp|grand prix)\b'
+      - '\b(pga|atp|wta|heisman|ballon d.or|rookie of the year|conference finals?|regular season|championship)\b'
+      - '\b\d+\+ ?(points|wins|goals|touchdowns|games)\b|\brecord \d+'
+      - '\b(panthers|maple leafs|bruins|rangers|oilers|canucks|flames|avalanche|lightning|capitals|penguins|blackhawks)\b'
+      - '\b(lakers|celtics|warriors|knicks|bucks|nuggets|76ers|mavericks|cavaliers|thunder|timberwolves|clippers)\b'
+      - '\b(chiefs|eagles|cowboys|49ers|packers|ravens|bills|steelers|patriots|lions|bengals|dolphins|yankees|dodgers)\b'
+      - '\b(hit|above|below|between|reach|close[sd]?|dip|high|low)\b[^?]*\$\d'   # Kurs-/Preisschwellen
+      - '\b(etf|index|s&p|nasdaq|dow|spy|qqq|stock|shares?)\b'
+    pause:                       # 16.10. Nutzer: wie mm_ruhig – nach Kurssprung 10 Min. keine Gebote
+      ticks: 3
+      window_s: 300
+      pause_s: 600
     min_days_to_end: 14          # 15.10. Nutzer: nachrichtenträchtige Märkte meiden (Ereignis „bis 20.10.“, Wahlbeteiligung –
                                  # dort kam der echte Verlust −1,80 $); nur Märkte, die frühestens in 2 Wochen enden
     stop_hours_before_end: 24

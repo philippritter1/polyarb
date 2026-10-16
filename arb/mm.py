@@ -261,7 +261,21 @@ class MarketMaker:
                   "order": "volume", "ascending": "false"}
         if max_age:
             params["start_date_min"] = _iso(now - float(max_age) * DAY)
-        markets = self.client.paged("/markets", params, max_items=int(sc.get("max_listed", 2000)))
+        # Gamma pages only up to offset 2000: for more, several listings in other orders are merged (list_orders)
+        markets, seen_ids = [], set()
+        for order in sc.get("list_orders") or [params["order"]]:
+            asc = order in ("endDate",)
+            try:
+                page = self.client.paged("/markets", dict(params, order=order, ascending=str(asc).lower()),
+                                         max_items=int(sc.get("max_listed", 2000)))
+            except Exception as e:  # noqa – one listing failing must not stop the selection
+                log.warning("%s: Liste nach %s nicht lesbar (%s)", self.name, order, type(e).__name__)
+                continue
+            for m in page:
+                key = m.get("conditionId") or m.get("id")
+                if key not in seen_ids:
+                    seen_ids.add(key)
+                    markets.append(m)
         from .study import categorize
         st = {"gelistet": len(markets)}
         cands = []

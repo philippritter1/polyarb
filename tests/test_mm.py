@@ -586,3 +586,15 @@ def test_microprice_and_pair_frac_shift_the_bids(tmp_path):
     mm.clock.sleep(10)
     mm.step()
     assert mk.bid_no["price"] == 0.49 and mk.bid_no["price"] + 0.48 < 1
+
+
+def test_list_orders_merge_several_listings(tmp_path):
+    class C(Client):
+        def paged(self, path, params, max_items=1000):
+            return [m for m in self.markets if m["order"] == params["order"]]
+    a = dict(_m("a", "Will the Fed cut rates?", 0.40), order="volume")
+    b = dict(_m("b", "Will the ECB cut rates?", 0.40), order="liquidity")
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, list_orders=["volume", "liquidity"]), C([a, b, dict(a, order="liquidity")]),
+                     SimClock(NOW), books=BookStore(), pool=None)
+    mm.select(NOW)
+    assert mm.scan["gelistet"] == 2 and sorted(mm.st.markets) == ["a", "b"]

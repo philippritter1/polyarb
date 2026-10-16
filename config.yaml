@@ -539,6 +539,8 @@ scenarios:
     fair: micro
     pair_frac: 0.25
     rank: share
+    list_orders: [volume, liquidity, volume24hr, startDate]   # 16.10. Nutzer: mehr Märkte durchsuchen – Gamma liefert je
+                                 # Liste max. 2.000, darum 4 Sortierungen zusammengeführt (mit den Filtern blieben ~1–3)
     prefilter: 120
     min_liquidity: 1000
     capital_usd: 2500
@@ -668,6 +670,8 @@ scenarios:
     capital_usd: 60
     max_markets: 4               # 15.10.: Nutzer hat ~76 $ eingezahlt (Konto ~88 $) – 4 Märkte, max. 85 $ in Orders
     rank: share
+    list_orders: [volume, liquidity, volume24hr, startDate]   # 16.10. Nutzer: mehr Märkte durchsuchen – Gamma liefert je
+                                 # Liste max. 2.000, darum 4 Sortierungen zusammengeführt (mit den Filtern blieben ~1–3)
     prefilter: 120
     max_min_size_usd: 12         # Reward-Mindestgröße auf der teureren Seite bis 12 $
     min_daily_rate: 5

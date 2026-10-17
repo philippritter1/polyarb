@@ -350,7 +350,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_neu:
-    enabled: true
+    enabled: false               # 17.10. Nutzer: beendet, Frage beantwortet (Datenauswertung 16.10.)
+    archive: true
     title: Market Making (neue Märkte)
     strategy: mm                 # wie mm_rewards (arb/mm.py), aber (07.10.):
     # nur Märkte, die in den letzten 3 Tagen gestartet sind (früh = wenig Konkurrenz um den Reward-Pool), und
@@ -373,7 +374,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_neu2:
-    enabled: true
+    enabled: false               # 17.10. Nutzer: beendet, Frage beantwortet (Datenauswertung 16.10.)
+    archive: true
     title: Market Making (neue Märkte 2)
     strategy: mm                 # 12.10.: wie mm_neu, frisch gestartet – mm_neu ist durch den Fehler bis 10.10.
     # mit ~3.800 $ Altbestand blockiert (kaum Cash für Gebote) und läuft daneben weiter. Neu: Bestandsgrenze
@@ -397,7 +399,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_abbau:
-    enabled: true
+    enabled: false               # 17.10. Nutzer: beendet, Frage beantwortet (Datenauswertung 16.10.)
+    archive: true
     title: Market Making (Bestandsabbau)
     strategy: mm                 # 14.10.: wie mm_neu2 (neue Märkte, Bestandsgrenze), plus aktiver Bestandsabbau –
     # sonst sitzt das Kapital in einseitigen Positionen fest (Wochen bis Monate bis zur Auflösung) und bietet nicht.
@@ -750,7 +753,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_pilot:
-    enabled: true
+    enabled: false               # 17.10. Nutzer: beendet, Frage beantwortet (Datenauswertung 16.10.)
+    archive: true
     title: Market Making (Pilot)
     strategy: mm                 # 14.10.: Pilot für echtes Geld – Logik wie mm_breit, in genau der Pilotgröße, damit
     # Simulation und echte Orders 1:1 vergleichbar sind; mit Bestandsabbau. Echte Orders erst, wenn allow_real

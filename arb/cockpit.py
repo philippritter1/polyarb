@@ -45,8 +45,10 @@ def scenario_numbers(db_path: str, start: float, scan: dict) -> Optional[dict]:
                          (last[0] - 3 * 86400,)).fetchone()
         try:
             mk = db.execute("SELECT COUNT(m60), SUM(m60), COUNT(m5), SUM(m5) FROM mm_markout").fetchone()
+            filled = db.execute("SELECT COALESCE(SUM(price * qty), 0) FROM mm_markout WHERE ts >= ?",
+                                (first[0],)).fetchone()[0]
         except sqlite3.OperationalError:
-            mk = (0, None, 0, None)
+            mk, filled = (0, None, 0, None), 0.0
         fills = db.execute("SELECT COUNT(*) FROM executions WHERE ts >= ? AND matched_qty > 0", (first[0],)).fetchone()[0]
     except sqlite3.OperationalError:
         return None
@@ -61,7 +63,7 @@ def scenario_numbers(db_path: str, start: float, scan: dict) -> Optional[dict]:
                 ret=net / start if start else 0.0, curve=[(t, (e - base) / start if start else 0) for t, e in curve],
                 est_rew_day=met[0] if met else None, share=met[1] if met else None, fills=fills,
                 trade_per_rew=(trading / rew) if rew > 0 else None, inv=inv, inv_pct=inv / start if start else None,
-                m60=mk[1] if mk and mk[0] else None, m60_n=mk[0] if mk else 0, start_ts=first[0])
+                m60=mk[1] if mk and mk[0] else None, m60_n=mk[0] if mk else 0, start_ts=first[0], filled=filled)
 
 
 def live_numbers(data_dir: Path) -> Optional[dict]:
@@ -84,6 +86,8 @@ def live_numbers(data_dir: Path) -> Optional[dict]:
                 if out.get("today") is None:  # older status files: only the markets quoted right now
                     out["today"] = r[0]
             out["paid"] = db.execute("SELECT day, usd FROM live_rewards ORDER BY day DESC LIMIT 7").fetchall()
+            out["paid_total"] = db.execute("SELECT COALESCE(SUM(usd), 0) FROM live_rewards").fetchone()[0]
+            out["filled"] = db.execute("SELECT COALESCE(SUM(price * qty), 0) FROM mm_markout").fetchone()[0]
         except sqlite3.OperationalError:
             pass
         finally:
@@ -150,6 +154,42 @@ def _spark(curve: List[tuple], ret: float) -> str:
 def short(label: str) -> str:
     """"Market Making (breit)" -> "breit": the page is all market making anyway."""
     return label[len("Market Making ("):-1] if label.startswith("Market Making (") and label.endswith(")") else label
+
+
+def calibration_card(rows: List[dict], live: Optional[dict]) -> str:
+    """Everything per 1 $ that was filled – comparable between the simulation and the real probe. "kalibriert":
+    the simulation's rewards, but each filled $ costing as much as it really did in the probe (16.10.)."""
+    real = None
+    if live and (live.get("filled") or 0) > 20 and live.get("pnl_total") is not None:
+        real_rew = float(live.get("paid_total") or 0) + float(live.get("today") or 0)
+        real = dict(filled=live["filled"], rew=real_rew, trade=live["pnl_total"] - real_rew)
+        real["trade_rate"] = real["trade"] / real["filled"]
+    sim = [r for r in rows if (r["n"].get("filled") or 0) > 20 and r["key"] != "mm_probe"]
+    if not sim and not real:
+        return ""
+    th = ("<tr><th>Szenario</th><th class='num'>gefüllt $</th><th class='num'>Rewards je 1 $ gefüllt</th>"
+          "<th class='num'>Handel je 1 $ gefüllt</th><th class='num'>Kurs 60 Min. je 1 $</th>"
+          "<th class='num'>netto $/Tag kalibriert</th></tr>")
+    trs = ""
+    if real:
+        trs += (f"<tr><td><b>Echt (Generalprobe)</b></td><td class='num'>{_de(real['filled'], 0)}</td>"
+                f"<td class='num'>{_de(real['rew'] / real['filled'] * 100, 1)} %</td>"
+                f"<td class='num neg'>{_de(real['trade_rate'] * 100, 1, sign=True)} %</td><td class='num'>–</td>"
+                f"<td class='num'>–</td></tr>")
+    for r in sorted(sim, key=lambda r: -(r["n"]["rewards"] / r["n"]["filled"])):
+        n = r["n"]
+        cal = (n["rewards"] + n["filled"] * real["trade_rate"]) / n["days"] if real else None
+        trs += (f"<tr><td><a href='../{r['key']}/'>{html.escape(r['label'])}</a></td><td class='num'>{_de(n['filled'], 0)}</td>"
+                f"<td class='num'>{_de(n['rewards'] / n['filled'] * 100, 1)} %</td>"
+                f"<td class='num {'neg' if n['trading'] < 0 else 'pos'}'>{_de(n['trading'] / n['filled'] * 100, 1, sign=True)} %</td>"
+                f"<td class='num'>{'–' if n['m60'] is None else _de(n['m60'] / n['filled'] * 100, 1, sign=True) + ' %'}</td>"
+                f"<td class='num {'' if cal is None else 'pos' if cal > 0 else 'neg'}'>"
+                f"{'–' if cal is None else _de(cal, 1, sign=True)}</td></tr>")
+    return ('<div class="card"><h2>Vergleich je 1 $ gefüllt – Simulation an echt kalibriert</h2><p class="note">'
+            'Alles je Dollar, der ausgeführt wurde – so sind kleine echte und große simulierte Gebote vergleichbar. '
+            '„Handel“ = realisiert + Wertänderung des Bestands. „netto kalibriert“: Rewards der Simulation, aber jeder '
+            'gefüllte Dollar kostet so viel wie echt in der Generalprobe. Positiv = trägt auch unter echten Bedingungen.</p>'
+            f'<div class="tblwrap"><table>{th}{trs}</table></div></div>')
 
 
 def page_body(scen: List[dict], live: Optional[dict]) -> str:
@@ -221,6 +261,7 @@ def page_body(scen: List[dict], live: Optional[dict]) -> str:
                      '„Handel je 1 $ Rewards“: wie viel des Reward-Ertrags der Handel kostet (−0,50 = die Hälfte). '
                      '„Kurs 60 Min. nach Fill“: negativ = von Besserinformierten getroffen (Messung ab 15.10.).</p>'
                      f'<div class="tblwrap"><table>{th}{trs}</table></div></div>')
+    parts.append(calibration_card(rows, live))
     if not parts:
         parts.append("<p class='note'>Noch keine Daten.</p>")
     parts.append(f'<p class="note">Stand {time.strftime("%d.%m. %H:%M")}</p>')

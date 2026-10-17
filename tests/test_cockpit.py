@@ -32,3 +32,13 @@ def test_cockpit_splits_rewards_and_trading_and_renders(tmp_path):
     body = cockpit.page_body([dict(key="a", label="MM A", n=n), dict(key="b", label="MM B", n=None)], live)
     assert "Woher kommt das Ergebnis?" in body and "MM A" in body and "MM B" not in body
     assert "84,60 $" in body and "<svg" in body and "−0,25" in body and "var(--s2)" in body
+
+
+def test_calibration_card_compares_per_filled_dollar():
+    from arb.cockpit import calibration_card
+    rows = [dict(key="mm_sofort", label="sofort", n=dict(filled=1500.0, rewards=900.0, trading=-170.0, m60=-110.0, days=2.5))]
+    live = dict(filled=121.0, pnl_total=-23.7, paid_total=2.67, today=2.84)
+    out = calibration_card(rows, live)
+    real_rate = (-23.7 - 5.51) / 121.0
+    assert "Echt (Generalprobe)" in out and "sofort" in out
+    assert f"{(900 + 1500 * real_rate) / 2.5:+.1f}".replace(".", ",") in out

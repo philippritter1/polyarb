@@ -161,6 +161,12 @@ Aktive Kandidaten im Live-Test:
 - `mm_stop` (ab 16.10.): wie `mm_schutz_neu` plus Stop-Loss (`exit: stop_ticks: 3`: Mitte der gehaltenen Seite 3 Ticks
   unter Einstand → zum Bid verkaufen). Export je Szenario jetzt auch `fills.csv` (jeder Fill: Markt, Kategorie, Abstand
   zur Mitte, Tage bis Ende, Kursbewegung 5/60 Min.; Spalten ab 16.10., ältere Fills nur Preis/Menge/Kursbewegung).
+- **Generalprobe beendet 16.10. 18:45 (Not-Aus, Tagesverlust 12,21 $)**, Nutzer hat die Restpositionen am 17.10. selbst
+  verkauft; Modus „Aus“. Bilanz: −23,73 $ bei 87 $ Einzahlung, echte Rewards ~5,50 $, Handel ~−29 $ auf ~121 $ gefüllt.
+  Kalibrierung 17.10. (fills.csv): Kurs 60 Min. je 1 $ gefüllt echt −9,2 % vs. Sim mm_sofort −7,5 % (ähnlich!), Handel
+  gesamt echt ~−24 % vs. Sim ~−11 % je 1 $ gefüllt; der große Unterschied sind die Rewards je 1 $ gefüllt: echt ~4,5 %,
+  mm_sofort ~59 % (Marktauswahl!). Cockpit-Karte „Vergleich je 1 $ gefüllt – kalibriert“ rechnet jedes Szenario mit dem
+  echten Handelsverlust je $ (`calibration_card` in arb/cockpit.py).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

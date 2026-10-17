@@ -354,6 +354,10 @@ class MarketMaker:
         for b in ("< 3 T", "3–14 T", "14–60 T", "> 60 T"):
             n, tot, top = pools.get(b, (0, 0.0, 0.0))
             st[f"Reward-Töpfe {b}"] = f"{n} Märkte, {tot:.0f} $/Tag, Ø {tot / n if n else 0:.0f}, max {top:.0f}"
+        for k in ("Stop-Loss ausgelöst", "Pausen (schnelle Kursbewegung)", "gelernt: Märkte gesperrt", "echte Fills",
+                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt"):
+            if k in self.scan:  # running counters: keep them across the half-hourly selection (until 17.10. reset)
+                st[k] = self.scan[k]
         self.scan = st
         if self.pool is not None:
             self.pool.set_assets([t for m in chosen.values() for t in (m.yes, m.no)])

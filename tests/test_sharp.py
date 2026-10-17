@@ -113,3 +113,24 @@ def test_without_key_nothing_is_called(tmp_path, monkeypatch):
     (tmp_path / "secrets.env").write_text("ODDS_API_KEY=abc123\n")
     s.candidates(NOW)
     assert s.feed is not None and s.feed.key == "abc123" and any(c.endswith("/events") for c in cl.calls)
+
+
+def test_sharp2_time_window_and_the_no_side(tmp_path, monkeypatch):
+    monkeypatch.setenv("ODDS_API_KEY", "test")
+
+    def cfg(sub, **kw):
+        return {"storage": {"db_path": str(tmp_path / sub / "polyarb.sqlite")},
+                "execution": {"latency_ms": 0, "depth_haircut": 1.0, "respect_market_delay": False},
+                "scenarios": {"sharp": dict(strategy="sharp", capital_usd=500, min_edge=0.05, max_position_usd=20,
+                                            leagues=["soccer_epl"], min_hours_to_start=1, **kw)}}
+    # kick-off 18:00, now 14:13 = 3.8 h ahead: outside a 3-h window, inside the 6-h one
+    eng = ScenarioEngine("sharp", cfg("a", max_hours_to_start=3), Client(pm_yes=0.40, ask=0.41), SimClock(NOW))
+    eng.step()
+    assert not eng.pf.positions
+    eng = ScenarioEngine("sharp", cfg("b", max_hours_to_start=6), Client(pm_yes=0.40, ask=0.41), SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["AY"]
+    # Polymarket too HIGH (YES 0.58 vs Pinnacle 0.486): NO at 0.43 vs fair 0.514 is bought
+    eng = ScenarioEngine("sharp", cfg("c", max_hours_to_start=6), Client(pm_yes=0.58, ask=0.58), SimClock(NOW))
+    eng.step()
+    assert list(eng.pf.positions) == ["AN"]

@@ -91,7 +91,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_schutz_neu, mm_stop, mm_probe) plus Studie/Kalshi-Studie.
+Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_schutz_neu, mm_stop, mm_probe) plus `sharp_fussball2` und Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -241,6 +241,13 @@ Aktive Kandidaten im Live-Test:
 - `sharp_fussball` (ab 06.10., `arb/sharp.py`): kauft Polymarket-Fußball (Sieg/Remis), wenn der Ask ≥ 5 Punkte unter
   Pinnacles Wahrscheinlichkeit liegt (live über The Odds API, Gratis-Plan 500 Credits/Monat, Key über `/admin/`
   oder `ODDS_API_KEY` in `/etc/polyarb.env`, Verbrauch in `data/odds-api.json`). Ohne Key passiert nichts.
+- `sharp_fussball2` (ab 17.10., Nutzer): Neuauflage von sharp_fussball nach Studien-Auswertung (studie-buchmacher.csv,
+  13.816 Märkte Feb–Okt, Polymarket 1 h vorher vs. Buchmacher-Schlusskurs ohne Marge): Abweichung ≥ 3 Punkte +5,6 ct/Anteil
+  (n=480, 7/9 Monate positiv, ~2,5 SE), ≥ 5 +6, ≥ 8 JA +9 / NEIN +14 ct; Brier PM = Buchmacher (0,2028 vs. 0,2029) – der
+  Vorteil steckt nur in großen Abweichungen. Schlusskurs = leichter Blick in die Zukunft (PM schließt 6 h→1 h 15 % der
+  Lücke). Live: beide Seiten (war schon so), `min_edge` 0,05, neue Option `max_hours_to_start: 6` (+ min 1 h), Ligen nach
+  Studie mit den meisten Abweichungen (MLS, Liga MX, China, Portugal, Spanien 2, Brasilien, …). Gemeinsamer Credit-Zähler
+  `data/odds-api.json` (sharp_fussball fragt im wind_down nicht mehr ab).
 - `fussball_dog`: Außenseiter 3–25 % in Über/Unter, Spread, Remis, Halbzeit. Studie +8,8 %, phasenabhängig.
   Bekannte Lücke: `sport_kind` fällt auf „Fussball“ zurück, daher landen auch NHL/NFL/College/WNBA und
   E-Sports-Handicaps/„Games Total“ darin (Backtest nutzt dieselbe Einteilung). Nicht ändern während des Tests;

@@ -882,6 +882,33 @@ scenarios:
     max_event_usd: 50            # pro Spiel
     max_new_per_step: 10
     max_open_positions: 100
+  sharp_fussball2:
+    enabled: true
+    title: Fußball vs. Pinnacle 2
+    strategy: sharp              # 17.10. Nutzer: Neuauflage nach Studien-Auswertung (13.816 Märkte Feb–Okt, Polymarket
+    # 1 h vorher vs. Buchmacher-Schlusskurs): Abweichung ≥ 5 Punkte +6 ct/Anteil, ≥ 8 Punkte +9 (JA) bis +14 ct (NEIN),
+    # in den meisten Monaten positiv – aber Schlusskurs = leichter Blick in die Zukunft (PM schließt 6 h→1 h 15 % der
+    # Lücke). Hier live mit aktuellen Pinnacle-Quoten, beide Seiten, Kauf zum echten Ask mit Sport-Gebühr, nur 1–6 h vor
+    # Anpfiff. Ligen nach Studie (die meisten Abweichungen): MLS, Liga MX, China, Portugal, Spanien 2, Brasilien, ...
+    leagues: [soccer_usa_mls, soccer_mexico_ligamx, soccer_china_superleague, soccer_portugal_primeira_liga,
+              soccer_spain_segunda_division, soccer_brazil_campeonato, soccer_efl_champ, soccer_turkey_super_league,
+              soccer_epl, soccer_italy_serie_a, soccer_spain_la_liga]
+    odds_monthly_cap: 450        # gemeinsamer Zähler mit sharp_fussball (data/odds-api.json, das alte fragt nicht mehr ab)
+    odds_refresh_h: 3            # je Liga höchstens alle 3 h neue Quoten
+    odds_lookahead_h: 6          # nur Ligen mit einem Spiel in den nächsten 6 h
+    max_odds_age_h: 3            # ältere Quoten nicht nutzen
+    min_hours_to_start: 1        # Studie: 1–6 h vor Anpfiff
+    max_hours_to_start: 6
+    min_edge: 0.05               # Ask mindestens 5 Punkte vom Pinnacle-Wert (JA oder NEIN)
+    max_gap: 0.25                # mehr Abweichung = vermutlich falsch verknüpft -> auslassen
+    capital_usd: 2500
+    interval_min: 10
+    max_spread: 0.03
+    max_slippage: 0.01
+    max_position_usd: 25
+    max_event_usd: 50            # pro Spiel
+    max_new_per_step: 10
+    max_open_positions: 100
   finanz_dog:
     enabled: false               # abgeschaltet 02.10.: widerlegt – Studie mit 1.011 Wetten -7,6 % (2. Hälfte -23,5 %)
     title: Finanz-Außenseiter

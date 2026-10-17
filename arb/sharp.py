@@ -220,7 +220,8 @@ class SharpStrategy(Strategy):
         st = self.scan = dict(self.feed.stats, **{"Spiele mit Quote": len(matches)})
         min_start = float(c.get("min_hours_to_start", 0.25)) * 3600
         max_age = float(c.get("max_odds_age_h", 6)) * 3600
-        matches = [m for m in matches if m["start"] - now >= min_start and now - m["odds_ts"] <= max_age]
+        max_start = float(c.get("max_hours_to_start", 1e9)) * 3600  # sharp_fussball2: only 1–6 h before (study)
+        matches = [m for m in matches if min_start <= m["start"] - now <= max_start and now - m["odds_ts"] <= max_age]
         if not matches:
             return []
         edge = float(c.get("min_edge", 0.05))

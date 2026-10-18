@@ -639,3 +639,123 @@ def test_stop_loss_sells_at_the_bid_and_fills_are_exported(tmp_path):
     import dashboard
     rows = dashboard.markout_rows(str(tmp_path / "scenario-mm_rewards.sqlite"))
     assert rows and rows[0][2] == "Will the Fed cut rates?" and rows[0][4] == "JA" and rows[0][9] == 2.0
+
+
+def test_dropped_market_is_marked_at_the_current_bid(tmp_path):
+    """A position we no longer quote used to keep the last mid. It is marked at the bid, and the bid moves."""
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path), Client([_m("a", "Will the Fed cut rates?", 0.50)]),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 30, NOW + 5))
+    mm.clock.sleep(10)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert abs(mk.qty_yes - 30) < 1e-9
+    assert abs(mm.st.inventory_value() - 30 * 0.48) < 1e-6  # bid, not the 0.50 mid
+    assert abs(mm.st.inventory_mid() - 30 * 0.50) < 1e-6
+    mm.quoted = set()  # dropped from the quote set; the position stays
+    _book(store, "a", 0.30, 0.34)
+    mm.clock.sleep(10)
+    mm.step()
+    assert mk.bid_yes is None and abs(mk.yes_bid - 0.30) < 1e-9
+    assert abs(mm.st.inventory_value() - 30 * 0.30) < 1e-6
+
+
+def test_min_quote_frac_never_steps_inside_half_the_spread(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, min_quote_frac=0.5, pair_frac=0.25,
+                                        exit=dict(after_h=0, decay_h=4, dump_after_h=96)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)  # mid 0.50, reward spread 4 ct, half of it is 2 ct
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes["price"] == 0.48 and mk.bid_no["price"] == 0.48
+    mk.qty_yes, mk.cost_yes = 30.0, 30 * 0.48  # pair_frac would pull the NO bid to 0.49; the floor holds it
+    mm.clock.sleep(10)
+    mm.step()
+    assert mk.bid_no["price"] == 0.48
+    prices = []
+    for _ in range(5):
+        mm.step()
+        prices.append(mk.ask["price"])
+        mm.clock.sleep(3600)
+    assert prices and min(prices) >= 0.52 - 1e-9  # exit ask decays toward the mid, stops at half the spread
+
+
+def test_topic_filters_and_event_cap(tmp_path):
+    soon = "2026-09-30T00:00:00Z"  # nine days after NOW
+    ev = {"id": "ev1", "title": "Two buckets"}
+    ms = [_m("b1", "Will bucket one happen?", 0.40, events=[ev]),
+          _m("b2", "Will bucket two happen?", 0.40, events=[ev]),
+          _m("ok", "Will the Fed cut rates in December?", 0.40),
+          _m("oscar", "Will the movie win an Oscar?", 0.40),
+          _m("views", "Will the GTA VI trailer get 40-60 million views?", 0.40),
+          _m("tag", "Will something quiet happen?", 0.40, tags=[{"slug": "pop-culture", "label": "Pop Culture"}]),
+          _m("soon", "Will a near event happen?", 0.40, end=soon)]
+    mm = MarketMaker("mm_rewards", _cfg(
+        tmp_path, min_days_to_end=14, max_event_usd=25, quote_usd=20, max_markets=10,
+        skip_categories=["Sport", "Krypto", "Kultur", "Social"], skip_tags=["pop-culture", "culture"],
+        skip_re=[r"\bviews?\b", r"\bgta\s*(vi|6)\b"]), Client(ms), SimClock(NOW), books=BookStore(), pool=None)
+    mm.select(NOW)
+    assert sorted(mm.st.markets) == ["b1", "ok"]
+    assert mm.scan["Ereignis-Grenze"] == 1 and mm.scan["Kategorie ausgelassen"] >= 1
+    assert mm.scan["Muster ausgelassen"] == 1 and mm.scan["Thema ausgelassen"] == 1 and mm.scan["endet zu bald"] >= 1
+    assert mm.st.markets["b1"].event == "event:ev1"
+    # quote-time cap: both buckets are already chosen, the second bid must not add another 20 $
+    store = mm.books
+    mm.st.markets["b2"] = mm.st.markets["b1"].__class__(
+        **{**mm.st.markets["b1"].__dict__, "cid": "b2", "yes": "b2Y", "no": "b2N", "title": "bucket two"})
+    mm.quoted = {"b1", "b2", "ok"}
+    mm.sc["max_event_usd"] = 25
+    _book(store, "b1", 0.48, 0.52)
+    _book(store, "b2", 0.48, 0.52)
+    _book(store, "ok", 0.48, 0.52)
+    mm._last["select"] = mm.clock.now()
+    mm.quote(mm.clock.now(), store.books(["b1Y", "b1N", "b2Y", "b2N", "okY", "okN"]))
+    assert mm.st.markets["b1"].bid_yes and mm.st.markets["ok"].bid_yes
+    assert mm.st.markets["b2"].bid_yes is None and mm.st.markets["b2"].bid_no is None
+    assert mm.scan["Ereignis-Grenze (Gebot)"] >= 1
+
+
+def test_dashboard_splits_trading_rewards_and_rebates(tmp_path):
+    import json
+    import re
+    from dashboard import build, mm_equity_parts
+    store = BookStore()
+    m = _m("a", "Will the Fed cut rates?", 0.50, feeSchedule={"rate": 0.05})
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path), Client([m]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.extend([("aY", 0.47, 10, NOW + 5), ("aY", 0.53, 30, NOW + 6)])
+    mm.clock.sleep(400)
+    mm.step()
+    mm.store.commit()
+    db = str(tmp_path / "scenario-mm_rewards.sqlite")
+    parts = mm_equity_parts(db)
+    row = mm.store.db.execute(
+        "SELECT realized_cum, trade_cum, rewards_cum, rebates_cum FROM equity ORDER BY ts DESC LIMIT 1").fetchone()
+    assert parts["rewards"] > 0 and parts["rebates"] > 0
+    assert abs(parts["trade"] - mm.st.realized) < 1e-6
+    assert abs(row[0] - (row[1] + row[2] + row[3])) < 1e-6  # the stored total is still the sum
+    assert abs(parts["trade"] + parts["rewards"] + parts["rebates"] - row[0]) < 0.05
+    html = open(build(db, str(tmp_path / "www" / "index.html"), 1000, title="MM", kind="mm"), encoding="utf-8").read()
+    data = json.loads(re.search(r"const D=(.*);\nconst \$", html).group(1))
+    assert data["split"]["rewards"] > 0 and abs(data["split"]["trade"] - round(mm.st.realized, 2)) < 1e-9
+    assert "Handel realisiert" in html and "Rewards geschätzt" in html and "Rebates" in html
+    assert abs(data["kpi"]["real"] - data["split"]["trade"]) < 1e-9
+    last = data["curve"][-1]
+    assert abs(last["r"] - (1000 + data["split"]["trade"])) < 1e-6 and last["rw"] == data["split"]["rewards"]
+
+
+def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
+    import yaml
+    sc = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml", encoding="utf-8"))["scenarios"]
+    r = sc["mm_robust"]
+    assert r["enabled"] is False and r["strategy"] == "mm"
+    assert r["min_days_to_end"] >= 14 and r["min_quote_frac"] >= 0.5 and r["quote_frac"] >= r["min_quote_frac"]
+    assert r["max_event_usd"] > 0 and "Kultur" in r["skip_categories"] and r["skip_tags"] and r["skip_re"]
+    assert sc["mm_sofort"]["min_days_to_end"] == 3 and "max_event_usd" not in sc["mm_sofort"]
+    assert sc["mm_nah"]["quote_frac"] == 0.25 and "min_quote_frac" not in sc["mm_nah"]
+    assert "Kultur" not in sc["mm_rewards"]["skip_categories"]

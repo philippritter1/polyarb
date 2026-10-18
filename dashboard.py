@@ -131,7 +131,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
                   "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell",
-                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
+                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "mm_robust_mm": "Market Making (robust)", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -212,17 +212,30 @@ def _write_csv(path: Path, header: list, rows) -> None:
 
 
 def equity_csv(db_path: str, every_s: float = 300) -> str:
-    """Equity curve, one row per `every_s` (the bot logs every few seconds)."""
+    """Equity curve, one row per `every_s` (the bot logs every few seconds).
+
+    Market making adds the three parts of the booked total: trading, estimated rewards, rebates.
+    "Realisiert kumuliert $" stays the sum, so older spreadsheets keep their column.
+    """
     rows = []
+    parts = mm_equity_parts(db_path) if Path(db_path).exists() else None
     if Path(db_path).exists():
         db = sqlite3.connect(db_path)
         last = -1e18
         for r in _q(db, "SELECT ts, equity, cash, locked, residual, realized_cum, halted FROM equity ORDER BY ts"):
             if r[0] - last >= every_s:
-                rows.append([datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M:%S"), *r[1:6], r[6] or ""])
+                line = [datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M:%S"), *r[1:6], r[6] or ""]
+                if parts and r[0] in parts["by_ts"]:
+                    line.extend(round(v, 6) for v in parts["by_ts"][r[0]])
+                elif parts:
+                    line.extend(["", "", ""])
+                rows.append(line)
                 last = r[0]
         db.close()
-    return _csv(["Zeit", "Equity $", "Cash $", "Gebunden $", "Offene Reste $", "Realisiert kumuliert $", "Pausiert"], rows)
+    header = ["Zeit", "Equity $", "Cash $", "Gebunden $", "Offene Reste $", "Realisiert kumuliert $", "Pausiert"]
+    if parts:
+        header += ["Handel kumuliert $", "Rewards geschätzt kumuliert $", "Rebates kumuliert $"]
+    return _csv(header, rows)
 
 
 def _write(path: Path, text: str, encoding: str) -> None:
@@ -333,9 +346,79 @@ def reward_share_daily(db_path: str) -> list:
     return out
 
 
+def _is_mm_db(db) -> bool:
+    try:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mm_metrics'").fetchone():
+            return True
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settlements'").fetchone() \
+                and db.execute("SELECT 1 FROM settlements WHERE kind='reward' LIMIT 1").fetchone():
+            return True
+    except sqlite3.Error:
+        return False
+    return False
+
+
+def mm_equity_parts(db_path: str):
+    """Trading PnL, estimated rewards and rebates at every equity timestamp of a market-making book.
+
+    `realized_cum` stays the sum of the three, so older rows and the 4-hour report do not jump. Rows written
+    after the split store the components; older rows are rebuilt from settlements (everything but kind
+    'reward' is trading, and whatever is left of realized_cum is rebates). None for other books.
+    """
+    if not Path(db_path).exists():
+        return None
+    db = sqlite3.connect(db_path)
+    try:
+        if not _is_mm_db(db):
+            return None
+        cols = {r[1] for r in db.execute("PRAGMA table_info(equity)")}
+        has = "trade_cum" in cols
+        q = ("SELECT ts, realized_cum, rewards_cum, rebates_cum, trade_cum FROM equity ORDER BY ts" if has else
+             "SELECT ts, realized_cum FROM equity ORDER BY ts")
+        rows = db.execute(q).fetchall()
+        settles = db.execute("SELECT ts, kind, COALESCE(pnl, 0) FROM settlements ORDER BY ts").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        db.close()
+    if not rows:
+        return None
+    by, si, tr, rw = {}, 0, 0.0, 0.0
+    for row in rows:
+        ts, booked = row[0], row[1] or 0.0
+        while si < len(settles) and settles[si][0] <= ts + 1e-6:
+            if settles[si][1] == "reward":
+                rw += settles[si][2]
+            else:
+                tr += settles[si][2]
+            si += 1
+        if has and row[4] is not None:
+            trade, rewards, rebates = float(row[4]), float(row[2] or 0.0), float(row[3] or 0.0)
+        else:
+            trade, rewards, rebates = tr, rw, booked - tr - rw
+        by[ts] = (trade, rewards, rebates)
+    last = by[rows[-1][0]]
+    return dict(trade=last[0], rewards=last[1], rebates=last[2], by_ts=by)
+
+
 def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
           kind: str = "arb", nav: list | None = None, overview: list | None = None, scan: dict | None = None) -> str:
     data = collect(db_path, float(start_capital))
+    if kind == "mm":
+        parts = mm_equity_parts(db_path)
+        if parts:
+            data["split"] = {k: round(parts[k], 2) for k in ("trade", "rewards", "rebates")}
+            for p in data["curve"]:
+                hit = parts["by_ts"].get(p["t"])
+                if not hit:
+                    continue
+                p["r"] = round(float(start_capital) + hit[0], 2)
+                p["rw"] = round(hit[1], 2)
+                p["rb"] = round(hit[2], 2)
+            data["kpi"]["real"] = data["split"]["trade"]
+            data["kpi"]["real_ret"] = (data["split"]["trade"] / float(start_capital)) if start_capital else 0
+            data["kpi"]["rewards"] = data["split"]["rewards"]
+            data["kpi"]["rebates"] = data["split"]["rebates"]
     if source == "auto":
         source = "mock" if "mock" in Path(db_path).name else "paper"
     cap = capacity_rows(db_path) if kind not in ("arb", "ladder") else []
@@ -378,8 +461,13 @@ def _summary(db_path: str, start: float) -> dict:
     except sqlite3.OperationalError:
         row = res = opn = None
     db.close()
+    parts = mm_equity_parts(db_path)
     if row and start:
-        out.update(equity=row[0], real=row[1] or 0.0, ret=row[0] / start - 1, real_ret=(row[1] or 0.0) / start)
+        # market making: "realisiert" is the trading result. Rewards and rebates stay out of that number.
+        real = parts["trade"] if parts else (row[1] or 0.0)
+        out.update(equity=row[0], real=real, ret=row[0] / start - 1, real_ret=real / start)
+        if parts:
+            out.update(rewards=parts["rewards"], rebates=parts["rebates"])
     if res:
         out.update(n=res[0] or 0, won=res[1] or 0)
     if opn:
@@ -1139,12 +1227,12 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <p class="sub" id="range"></p>
 <p class="note" id="scan"></p>
 <div id="halt"></div>
-<div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
+<div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur den Handel (Auszahlung, Zusammenlegen, Verkauf). Bei Market Making sind geschätzte Rewards und Rebates darin nicht enthalten. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
 <div class="kpis" id="kpis"></div>
 <div class="card" id="rwcard" style="display:none"><h2>Pilot: Rewards echt vs. geschätzt</h2><p class="note">Was Polymarket für unsere echten Gebote tatsächlich gezahlt hat (einmal täglich abgerechnet, Tag = UTC), neben unserer Schätzung für denselben Tag. Die Kernzahl des Pilots: liegt „echt / geschätzt“ deutlich unter 100 %, überschätzt die Simulation die Rewards.</p><div class="tblwrap"><table id="rwtbl"></table></div><p class="note" id="rsnote" style="display:none">Laufend, auch unter der Auszahlungsgrenze von 1 $/Tag: Polymarkets eigener Anteil am Pool unserer Märkte (alle 10 Min. abgefragt) × Tagesbudget, neben unserer Schätzung zum selben Zeitpunkt. „bisher verdient“ = was Polymarket für den Tag schon ausweist.</p><div class="tblwrap"><table id="rstbl"></table></div></div>
-<div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
+<div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> ist der Handel, dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt und nicht Teil von „realisiert“. Bestand zum Bid. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
 <div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
-<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i>Vermögen realisiert (Start + realisierter PnL)</span></div><div id="eq"></div></div>
+<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i><span id="eqlegl">Vermögen realisiert (Start + realisierter PnL)</span></span></div><div id="eq"></div></div>
 <div class="grid2">
  <div class="card"><h2>Erwarteter vs. realisierter Gewinn je Strategie</h2><p class="note" id="pnlnote">Die Lücke ist, was Latenz, Konkurrenz und Leg-Failures kosten.</p>
   <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Erwartet bei Erkennung</span><span><i class="sw" style="background:var(--s2)"></i>Realisiert</span></div><div id="pnl"></div></div>
@@ -1169,6 +1257,9 @@ const tip=$("tip");
 $("ttl").textContent=D.title;document.title=D.title;
 if(D.kind!=="arb"&&D.kind!=="ladder"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
  $("pnlnote").textContent="Erwartet = Gewinn, wenn jede Position so ausgeht, wie die Strategie annimmt. Realisiert zählt erst bei Auflösung."}
+if(D.split){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Die grüne Linie ist Start + Handel (Spread, Verkäufe, Auflösung). Geschätzte Rewards und Rebates stecken im Cash, nicht in „realisiert“.";
+ $("pnlnote").textContent="Realisiert ist der Handel. Rewards sind eine Schätzung nach Polymarkets Formel, keine Auszahlung.";
+ if($("eqlegl"))$("eqlegl").textContent="Handel realisiert (ohne Rewards und Rebates)";}
 $("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}"${n.real==null?"":` title="realisiert ${(n.real>=0?"+":"")+fmt(n.real*100,1)} %"`}>${n.label}${n.ret==null?"":`<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span>`}</a>`).join(""):"";
 function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";tip.style.top=(e.clientY+14)+"px"}
 function hideTip(){tip.style.display="none"}
@@ -1188,6 +1279,10 @@ const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Pos
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
 if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[6]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[7][2]="Preis unter der Strategie-Grenze"}
+if(D.split){const s=D.split;
+ tiles[2]=["Handel realisiert",usd(s.trade),`ohne Rewards und Rebates · ${pct(s.trade/(D.start||1))}`];
+ tiles[3]=["Rewards geschätzt",usd(s.rewards),"Polymarket-Formel, keine Auszahlung"];
+ tiles.splice(4,0,["Rebates",usd(s.rebates),"geschätzter Anteil der Taker-Gebühr"]);}
 if(D.reward_share&&D.reward_share.length){
  $("rstbl").innerHTML=`<tr><th>Tag (UTC)</th><th class="num">geschätzt $/Tag</th><th class="num">Polymarket $/Tag</th><th class="num">Polymarket / geschätzt</th><th class="num">bisher verdient</th><th class="num">Abfragen</th></tr>`+
   D.reward_share.map(r=>`<tr><td>${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${r[2]==null?"–":usd(r[2])}</td><td class="num">${r[3]==null?"–":r[3]+" %"}</td><td class="num">${r[4]==null?"–":"$ "+fmt(r[4],4)}</td><td class="num">${r[5]}</td></tr>`).join("");
@@ -1228,7 +1323,8 @@ $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</
  const hit=el("rect",{x:m.l,y:m.t,width:W-m.l-m.r,height:H-m.t-m.b,fill:"transparent"},svg);
  hit.addEventListener("mousemove",e=>{const r=svg.getBoundingClientRect(),tx=t0+((e.clientX-r.left)*W/r.width-m.l)/(W-m.l-m.r)*(t1-t0);let b=c[0];for(const p of c)if(Math.abs(p.t-tx)<Math.abs(b.t-tx))b=p;
   cross.setAttribute("x1",X(b.t));cross.setAttribute("x2",X(b.t));dot.setAttribute("cx",X(b.t));dot.setAttribute("cy",Y(b.e));cross.setAttribute("visibility","visible");dot.setAttribute("visibility","visible");
-  showTip(e,`<b>${dt(b.t)}</b><br>Equity ${usd(b.e)}<br>Vermögen realisiert ${usd(b.r??b.e)}<br>davon gebunden ${usd(b.l)}`)});
+  const extra=b.rw==null?"":`<br>Rewards geschätzt ${usd(b.rw)}<br>Rebates ${usd(b.rb)}`;
+  showTip(e,`<b>${dt(b.t)}</b><br>Equity ${usd(b.e)}<br>${D.split?"Handel realisiert":"Vermögen realisiert"} ${usd(b.r??b.e)}${extra}<br>davon gebunden ${usd(b.l)}`)});
  hit.addEventListener("mouseleave",()=>{hideTip();cross.setAttribute("visibility","hidden");dot.setAttribute("visibility","hidden")});
 })();
 

@@ -53,6 +53,60 @@ def _market_text(m: dict) -> str:
     return " ".join(str(x) for x in parts if x)
 
 
+def _norm_tag(value) -> str:
+    return re.sub(r"[\s_]+", "-", str(value).strip().lower())
+
+
+def _market_tags(m: dict) -> List[str]:
+    """Gamma tag slugs and labels on the market and its event, normalized."""
+    out = []
+    sources = [m]
+    for e in m.get("events") or []:
+        if isinstance(e, dict):
+            sources.append(e)
+    for src in sources:
+        for t in src.get("tags") or []:
+            if isinstance(t, dict):
+                for key in ("slug", "label", "name"):
+                    if t.get(key):
+                        out.append(_norm_tag(t[key]))
+            elif t:
+                out.append(_norm_tag(t))
+    return out
+
+
+def _tag_listed(tag: str, skip: set) -> bool:
+    """True when the tag is the exclusion itself or one of its hyphen-parts (`culture` hits `pop-culture`)."""
+    return tag in skip or bool(set(tag.split("-")) & skip)
+
+
+def _topic_extra(m: dict, skip_categories: set, skip_tags: set) -> Optional[str]:
+    """Gamma's own category/tag fields, on top of categorize(). None when the market is allowed."""
+    raw = [m.get("category")]
+    for e in m.get("events") or []:
+        if isinstance(e, dict):
+            raw.append(e.get("category"))
+    for c in raw:
+        if not c:
+            continue
+        if str(c) in skip_categories or (skip_tags and _tag_listed(_norm_tag(c), skip_tags)):
+            return "Kategorie ausgelassen"
+    if skip_tags and any(_tag_listed(t, skip_tags) for t in _market_tags(m)):
+        return "Thema ausgelassen"
+    return None
+
+
+def event_key(m: dict, cid: str) -> str:
+    """Markets of one Polymarket event (several view-count buckets of the same trailer) share this key."""
+    for e in m.get("events") or []:
+        if isinstance(e, dict) and e.get("id") not in (None, ""):
+            return f"event:{e['id']}"
+    for e in m.get("events") or []:
+        if isinstance(e, dict) and e.get("slug"):
+            return f"event:{e['slug']}"
+    return f"m:{cid}"
+
+
 @dataclass
 class Quote:
     token: str
@@ -83,6 +137,9 @@ class MMMarket:
     mid: Optional[float] = None
     ask: Optional[dict] = None      # exit: resting sell order {side, price, size, placed_ts}
     inv_ts: Optional[float] = None  # exit: since when the one-sided position is held
+    yes_bid: Optional[float] = None  # last YES bid, for marking inventory at the bid
+    no_bid: Optional[float] = None
+    event: str = ""                  # event_key: exposure cap across the buckets of one event
 
 
 @dataclass
@@ -99,7 +156,29 @@ class MMState:
     ask_rewards: float = 0.0     # reward_asks: part of `rewards` earned by the exit's sell orders
 
     def inventory_value(self) -> float:
-        return sum(m.qty_yes * (m.mid if m.mid is not None else 0.5) + m.qty_no * (1 - (m.mid if m.mid is not None else 0.5))
+        """What a sale would get: each side at its bid. Last mid, then 0.50, when no bid was seen yet."""
+        total = 0.0
+        for m in self.markets.values():
+            if m.yes_bid is not None:
+                y = m.yes_bid
+            elif m.mid is not None:
+                y = m.mid
+            else:
+                y = 0.5
+            if m.no_bid is not None:
+                n = m.no_bid
+            elif m.mid is not None:
+                n = 1 - m.mid
+            else:
+                n = 0.5
+            total += m.qty_yes * y + m.qty_no * n
+        return total
+
+    def inventory_mid(self) -> float:
+        """Mark at the mid. The cash buffer still uses this, so switching the report to the bid does not
+        change how large the quotes of a running scenario are."""
+        return sum(m.qty_yes * (m.mid if m.mid is not None else 0.5)
+                   + m.qty_no * (1 - (m.mid if m.mid is not None else 0.5))
                    for m in self.markets.values())
 
     def inventory_cost(self) -> float:
@@ -250,6 +329,62 @@ class MarketMaker:
         self.scan: dict = {}
         self.quoted: Optional[set] = None  # market ids select() chose to quote (None until the first selection)
 
+    def _quote_floor(self, spread: float) -> float:
+        """min_quote_frac: closest a bid or an exit ask may stand to the mid, as a share of the reward spread.
+        Unset (every scenario but mm_robust) means no extra floor."""
+        floor = self.sc.get("min_quote_frac")
+        if floor in (None, ""):
+            return 0.0
+        return max(self.tick, float(spread) * float(floor))
+
+    def _sided_usd(self, mk: MMMarket) -> float:
+        """One-sided inventory in dollars at the mid — the same basis as max_inventory_usd."""
+        mid = mk.mid if mk.mid is not None else 0.5
+        if mk.qty_yes >= mk.qty_no:
+            return (mk.qty_yes - mk.qty_no) * mid
+        return (mk.qty_no - mk.qty_yes) * (1 - mid)
+
+    def _mark(self, mk: MMMarket, by: Optional[OrderBook], bn: Optional[OrderBook]) -> None:
+        """Refresh mid and bid from the books we have. Paper and live, quoted or not — valuation only."""
+        if by and by.bids and by.asks:
+            mk.mid = (by.best_bid + by.best_ask) / 2
+            mk.yes_bid = by.best_bid
+            if not (bn and bn.bids):
+                mk.no_bid = 1 - by.best_ask
+        if bn and bn.bids:
+            mk.no_bid = bn.best_bid
+            if mk.yes_bid is None and bn.asks:
+                mk.yes_bid = 1 - bn.best_ask
+            if mk.mid is None and bn.asks:
+                mk.mid = 1 - (bn.best_bid + bn.best_ask) / 2
+
+    def _fit_event(self, price: float, size: float, min_size: float, base_ev: float, adding_ev: List[float],
+                   cap_ev: float) -> float:
+        """Shares still allowed on a bid that would add one-sided exposure in this event.
+
+        Only the larger of the two sides of one market counts (a filled pair merges). 0 means pull the bid.
+        """
+        other = max(adding_ev) if adding_ev else 0.0
+        if price * size <= other + 1e-9:
+            return size
+        room = cap_ev - base_ev
+        if price * size <= room + 1e-9:
+            return size
+        shrunk = math.floor(max(0.0, room) / price)
+        if shrunk + 1e-9 < min_size:
+            self.scan["Ereignis-Grenze (Gebot)"] = self.scan.get("Ereignis-Grenze (Gebot)", 0) + 1
+            return 0.0
+        return float(shrunk)
+
+    def _resting_fits(self, cur: Optional[dict], price: float, size: float, short_this: bool, cap_ev) -> bool:
+        """A resting bid may keep its queue place. With an event cap it also has to fit in the remaining room.
+        Without a cap this is true whenever the caller already checked that an order is resting."""
+        if cap_ev is None or short_this:
+            return True
+        if not cur or price <= 0:
+            return False
+        return cur["price"] * cur["size"] <= price * size + 1e-6
+
     # ------------------------------------------------------------------ market choice
     def select(self, now: float) -> None:
         """Quiet two-way markets that pay rewards: no sport or crypto (prices jump on news), far from the end,
@@ -259,6 +394,7 @@ class MarketMaker:
         sc = self.sc
         min_days = float(sc.get("min_days_to_end", 3))
         skip = set(sc.get("skip_categories", ["Sport", "Krypto"]))
+        skip_tags = {_norm_tag(t) for t in sc.get("skip_tags") or [] if str(t).strip()}
         lo, hi = float(sc.get("min_mid", 0.15)), float(sc.get("max_mid", 0.85))
         max_age = sc.get("max_age_days")
         skip_re = re.compile("|".join(f"(?:{r})" for r in sc["skip_re"]), re.I) if sc.get("skip_re") else None
@@ -306,6 +442,8 @@ class MarketMaker:
                 why = "Kategorie ausgelassen"
             elif skip_re and skip_re.search(_market_text(m)):
                 why = "Muster ausgelassen"  # skip_re: e.g. sport season markets, price thresholds
+            elif _topic_extra(m, skip, skip_tags):
+                why = _topic_extra(m, skip, skip_tags)  # gamma category / tags: culture, view-count, ...
             elif self.blocked(str(m.get("conditionId") or m.get("id")), now):
                 why = "gelernt: gesperrt"  # learn: this market cost more than it paid
             elif sc.get("max_min_size_usd") and size * max(float(prices[0]), 1 - float(prices[0])) \
@@ -324,17 +462,35 @@ class MarketMaker:
             cands = self._rank_by_share(cands[:int(sc.get("prefilter", 60))], st)
         want = int(sc.get("max_markets", 15))
         keep = {cid for cid, mk in self.st.markets.items() if mk.qty_yes > 1e-9 or mk.qty_no > 1e-9}
+        cap_ev = float(sc["max_event_usd"]) if sc.get("max_event_usd") not in (None, "") else None
+        quote_usd = float(sc.get("quote_usd", 50))
+        reserved: Dict[str, float] = {}
+        if cap_ev is not None:  # inventory already held counts, so a full event is not refilled
+            for cid0, mk0 in self.st.markets.items():
+                if cid0 in keep:
+                    k = mk0.event or f"m:{cid0}"
+                    reserved[k] = reserved.get(k, 0.0) + self._sided_usd(mk0)
         chosen = {}
         for rate, m, v, size, end, toks in cands:
             if len(chosen) >= want:
                 break
             cid = str(m.get("conditionId") or m.get("id"))
+            ev = event_key(m, cid)
+            if cap_ev is not None and reserved.get(ev, 0.0) + quote_usd > cap_ev + 1e-9:
+                old = self.st.markets.get(cid)
+                if old:  # remember the event, so the inventory counts against the right group next time
+                    old.event = ev
+                st["Ereignis-Grenze"] = st.get("Ereignis-Grenze", 0) + 1
+                continue
             fee = self.fees.resolve(m, categorize(m).lower())
             old = self.st.markets.get(cid)
             mk = old or MMMarket(cid, (m.get("question") or "")[:200], str(toks[0]), str(toks[1]), end, rate, v, size,
                                  categorize(m), fee.rate, fee.exponent)
             mk.daily_rate, mk.max_spread, mk.min_size, mk.end_ts = rate, v, size, end
+            mk.event = ev
             chosen[cid] = mk
+            if cap_ev is not None:
+                reserved[ev] = reserved.get(ev, 0.0) + quote_usd
         picked = set(chosen)
         for cid in list(self.st.markets):
             if cid not in chosen:
@@ -355,7 +511,8 @@ class MarketMaker:
             n, tot, top = pools.get(b, (0, 0.0, 0.0))
             st[f"Reward-Töpfe {b}"] = f"{n} Märkte, {tot:.0f} $/Tag, Ø {tot / n if n else 0:.0f}, max {top:.0f}"
         for k in ("Stop-Loss ausgelöst", "Pausen (schnelle Kursbewegung)", "gelernt: Märkte gesperrt", "echte Fills",
-                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt"):
+                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt",
+                  "Ereignis-Grenze (Gebot)"):
             if k in self.scan:  # running counters: keep them across the half-hourly selection (until 17.10. reset)
                 st[k] = self.scan[k]
         self.scan = st
@@ -364,7 +521,7 @@ class MarketMaker:
 
     def planned_quotes(self, mid: float, v: float, min_size: float) -> Tuple[dict, dict]:
         """The two bids quote() would place at this mid (see there)."""
-        d = max(self.tick, v * float(self.sc.get("quote_frac", 0.5)))
+        d = max(self.tick, v * float(self.sc.get("quote_frac", 0.5)), self._quote_floor(v))
         usd = float(self.sc.get("quote_usd", 50))
         out = []
         for price in (math.floor((mid - d) / self.tick + 1e-9) * self.tick,
@@ -527,13 +684,17 @@ class MarketMaker:
                     mk.inv_ts = None
                 continue
             mid = (bk.best_bid + bk.best_ask) / 2
-            d = max(self.tick, mk.max_spread * float(ex.get("ask_frac", frac)))  # ask_frac: sell closer to the mid
+            mind = self._quote_floor(mk.max_spread)
+            d = max(self.tick, mk.max_spread * float(ex.get("ask_frac", frac)), mind)  # ask_frac: sell closer
             price = round(max(math.ceil((mid + d) / self.tick - 1e-9) * self.tick, bk.best_bid + self.tick), 4)
             if ex.get("decay_h"):  # step the sell order down every hour, from mid + d to the mid itself – an ask
                 # scores only between the mid and mid + max_spread, so it never leaves the reward band (and the
-                # closer to the mid, the more it scores); never at or below the best bid (post-only)
+                # closer to the mid, the more it scores); never at or below the best bid (post-only).
+                # min_quote_frac stops the steps at that distance instead of at the mid.
                 done = min(1.0, math.floor((age - after) / 3600) / float(ex["decay_h"]))
                 low = max(math.ceil(mid / self.tick - 1e-9) * self.tick, bk.best_bid + self.tick)
+                if mind:
+                    low = max(low, math.ceil((mid + mind) / self.tick - 1e-9) * self.tick)
                 price = round(max(low, math.ceil((price - (price - low) * done) / self.tick - 1e-9) * self.tick), 4)
                 top = math.floor((mid + mk.max_spread) / self.tick - 1e-9) * self.tick  # strictly inside mid + v
                 if mk.max_spread > 0 and low <= top:
@@ -743,19 +904,27 @@ class MarketMaker:
         over = bool(cap) and self.st.inventory_cost() >= float(cap)
         if cap:
             self.scan["Bestandsgrenze erreicht"] = int(over)
+        # cash buffer stays on the mid mark, so valuing the report at the bid does not change quote size
         cash_free = self.st.cash * max(1.0, float(sc.get("overcommit", 1))) \
-            - float(sc.get("cash_buffer_pct", 0.10)) * self.st.equity  # overcommit: bids may add up to N x the cash
+            - float(sc.get("cash_buffer_pct", 0.10)) * (self.st.cash + self.st.inventory_mid())
         hyst = float(sc.get("reprice_ticks", 1))  # move a resting bid only when the target is this many ticks away
+        cap_ev = float(sc["max_event_usd"]) if sc.get("max_event_usd") not in (None, "") else None
+        if cap_ev is not None:  # how many bids this pass were pulled, not a lifetime counter
+            self.scan["Ereignis-Grenze (Gebot)"] = 0
+        for mk in self.st.markets.values():  # marks first, including markets we no longer quote
+            self._mark(mk, books.get(mk.yes), books.get(mk.no))
+        ev_used: Dict[str, float] = {}
+        if cap_ev is not None:
+            for mk in self.st.markets.values():
+                k = mk.event or f"m:{mk.cid}"
+                ev_used[k] = ev_used.get(k, 0.0) + self._sided_usd(mk)
         for mk in self.st.markets.values():
             by, bn = books.get(mk.yes), books.get(mk.no)
             if (self.quoted is not None and mk.cid not in self.quoted) or not by or not by.bids or not by.asks \
                     or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0 or self.blocked(mk.cid, now):
                 mk.bid_yes = mk.bid_no = None
-                if self.gw is not None and self.gw.live and by and by.bids and by.asks:
-                    mk.mid = (by.best_bid + by.best_ask) / 2  # live: value held positions at the current book
                 continue
-            mid = (by.best_bid + by.best_ask) / 2
-            mk.mid = mid
+            mid = mk.mid if mk.mid is not None else (by.best_bid + by.best_ask) / 2
             pz = sc.get("pause")
             if pz:  # the mid jumped by >= ticks within window_s: no bids for pause_s (informed traders are active)
                 hist = [x for x in self._mids.get(mk.cid, []) if now - x[0] <= float(pz.get("window_s", 300))]
@@ -792,12 +961,18 @@ class MarketMaker:
                     dn = max(self.tick, mk.max_spread * float(pf), mk.cost_yes / mk.qty_yes - mid + self.tick)
                 elif mk.qty_no > mk.qty_yes + 1e-9:
                     dy = max(self.tick, mk.max_spread * float(pf), mk.cost_no / mk.qty_no - (1 - mid) + self.tick)
+            mind = self._quote_floor(mk.max_spread)
+            if mind:  # never inside min_quote_frac, even when pair_frac would step closer
+                dy, dn = max(dy, mind), max(dn, mind)
             want_yes = math.floor((fy - dy) / self.tick + 1e-9) * self.tick
             want_no = math.floor((fn - dn) / self.tick + 1e-9) * self.tick
             want_yes = min(want_yes, by.best_ask - self.tick)
             if bn and bn.asks:
                 want_no = min(want_no, bn.best_ask - self.tick)
             net = (mk.qty_yes - mk.qty_no) * (mid if mk.qty_yes >= mk.qty_no else 1 - mid)
+            ev_key = mk.event or f"m:{mk.cid}"
+            base_ev = ev_used.get(ev_key, 0.0) if cap_ev is not None else 0.0
+            adding_ev: List[float] = []
             for side, price in (("yes", want_yes), ("no", want_no)):
                 cur = mk.bid_yes if side == "yes" else mk.bid_no
                 long_this = (side == "yes" and mk.qty_yes > mk.qty_no) or (side == "no" and mk.qty_no > mk.qty_yes)
@@ -807,23 +982,46 @@ class MarketMaker:
                     new = None  # skew: stop buying the side we already hold too much of (or just got filled on)
                 else:
                     size = max(mk.min_size, math.floor(usd / price))
-                    if cur and abs(cur["price"] - price) < 1e-9 and cur["size"] > 0:
+                    if cap_ev is not None and not short_this:
+                        size = self._fit_event(price, size, mk.min_size, base_ev, adding_ev, cap_ev)
+                    if size <= 0:
+                        new = None
+                    elif cur and abs(cur["price"] - price) < 1e-9 and cur["size"] > 0 \
+                            and self._resting_fits(cur, price, size, short_this, cap_ev):
+                        if cap_ev is not None and not short_this:
+                            adding_ev.append(cur["price"] * cur["size"])
                         continue  # unchanged: keep the place in the queue
-                    if cur and cur["size"] > 0 and abs(cur["price"] - price) < hyst * self.tick - 1e-9:
+                    elif cur and cur["size"] > 0 and abs(cur["price"] - price) < hyst * self.tick - 1e-9:
                         own_mid = mid if side == "yes" else 1 - mid
                         book = by if side == "yes" else bn
-                        if 0 <= own_mid - cur["price"] < mk.max_spread and cur["price"] < book.best_ask - 1e-9:
+                        if 0 <= own_mid - cur["price"] < mk.max_spread and cur["price"] < book.best_ask - 1e-9 \
+                                and self._resting_fits(cur, price, size, short_this, cap_ev):
+                            if cap_ev is not None and not short_this:
+                                adding_ev.append(cur["price"] * cur["size"])
                             continue  # reprice_ticks: the mid flickers by a tick – keep the order while it qualifies
-                    have = (cur["price"] * cur["size"]) if cur else 0.0
-                    if price * size > cash_free + have:
-                        new = None
+                        have = (cur["price"] * cur["size"]) if cur else 0.0
+                        if price * size > cash_free + have:
+                            new = None
+                        else:
+                            new = dict(price=round(price, 4), size=float(size), placed_ts=now)
+                            cash_free -= price * size - have
                     else:
-                        new = dict(price=round(price, 4), size=float(size), placed_ts=now)
-                        cash_free -= price * size - have
+                        have = (cur["price"] * cur["size"]) if cur else 0.0
+                        if price * size > cash_free + have:
+                            new = None
+                        else:
+                            new = dict(price=round(price, 4), size=float(size), placed_ts=now)
+                            cash_free -= price * size - have
                 if side == "yes":
                     mk.bid_yes = new
                 else:
                     mk.bid_no = new
+                if cap_ev is not None and not short_this and new and new.get("size", 0) > 0:
+                    adding_ev.append(new["price"] * new["size"])
+            if cap_ev is not None:
+                ev_used[ev_key] = base_ev + (max(adding_ev) if adding_ev else 0.0)
+        if cap_ev is not None and not self.scan.get("Ereignis-Grenze (Gebot)"):
+            self.scan.pop("Ereignis-Grenze (Gebot)", None)
 
     def sync_orders(self, now: float) -> None:
         """The quotes the paper strategy holds, at pilot size (live.quote_usd, at least the reward minimum),
@@ -969,7 +1167,10 @@ class MarketMaker:
                 self._last["metrics"] = now
                 self.write_metrics(now)
             st = self.st
-            self.store.equity(now, st.equity, st.cash, st.inventory_cost(), 0.0, st.realized + st.rewards + st.rebates, None)
+            # realized_cum stays the sum, so the 4h report does not jump. trade/rewards/rebates are stored
+            # beside it; the dashboard shows those three and calls only the trading part "realisiert".
+            self.store.equity(now, st.equity, st.cash, st.inventory_cost(), 0.0,
+                              st.realized + st.rewards + st.rebates, None, st.rewards, st.rebates, st.realized)
             self.store.commit()
             st.save(self.state_path)
             self._write_scan(now)

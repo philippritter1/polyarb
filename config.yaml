@@ -853,6 +853,66 @@ scenarios:
       max_daily_loss_usd: 10
       day_reset: "2026-10-16 Nutzer"  # 16.10. Nutzer: Tagesbasis neu (Text ändern = neuer Tagesstart beim aktuellen Konto)
       deposits_usd: 87.0         # eingezahlt insgesamt (14.10. 11,00 + 15.10. 76,00) – bei jeder Ein-/Auszahlung anpassen
+  mm_robust:
+    enabled: false               # bewusst aus: einschalten erst nach Merge, siehe unten. Der Server startet es dann
+                                 # beim nächsten update (polyarb-scenario@mm_robust). Auswertung ab dem eigenen Start,
+                                 # eigene Datenbank – nicht mit den Läufen davor vergleichen.
+    title: Market Making (robust)
+    strategy: mm                 # 18.10., aus der Dashboard-Auswertung, als eigenes Szenario (laufende Varianten
+    # unverändert): Handel verliert 11–23 % je 1 $ gefüllt; der Papiergewinn sind geschätzte Rewards. Markout
+    # 60 Min. je 1 $ gefüllt: ≤7 Tage bis Ende −16,9 %, 7–14 Tage −7,7 %, 14–30 Tage −3,1 %, >30 Tage −4,7 %.
+    # Kultur −27,8 %. Gebote 1–1,5 ct an der Mitte −17,5 %. Ein Event (GTA-VI-Trailer-Views) machte in mehreren
+    # Varianten den Großteil des Handelsverlusts, weil jeder Bucket extra gezählt hat.
+    # Frage: bleibt der Handel erträglich, wenn man genau diese drei Stellen zumacht – und reichen die Rewards dann?
+    # Belohnung wie gehabt (beidseitig, Anteil am Topf, Merge, Verkaufsgebot). Nicht nur neue Märkte: deren
+    # Reward-Annahme ist an echten Auszahlungen noch nicht geprüft.
+    capital_usd: 2500
+    max_markets: 15
+    rank: share                  # Auswahl nach erwartetem Reward, wie die Vergleichsvarianten
+    prefilter: 120
+    list_orders: [volume, liquidity, volume24hr, startDate]  # Gamma liefert je Liste max. 2.000
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto, Kultur, Social]
+    skip_tags:                   # Gamma-Kategorie/Tags, zusätzlich zu skip_categories (unsere eigene Einteilung)
+      - culture
+      - pop-culture
+      - entertainment
+      - movies
+      - movie
+      - film
+      - television
+      - music
+      - youtube
+      - streaming
+      - box-office
+      - celebrities
+      - celebrity
+      - gaming
+      - video-games
+      - oscars
+      - grammys
+    skip_re:                     # View-Count, Trailer, Kasse, Streaming – das Muster hinter dem GTA-Cluster
+      - '\b(views?|viewership|box office|rotten tomatoes|trailer|attend(?:ance|ees)?)\b'
+      - '\b(streams?|streaming|livestream)\b'
+      - '\b(gta\s*(vi|6)|grand theft auto)\b'
+      - '\b(oscar|oscars|grammy|grammys|emmy|box office|imdb|metacritic|billboard)\b'
+    min_days_to_end: 14          # nichts, das in den nächsten 2 Wochen endet
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    min_liquidity: 1000
+    quote_frac: 0.5              # halber Reward-Abstand, nicht näher
+    min_quote_frac: 0.5          # auch Verkaufsgebot und ein späteres pair_frac bleiben mindestens so weit weg
+    quote_usd: 50
+    max_inventory_usd: 100       # einseitiger Bestand je Markt
+    max_event_usd: 150           # alle Märkte desselben Events zusammen (Buckets teilen sich das Limit)
+    max_total_inventory_usd: 1500
+    exit:                        # Kapital nicht monatelang liegen lassen; Verkauf nie näher als min_quote_frac
+      after_h: 0
+      dump_after_h: 96
+    reward_asks: true
+    latency_s: 1
+    step_s: 2
   sharp_fussball:
     enabled: true
     wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus

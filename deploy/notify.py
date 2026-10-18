@@ -297,13 +297,16 @@ def book_stats(b: dict, since: float) -> dict:
         then = q("SELECT realized_cum FROM equity WHERE ts <= ? ORDER BY ts DESC LIMIT 1", (since,))
         res = q("""SELECT COUNT(*), SUM(payout > 0) FROM settlements
                    WHERE ts > ? AND kind IN ('position', 'basket')""", (since,))
+        # missing on books that have not been rewritten yet; q() turns that error into []
+        parts = q("SELECT trade_cum, rewards_cum, rebates_cum FROM equity WHERE trade_cum IS NOT NULL ORDER BY ts DESC LIMIT 1")
     finally:
         DB = keep
     if not now:
         return dict(b, ok=False)
     real = now[0][1] or 0.0
     return dict(b, ok=True, real=real, delta=real - ((then[0][0] or 0.0) if then else 0.0), equity=now[0][0],
-                n=res[0][0] if res else 0, won=(res[0][1] or 0) if res else 0)
+                n=res[0][0] if res else 0, won=(res[0][1] or 0) if res else 0,
+                parts=parts[0] if parts else None)
 
 
 def mm_trend(b: dict, now: float = None):
@@ -373,8 +376,12 @@ def overview(hours: float, title: str):
     for x in sorted(live, key=lambda x: -x["real"]):
         arrow = "▲" if x["real"] > 0 else "▼" if x["real"] < 0 else "•"
         res = f" · {x['won']}✓ {x['n'] - x['won']}✗" if x["n"] else ""
+        split = ""
+        if x.get("parts") and x["parts"][0] is not None:
+            tr, rw, rb = x["parts"]
+            split = f" · Handel {usd(tr or 0)} · Rewards ~{usd(rw or 0)} · Rebates {usd(rb or 0)}"
         lines.append(f"{arrow} {x['label']}: {usd(x['real'])} ({x['real'] / x['start'] * 100:+.2f} %)"
-                     f" | {hours:g}h {usd(x['delta'])}{res}")
+                     f" | {hours:g}h {usd(x['delta'])}{res}{split}")
     lines += [f"• {x['label']}: noch keine Daten" for x in stats if not x["ok"]]
     real = [t for t in (live_line(x) for x in live) if t]
     if real:

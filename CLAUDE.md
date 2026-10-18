@@ -171,6 +171,11 @@ Aktive Kandidaten im Live-Test:
   gesamt echt ~−24 % vs. Sim ~−11 % je 1 $ gefüllt; der große Unterschied sind die Rewards je 1 $ gefüllt: echt ~4,5 %,
   mm_sofort ~59 % (Marktauswahl!). Cockpit-Karte „Vergleich je 1 $ gefüllt – kalibriert“ rechnet jedes Szenario mit dem
   echten Handelsverlust je $ (`calibration_card` in arb/cockpit.py).
+- **Plan (18.10., Nutzer einverstanden, Risiko begrenzen):** Hochrechnung 1.000 $/Monat aus mm_sofort: optimistisch +2.000 $,
+  realistisch −400 bis +800 $, pessimistisch −300 bis −600 $ – entscheidend sind die echten Rewards je 1 $ gefüllt in
+  neuen Märkten (Schwelle ~25 %, echte Handelskosten −24 %). Stufe 1: Echt-Test 3–5 Tage, 100–150 $, nur neue Märkte,
+  Tageslimit 5 $ (nach Auswertung 19.10., Nutzer entscheidet). Stufe 2 nur bei > 25 %: 1.000 $, Tageslimit ~30 $,
+  ≤ 25 $ je Gebot, ~20 Märkte, Stopp + Überprüfung bei −10 % in der ersten Woche.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

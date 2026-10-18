@@ -757,5 +757,36 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert r["min_days_to_end"] >= 14 and r["min_quote_frac"] >= 0.5 and r["quote_frac"] >= r["min_quote_frac"]
     assert r["max_event_usd"] > 0 and "Kultur" in r["skip_categories"] and r["skip_tags"] and r["skip_re"]
     assert sc["mm_sofort"]["min_days_to_end"] == 3 and "max_event_usd" not in sc["mm_sofort"]
-    assert sc["mm_nah"]["quote_frac"] == 0.25 and "min_quote_frac" not in sc["mm_nah"]
+    assert sc["mm_sofort"]["enabled"] is True and "min_share" not in (sc["mm_sofort"].get("exit") or {})
+    assert sc["mm_nah"]["quote_frac"] == 0.25 and "min_quote_frac" not in sc["mm_nah"] and sc["mm_nah"]["enabled"] is True
+    assert sc["mm_treppe"]["enabled"] is True and sc["mm_ueberbucht"]["enabled"] is True
+    assert sc["mm_ruhig"]["enabled"] is True and sc["mm_stop"]["enabled"] is True and sc["mm_rewards"]["enabled"] is True
     assert "Kultur" not in sc["mm_rewards"]["skip_categories"]
+    k, n = sc["mm_konservativ"], sc["mm_neu_vorsichtig"]
+    assert k["enabled"] is False and k["min_days_to_end"] >= 30 and k["quote_frac"] >= 0.8
+    assert k["min_quote_frac"] >= k["quote_frac"] and k["quote_usd"] <= 20 and k["pause"] and k["exit"]["stop_ticks"]
+    assert n["enabled"] is False and n["max_age_days"] <= 3 and "overcommit" not in n
+    assert n["exit"]["min_share"] > 0 and n["max_inventory_usd"] <= 50 and n["quote_frac"] == 0.5
+    w = sc["wetter_sniper"]
+    assert w["enabled"] is False and w["strategy"] == "wxsniper" and "live" not in w
+    assert w["min_margin"] >= 1 and w["min_yes"] >= 0.03 and w["max_slippage"] == 0
+
+
+def test_min_share_pulls_quotes_and_sells_inventory_only_when_set(tmp_path):
+    store = BookStore()
+    _book(store, "a", 0.48, 0.52, size=20000)  # our ~40 shares are a tiny share of this book
+    plain = MarketMaker("mm_rewards", _cfg(tmp_path / "plain"), Client([_m("a", "Will the Fed cut rates?", 0.50)]),
+                        SimClock(NOW), books=store, pool=None)
+    plain.step()
+    assert plain.st.markets["a"].bid_yes is not None  # without min_share the crowd does not stop the quote
+    crowded = MarketMaker("mm_rewards", _cfg(tmp_path / "exit", exit={"after_h": 24, "dump_after_h": 96, "min_share": 0.5}),
+                          Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=BookStore(), pool=None)
+    _book(crowded.books, "a", 0.48, 0.52, size=20000)
+    crowded.select(NOW)
+    mk = crowded.st.markets["a"]
+    mk.qty_yes, mk.cost_yes = 30.0, 15.0
+    crowded._last["select"] = NOW
+    crowded.step()
+    assert mk.bid_yes is None and mk.bid_no is None and mk.qty_yes == 0
+    assert crowded.scan.get("Reward-Anteil unter Schwelle", 0) >= 1
+    assert crowded.scan.get("Bestand abgestoßen (Bid)", 0) >= 1

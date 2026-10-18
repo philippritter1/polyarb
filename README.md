@@ -83,6 +83,20 @@ Die Ausführung ist so realistisch wie bei der Arbitrage: Latenz, Order-Verzöge
 
 Lokal: `python run.py scenario weather` startet ein Szenario, `python run.py dashboard --all` baut alle Tabs.
 
+### Satz ab 18.10. (noch aus, laufende Varianten bleiben)
+
+Die vielen Market-Making-Varianten laufen auf dem Server weiter, solange sie in `config.yaml` `enabled: true` haben. Daneben liegen drei neue, ausgeschaltete Szenarien. Jedes hat eine eigene Datenbank, der Tab zeigt die Kurve ab dem eigenen Start. Einschalten heißt `enabled: true` auf `main`; der Server startet dann `polyarb-scenario@<name>`. Ausschalten heißt wieder `enabled: false`.
+
+| Szenario | Was es prüft |
+|---|---|
+| `mm_rewards` | Basis, unverändert: beidseitig in ruhigen Reward-Märkten |
+| `mm_konservativ` | Mindestens 30 Tage bis zum Ende, Gebot bei 85 % des Reward-Abstands, kleine Größe. Pause nach Kurssprüngen und Stop-Loss sind dieselben Schalter wie bei `mm_ruhig` und `mm_stop` (`pause:`, `exit.stop_ticks`) |
+| `mm_robust` | Mindestens 14 Tage, ohne Kultur/View-Count, nie näher als der halbe Reward-Abstand, Deckel je Event |
+| `mm_neu_vorsichtig` | Nur Märkte jünger als 3 Tage, feste Deckel, raus wenn der geschätzte Reward-Anteil unter `exit.min_share` fällt. Das ist die vorsichtige Fassung von sofort / nah / Treppe / überbucht |
+| `wetter_sniper` | Papier only. Temperatur-Bucket, den die Station schon um ≥ 1° ausgeschlossen hat: echtes NO-Buch loggen, NO zum Ask kaufen nur wenn JA noch ≥ 3 ct zeigt und Tiefe da ist. Karte auf dem Tab: Gelegenheiten, kaufbar, Ø Edge, Ausgänge |
+
+`exit.min_share` gilt nur, wo es gesetzt ist. Ohne den Schlüssel ändern sich die laufenden Market-Making-Szenarien nicht.
+
 ## Markt-Studie und Export
 
 **Studie** (Tab „Studie“): `polyarb-study.timer` sammelt alle 30 Minuten aufgelöste Märkte der letzten 120 Tage (ab 1.000 $ Volumen; Temperatur-Buckets aus Wetter-Events schon ab 50 $, weil sie einzeln wenig gehandelt werden) mit ihrem Preisverlauf und speichert den YES-Preis 7 Tage, 1 Tag, 6 h und 1 h vor Schluss plus das Ergebnis (`data/study.sqlite`, inkrementell). Der Tab zeigt daraus die Kalibrierung: Gewinnen Seiten, die zu 95 % gehandelt wurden, wirklich in 95 % der Fälle? Nach Preisbereich, Zeitpunkt und Kategorie, mit 95-%-Bereich. Grün/rot markiert ist nur, was statistisch klar ist. So lassen sich Ideen wie Endspiel-Ernte oder Longshot-NO an Tausenden vergangener Märkte prüfen, statt Wochen auf Paper-Ergebnisse zu warten. Von Hand: `python run.py study --days 120`.

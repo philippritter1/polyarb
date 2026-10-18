@@ -3,7 +3,8 @@ import sqlite3
 from datetime import date, datetime, timezone
 
 from arb.study import SCHEMA as STUDY_SCHEMA
-from arb.wxobs import WxObsStudy, analysis, csv_rows, dead_time, parse_question, station_from, to_unit
+from arb.wxobs import (WxObsStudy, analysis, csv_rows, dead_time, degrees_outside, parse_question,
+                       station_from, to_unit)
 
 UTC = timezone.utc
 END = datetime(2026, 9, 3, 14, tzinfo=UTC).timestamp()      # Polymarket "end": 14:00 UTC on the day
@@ -68,6 +69,18 @@ def _study(tmp_path):
                    (cid, q, "Wetter", 1, 0, 800, END, CLOSE, out, None, p, p, p, 20, 0))
     db.commit()
     return str(tmp_path / "study.sqlite")
+
+
+def test_degrees_outside_is_one_whole_degree_past_the_bucket():
+    # 24°C is still inside; 25°C is one degree out. dead_time(margin=0) agrees; margin=1 needs 26.
+    assert degrees_outside("max", 24, 24, 24) == 0
+    assert degrees_outside("max", 24, 24, 25) == 1
+    assert degrees_outside("max", -math.inf, 16, 18) == 2          # "16°C or below"
+    assert degrees_outside("max", 30, math.inf, 40) == 0           # "or higher" cannot die from a high
+    assert degrees_outside("min", 10, 12, 8) == 2
+    readings = [(1, 77.0)]  # 25°C
+    assert dead_time(readings, "max", 24, 24, "c", 0) == 1
+    assert dead_time(readings, "max", 24, 24, "c", 1) is None
 
 
 def test_helpers():

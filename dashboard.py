@@ -9,7 +9,7 @@ import os
 import sqlite3
 import zipfile
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -33,6 +33,42 @@ def capacity_rows(db_path: str) -> list:
         rows = []
     db.close()
     return [dict(day=r[0], n=r[1], slip=r[2] or 0, c2=r[3] or 0, band=r[4] or 0, bought=r[5] or 0) for r in rows]
+
+
+def sniper_summary(db_path: str) -> dict | None:
+    """Wetter-Sniper log: how often a ruled-out bucket was buyable at the real NO ask, and what the paper buys did."""
+    if not Path(db_path).exists():
+        return None
+    db = sqlite3.connect(db_path)
+    try:
+        n, markets, buy_n, buy_m, edge = db.execute(
+            """SELECT COUNT(*), COUNT(DISTINCT cid), COALESCE(SUM(buyable), 0),
+                      COUNT(DISTINCT CASE WHEN buyable=1 THEN cid END),
+                      AVG(CASE WHEN buyable=1 THEN edge END)
+               FROM wx_snap""").fetchone()
+        recent = db.execute(
+            """SELECT ts, city, station, question, margin, unit, yes_px, no_ask, depth, edge, buyable, note
+               FROM wx_snap ORDER BY id DESC LIMIT 12""").fetchall()
+    except sqlite3.OperationalError:
+        db.close()
+        return None
+    try:
+        bought, spent = db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(locked), 0) FROM executions WHERE matched_qty > 0").fetchone()
+        settled = db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(payout > 0), 0), COALESCE(SUM(pnl), 0) FROM settlements WHERE kind='position'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        bought, spent, settled = 0, 0.0, (0, 0, 0.0)
+    db.close()
+    if not n:
+        return None
+    return dict(checks=n, markets=markets, buyable=buy_n, buyable_markets=buy_m,
+                avg_edge=None if edge is None else round(edge, 4),
+                bought=bought or 0, spent=round(spent or 0, 2),
+                settled=settled[0] or 0, wins=settled[1] or 0, pnl=round(settled[2] or 0, 2),
+                recent=[dict(ts=r[0], city=r[1], station=r[2], question=r[3], margin=r[4], unit=r[5],
+                             yes=r[6], ask=r[7], depth=r[8], edge=r[9], buyable=r[10], note=r[11]) for r in recent])
 
 
 def collect(db_path: str, start_capital: float) -> dict:
@@ -131,7 +167,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
                   "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell",
-                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "mm_robust_mm": "Market Making (robust)", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
+                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "mm_robust_mm": "Market Making (robust)", "mm_konservativ_mm": "Market Making (konservativ)", "mm_neu_vorsichtig_mm": "Market Making (neu, vorsichtig)", "wetter_sniper": "Wetter-Sniper", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -436,7 +472,20 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     mo = markout_rows(db_path) if kind == "mm" else []
     if mo:
         _write(Path(out).with_name("fills.csv"), _csv(MARKOUT_HEADER, mo), "utf-8-sig")
+    sniper = sniper_summary(db_path) if kind == "wxsniper" else None
+    if sniper:
+        sdb = sqlite3.connect(db_path)
+        snap_rows = sdb.execute(
+            """SELECT ts, city, station, question, margin, unit, yes_px, no_ask, depth, edge, buyable, note
+               FROM wx_snap ORDER BY id""").fetchall()
+        sdb.close()
+        _write(Path(out).with_name("snaps.csv"), _csv(
+            ["Zeit (UTC)", "Stadt", "Station", "Frage", "Abstand", "Einheit", "JA angezeigt", "NO-Ask", "Tiefe",
+             "Edge", "kaufbar", "Notiz"],
+            [[datetime.fromtimestamp(r[0], tz=timezone.utc).strftime("%Y-%m-%d %H:%M"), *r[1:]] for r in snap_rows]),
+            "utf-8-sig")
     data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
+                sniper=sniper,
                 metrics=metrics, rewards_cmp=rcmp, reward_share=rshare,
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
@@ -1228,6 +1277,10 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <p class="note" id="scan"></p>
 <div id="halt"></div>
 <div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur den Handel (Auszahlung, Zusammenlegen, Verkauf). Bei Market Making sind geschätzte Rewards und Rebates darin nicht enthalten. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
+<div class="card" id="snipcard" style="display:none"><h2>Wetter-Sniper: Bucket schon von der Station ausgeschlossen</h2>
+<p class="note" id="snipnote"></p><div class="kpis" id="snipkpis"></div>
+<div class="tblwrap"><table id="sniptbl"></table></div>
+<p class="note">Die letzten Prüfungen. Der Export <a href="snaps.csv">snaps.csv</a> enthält alle. Auswertung ab dem ersten Scan dieser Datenbank.</p></div>
 <div class="kpis" id="kpis"></div>
 <div class="card" id="rwcard" style="display:none"><h2>Pilot: Rewards echt vs. geschätzt</h2><p class="note">Was Polymarket für unsere echten Gebote tatsächlich gezahlt hat (einmal täglich abgerechnet, Tag = UTC), neben unserer Schätzung für denselben Tag. Die Kernzahl des Pilots: liegt „echt / geschätzt“ deutlich unter 100 %, überschätzt die Simulation die Rewards.</p><div class="tblwrap"><table id="rwtbl"></table></div><p class="note" id="rsnote" style="display:none">Laufend, auch unter der Auszahlungsgrenze von 1 $/Tag: Polymarkets eigener Anteil am Pool unserer Märkte (alle 10 Min. abgefragt) × Tagesbudget, neben unserer Schätzung zum selben Zeitpunkt. „bisher verdient“ = was Polymarket für den Tag schon ausweist.</p><div class="tblwrap"><table id="rstbl"></table></div></div>
 <div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> ist der Handel, dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt und nicht Teil von „realisiert“. Bestand zum Bid. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
@@ -1295,6 +1348,18 @@ if(D.metrics&&D.metrics.length){
  $("mmtbl").innerHTML=`<tr><th>Tag</th><th class="num">Pool ausgewählt</th><th class="num">Pool unserer Gebote</th><th class="num">Rewards/Tag (geschätzt)</th><th class="num">Anteil am Pool</th><th class="num">Spread/Auflösung</th><th class="num">Rewards</th><th class="num">Rebates</th><th class="num">Bestand</th><th class="num">Märkte</th><th class="num">Ausführungen</th><th class="num">Std.</th></tr>`+
   D.metrics.map(m=>`<tr><td>${m[0]}</td><td class="num">${usd(m[1])}</td><td class="num">${usd(m[2])}</td><td class="num">${usd(m[3])}</td><td class="num">${m[4]==null?"–":fmt(m[4],2)+" %"}</td><td class="num ${m[5]>0?"pos":m[5]<0?"neg":""}">${usd(m[5])}</td><td class="num">${usd(m[6])}</td><td class="num">${usd(m[7])}</td><td class="num">${usd(m[8])}</td><td class="num">${m[9]}</td><td class="num">${m[10]}</td><td class="num">${m[11]}</td></tr>`).join("");
  $("mmcard").style.display=""}
+if(D.sniper){const S=D.sniper;
+ $("snipnote").textContent="Jeder Bucket, den die Station schon ausgeschlossen hat, wird mit dem echten NO-Buch geloggt. Papierkauf nur zum besten Ask, und nur wenn der angezeigte JA-Preis noch über der Schwelle liegt und am Ask Größe da ist. Edge = 1 − NO-Ask. Die Kurve dieser Seite beginnt mit dem ersten Scan.";
+ const tile=(l,v,d)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+ $("snipkpis").innerHTML=[
+  tile("Gelegenheiten",S.markets,`${S.checks} Prüfungen`),
+  tile("Kaufbar am Ask",S.buyable_markets,`${S.buyable} von ${S.checks} Prüfungen`),
+  tile("Ø Edge",S.avg_edge==null?"–":pct(S.avg_edge),"1 − NO-Ask, nur kaufbare"),
+  tile("Papierkäufe",S.bought,`eingesetzt ${usd(S.spent)}`),
+  tile("Aufgelöst",`${S.wins} / ${S.settled}`,`PnL ${usd(S.pnl)}`)].join("");
+ $("sniptbl").innerHTML=`<tr><th>Zeit</th><th>Stadt</th><th>Station</th><th>Frage</th><th class="num">Abstand</th><th class="num">JA</th><th class="num">NO-Ask</th><th class="num">Tiefe</th><th class="num">Edge</th><th>Notiz</th></tr>`+
+  S.recent.map(r=>`<tr><td>${dt(r.ts)}</td><td>${r.city}</td><td>${r.station}</td><td class="t">${r.question}</td><td class="num">${fmt(r.margin,0)}°${r.unit}</td><td class="num">${r.yes==null?"–":fmt(r.yes*100,1)+" ct"}</td><td class="num">${r.ask==null?"–":fmt(r.ask,3)}</td><td class="num">${r.depth==null?"–":fmt(r.depth,0)}</td><td class="num">${r.edge==null?"–":pct(r.edge)}</td><td>${r.note}</td></tr>`).join("");
+ $("snipcard").style.display=""}
 if(D.capacity&&D.capacity.length){const C=D.capacity,avg=f=>C.reduce((a,c)=>a+c[f],0)/C.length;
  $("captbl").innerHTML=`<tr><th>Markttag</th><th class="num">Gelegenheiten</th><th class="num">gekauft</th><th class="num">im Buch bis Kaufgrenze</th><th class="num">bis Ask + 2 ct</th><th class="num">bis Regelgrenze</th></tr>`+
   C.map(c=>`<tr><td>${c.day}</td><td class="num">${c.n}</td><td class="num">${usd(c.bought)}</td><td class="num">${usd(c.slip)}</td><td class="num">${usd(c.c2)}</td><td class="num">${usd(c.band)}</td></tr>`).join("")+

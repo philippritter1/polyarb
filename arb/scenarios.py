@@ -11,6 +11,7 @@ Strategies
   endgame  – favorites at 0.95-0.99 shortly before / after the scheduled end ("almost decided")
   longshot – NO on multi-outcome candidates priced 2-8 % (favorite-longshot bias)
   weather  – temperature buckets priced from ensemble forecasts (arb/weather.py)
+  wxsniper – paper-only: NO on temperature buckets the station has already ruled out (arb/wxsniper.py)
   ladder   – logic arbitrage between related markets (arb/ladder.py), run by the arbitrage engine
 """
 from __future__ import annotations
@@ -471,6 +472,9 @@ class ScenarioEngine:
             data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
             strategy = SharpStrategy(dict(self.sc, odds_state_path=self.sc.get(
                 "odds_state_path", os.path.join(data_dir, "odds-api.json"))), client)
+        if strategy is None and kind == "wxsniper":  # station-ruled-out measurement (arb/wxsniper.py)
+            from .wxsniper import WxSniperStrategy
+            strategy = WxSniperStrategy(self.sc, client)
         self.strategy = strategy or STRATEGIES[kind](self.sc, client)
         self.start_capital = float(self.sc.get("capital_usd", 2500))
         data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
@@ -511,6 +515,10 @@ class ScenarioEngine:
         try:
             # wind_down: the scenario is finished – no new entries, open positions are still settled
             signals = [] if self.sc.get("wind_down") else self.strategy.candidates(now)
+            snaps = getattr(self.strategy, "snaps", None)
+            if snaps:  # wxsniper: every ruled-out bucket, including the ones we do not buy
+                self._save_snaps(snaps)
+                snaps.clear()
         except Exception as e:  # noqa
             log.error("%s: candidates failed (%s: %s)", self.name, type(e).__name__, e)
             signals = []
@@ -573,6 +581,20 @@ class ScenarioEngine:
         skipped = getattr(self.strategy, "skipped", None)
         log.info("%s: %d signals, %d below max price, %d open, equity %.2f, guarded %d%s", self.name, len(signals),
                  n_opps, len(pf.positions), pf.equity, self.guarded, f", skipped {skipped}" if skipped else "")
+
+    def _save_snaps(self, rows: list) -> None:
+        """wxsniper log. Other strategies never fill `snaps`, so this table stays absent for them."""
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS wx_snap(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, cid TEXT, token TEXT, question TEXT,
+            city TEXT, station TEXT, margin REAL, unit TEXT, yes_px REAL, no_ask REAL, depth REAL,
+            depth_usd REAL, buyable INT, edge REAL, note TEXT)""")
+        self.store.db.executemany(
+            """INSERT INTO wx_snap(ts, cid, token, question, city, station, margin, unit, yes_px, no_ask,
+                                   depth, depth_usd, buyable, edge, note)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [(r["ts"], r["cid"], r["token"], r["question"], r["city"], r["station"], r["margin"], r["unit"],
+              r["yes_px"], r["no_ask"], r["depth"], r["depth_usd"], r["buyable"], r["edge"], r["note"])
+             for r in rows])
 
     def _capacity(self, s: Signal, ob: OrderBook, band_max: float, now: float) -> None:
         """Dollars on the ask side up to the scenario's buy limit (ask + max_slippage), up to ask + 2 cents and

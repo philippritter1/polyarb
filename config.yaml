@@ -913,6 +913,91 @@ scenarios:
     reward_asks: true
     latency_s: 1
     step_s: 2
+  mm_konservativ:
+    enabled: false               # neuer Satz, noch aus. Laufende Varianten (mm_ruhig, mm_stop, …) bleiben, wie sie sind.
+    title: Market Making (konservativ)
+    strategy: mm                 # 18.10.: das ruhige Ende des Reward-Geschäfts als ein Szenario. Pause und Stop-Loss sind
+    # dieselben Schalter wie bei mm_ruhig und mm_stop (pause:, exit.stop_ticks) – hier an, sonst aus. Weit von der Mitte,
+    # kleine Größe, nur Märkte mit mindestens 30 Tagen. Eigene Datenbank, Auswertung ab dem eigenen Start.
+    capital_usd: 2500
+    max_markets: 10
+    rank: share
+    prefilter: 80
+    list_orders: [volume, liquidity, volume24hr, startDate]
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 30
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    min_liquidity: 1000
+    quote_frac: 0.85             # weit weg: 85 % des Reward-Abstands (1,0 läge außerhalb und zählt nicht)
+    min_quote_frac: 0.85         # Pause/Paar/Treppe dürfen nicht näher heran
+    quote_usd: 15
+    max_inventory_usd: 40
+    max_total_inventory_usd: 300
+    pause:                       # wie mm_ruhig: Sprung der Mitte → eine Weile nicht bieten
+      ticks: 3
+      window_s: 300
+      pause_s: 600
+    exit:
+      after_h: 24                # Verkaufsgebot erst nach einem Tag, nicht sofort
+      dump_after_h: 96
+      stop_ticks: 3              # wie mm_stop: Mitte 3 Ticks unter Einstand → zum Bid
+    reward_asks: true
+    latency_s: 1
+    step_s: 2
+  mm_neu_vorsichtig:
+    enabled: false               # verdichtet mm_sofort / mm_nah / mm_treppe / mm_ueberbucht. Die vier laufen weiter.
+    title: Market Making (neu, vorsichtig)
+    strategy: mm                 # 18.10.: nur die ersten Tage eines Markts (dort lag der Reward in der Simulation),
+    # feste kleine Deckel, kein Überbuchen, Abstand 0,5 (nah an der Mitte war der schlechteste Handel). Raus, wenn der
+    # geschätzte Anteil am Reward-Pool unter min_share fällt – Gebote weg, Bestand zum Bid. Eigene Datenbank.
+    capital_usd: 2500
+    max_markets: 8
+    max_age_days: 3              # nur Märkte, die jünger als 3 Tage sind
+    rank: share
+    prefilter: 60
+    min_liquidity: 0
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto]
+    min_days_to_end: 3
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 25                # fester Deckel je Gebot
+    max_inventory_usd: 50        # fester Deckel je Markt
+    max_total_inventory_usd: 300 # fester Deckel über alles
+    exit:
+      after_h: 0                 # einseitiger Bestand: sofort Verkaufsgebot (wie mm_sofort)
+      dump_after_h: 96
+      min_share: 0.05            # geschätzter Anteil am Pool darunter → Gebote weg, Bestand zum Bid
+    reward_asks: true
+    latency_s: 1
+    step_s: 2
+  wetter_sniper:
+    enabled: false               # nur Papier und Messung. Kein live:-Block, die Szenario-Engine schickt keine Orders.
+    title: Wetter-Sniper
+    strategy: wxsniper           # arb/wxsniper.py (18.10.): Temperatur-Bucket, den die Station schon um mindestens
+    # min_margin Grad ausgeschlossen hat. Jeder solche Fall wird mit dem echten NO-Ask, der Tiefe dort, dem angezeigten
+    # JA-Preis, Abstand, Stadt und Station geloggt (Tabelle wx_snap, Dashboard-Karte, snaps.csv). Papierkauf der NO-Seite
+    # zum besten Ask nur, wenn JA noch mindestens min_yes zeigt und am Ask Größe liegt. Ob das oft kaufbar ist und was
+    # nach der Auflösung herauskommt, ist die Frage. Eigene Datenbank, Auswertung ab dem ersten Scan.
+    capital_usd: 2500
+    tag_slug: weather
+    max_events: 400
+    min_margin: 1                # ganze Grad jenseits des Buckets (24°C ist bei 25°C draußen; 2 = die strengere Studie)
+    min_yes: 0.03                # JA noch mindestens 3 ct, sonst ist der NO-Ask schon bei ~1
+    obs_delay_min: 15            # nur Messungen, die schon 15 min veröffentlicht sind
+    obs_ttl_s: 600
+    interval_min: 10
+    max_slippage: 0              # nur der beste Ask, nicht weiter hochlaufen
+    max_position_usd: 25
+    max_event_usd: 75            # eine Stadt und ein Tag
+    max_day_usd: 200
+    max_new_per_step: 8
+    max_open_positions: 40
   sharp_fussball:
     enabled: true
     wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus

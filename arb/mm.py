@@ -337,6 +337,20 @@ class MarketMaker:
             return 0.0
         return max(self.tick, float(spread) * float(floor))
 
+    def _share_exit(self, mk: MMMarket, by: Optional[OrderBook], bn: Optional[OrderBook], mid: float) -> None:
+        """exit.min_share: pull the bids and mark the inventory for a bid sale when our estimated share of the
+        reward pool, including the bids just set, is below the threshold. Absent key: no-op."""
+        floor = (self.sc.get("exit") or {}).get("min_share")
+        if floor is None or not (mk.bid_yes or mk.bid_no):
+            return
+        if by is None or bn is None or not by.bids or not bn.bids or mid is None or mk.max_spread <= 0:
+            return
+        share = reward_share(by, bn, mk.bid_yes, mk.bid_no, mid, mk.max_spread, mk.min_size, mk.ask)
+        if share + 1e-12 < float(floor):
+            mk.bid_yes = mk.bid_no = None
+            mk.share_out = True
+            self.scan["Reward-Anteil unter Schwelle"] = self.scan.get("Reward-Anteil unter Schwelle", 0) + 1
+
     def _sided_usd(self, mk: MMMarket) -> float:
         """One-sided inventory in dollars at the mid — the same basis as max_inventory_usd."""
         mid = mk.mid if mk.mid is not None else 0.5
@@ -661,15 +675,16 @@ class MarketMaker:
             if not bk or not bk.bids or not bk.asks:
                 continue
             stop = False
+            share_out = bool(getattr(mk, "share_out", False))
             if ex.get("stop_ticks"):  # stop-loss: the own side's mid fell stop_ticks below the average buy price –
                 held = mk.qty_yes if side == "yes" else mk.qty_no  # the move tends to go on, sell at the bid
                 avg = (mk.cost_yes if side == "yes" else mk.cost_no) / held if held > 1e-9 else 0.0
                 stop = (bk.best_bid + bk.best_ask) / 2 <= avg - float(ex["stop_ticks"]) * self.tick + 1e-9
                 if stop:
                     self.scan["Stop-Loss ausgelöst"] = self.scan.get("Stop-Loss ausgelöst", 0) + 1
-            if age < after and not stop:
+            if age < after and not stop and not share_out:
                 continue
-            if age >= dump or stop:
+            if age >= dump or stop or share_out:
                 q = min(abs(net), bk.bids[0].size)
                 if self.gw is not None and self.gw.live:  # real: send a fill-and-kill sell after the resting ask is
                     # cancelled (sync_orders); booked only when the exchange reports the fill (apply_real_fills)
@@ -911,6 +926,8 @@ class MarketMaker:
         cap_ev = float(sc["max_event_usd"]) if sc.get("max_event_usd") not in (None, "") else None
         if cap_ev is not None:  # how many bids this pass were pulled, not a lifetime counter
             self.scan["Ereignis-Grenze (Gebot)"] = 0
+        if (sc.get("exit") or {}).get("min_share") is not None:
+            self.scan["Reward-Anteil unter Schwelle"] = 0
         for mk in self.st.markets.values():  # marks first, including markets we no longer quote
             self._mark(mk, books.get(mk.yes), books.get(mk.no))
         ev_used: Dict[str, float] = {}
@@ -919,6 +936,7 @@ class MarketMaker:
                 k = mk.event or f"m:{mk.cid}"
                 ev_used[k] = ev_used.get(k, 0.0) + self._sided_usd(mk)
         for mk in self.st.markets.values():
+            mk.share_out = False
             by, bn = books.get(mk.yes), books.get(mk.no)
             if (self.quoted is not None and mk.cid not in self.quoted) or not by or not by.bids or not by.asks \
                     or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0 or self.blocked(mk.cid, now):
@@ -1020,8 +1038,11 @@ class MarketMaker:
                     adding_ev.append(new["price"] * new["size"])
             if cap_ev is not None:
                 ev_used[ev_key] = base_ev + (max(adding_ev) if adding_ev else 0.0)
+            self._share_exit(mk, by, bn, mid)
         if cap_ev is not None and not self.scan.get("Ereignis-Grenze (Gebot)"):
             self.scan.pop("Ereignis-Grenze (Gebot)", None)
+        if (sc.get("exit") or {}).get("min_share") is not None and not self.scan.get("Reward-Anteil unter Schwelle"):
+            self.scan.pop("Reward-Anteil unter Schwelle", None)
 
     def sync_orders(self, now: float) -> None:
         """The quotes the paper strategy holds, at pilot size (live.quote_usd, at least the reward minimum),

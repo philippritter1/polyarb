@@ -899,6 +899,7 @@ scenarios:
     max_odds_age_h: 3            # ältere Quoten nicht nutzen
     min_hours_to_start: 1        # Studie: 1–6 h vor Anpfiff
     max_hours_to_start: 6
+    events_horizon_days: 1       # 18.10.: nur Events bis 1 Tag nach dem letzten Spiel laden (385 MB RAM bei 3 Tagen)
     min_edge: 0.05               # Ask mindestens 5 Punkte vom Pinnacle-Wert (JA oder NEIN)
     max_gap: 0.25                # mehr Abweichung = vermutlich falsch verknüpft -> auslassen
     capital_usd: 2500

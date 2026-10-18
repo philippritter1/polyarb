@@ -227,7 +227,8 @@ class SharpStrategy(Strategy):
         edge = float(c.get("min_edge", 0.05))
         last = max(m["start"] for m in matches)
         evs = self.client.paged("/events", {"active": "true", "closed": "false", "tag_slug": c.get("tag_slug", "soccer"),
-                                            "end_date_min": _iso(now), "end_date_max": _iso(last + 3 * 86400)},
+                                            "end_date_min": _iso(now),
+                                            "end_date_max": _iso(last + float(c.get("events_horizon_days", 3)) * 86400)},
                                 max_items=2000)
         st["Polymarket-Events"] = len(evs)
         out = []

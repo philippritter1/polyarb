@@ -156,6 +156,10 @@ def short(label: str) -> str:
     return label[len("Market Making ("):-1] if label.startswith("Market Making (") and label.endswith(")") else label
 
 
+# Generalprobe 14.–16.10. (Not-Aus): −23,73 $ Kontowert − Einzahlungen, ~5,50 $ echte Rewards, ~121 $ gefüllt
+PROBE_RESULT = dict(filled=121.0, rew=5.5, trade=-29.2, trade_rate=-29.2 / 121.0)
+
+
 def calibration_card(rows: List[dict], live: Optional[dict]) -> str:
     """Everything per 1 $ that was filled – comparable between the simulation and the real probe. "kalibriert":
     the simulation's rewards, but each filled $ costing as much as it really did in the probe (16.10.)."""
@@ -164,6 +168,8 @@ def calibration_card(rows: List[dict], live: Optional[dict]) -> str:
         real_rew = float(live.get("paid_total") or 0) + float(live.get("today") or 0)
         real = dict(filled=live["filled"], rew=real_rew, trade=live["pnl_total"] - real_rew)
         real["trade_rate"] = real["trade"] / real["filled"]
+    elif live is not None:  # probe switched off: the account is no longer read – use its final result (16.10.)
+        real = dict(PROBE_RESULT)
     sim = [r for r in rows if (r["n"].get("filled") or 0) > 20 and r["key"] != "mm_probe"]
     if not sim and not real:
         return ""

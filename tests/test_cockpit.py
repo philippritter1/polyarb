@@ -42,3 +42,10 @@ def test_calibration_card_compares_per_filled_dollar():
     real_rate = (-23.7 - 5.51) / 121.0
     assert "Echt (Generalprobe)" in out and "sofort" in out
     assert f"{(900 + 1500 * real_rate) / 2.5:+.1f}".replace(".", ",") in out
+
+
+def test_calibration_uses_the_probes_final_result_when_it_is_off():
+    from arb.cockpit import calibration_card
+    rows = [dict(key="mm_sofort", label="sofort", n=dict(filled=1000.0, rewards=500.0, trading=-60.0, m60=-50.0, days=2.0))]
+    out = calibration_card(rows, dict(filled=None, pnl_total=None))
+    assert "Echt (Generalprobe)" in out and f"{(500 + 1000 * -29.2 / 121) / 2:+.1f}".replace(".", ",") in out

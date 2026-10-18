@@ -476,6 +476,9 @@ class ScenarioEngine:
             from .wxsniper import WxSniperStrategy
             strategy = WxSniperStrategy(self.sc, client)
         self.strategy = strategy or STRATEGIES[kind](self.sc, client)
+        from .booklog import open_log
+        self.booklog = open_log(cfg)  # off unless booklog.enabled
+        self.strategy.booklog = self.booklog
         self.start_capital = float(self.sc.get("capital_usd", 2500))
         data_dir = os.path.dirname(cfg["storage"]["db_path"]) or "."
         prepare_scenario_dir(data_dir, name, self.start_capital, str(self.sc.get("reset", "")))
@@ -528,6 +531,15 @@ class ScenarioEngine:
         signals = [s for s in signals if s.token_id not in seen and self._cooldown.get(s.token_id, 0) <= now]
         tokens = list(dict.fromkeys([s.token_id for s in signals] + list(self.pf.positions) + list(self.pf.orders)))
         books = self.client.books(tokens) if tokens else {}
+        if self.booklog.enabled and books:
+            meta = {}
+            for s in signals:
+                meta[s.token_id] = dict(cid=s.group, event=s.group, category="", end_ts=s.end_ts,
+                                        title=(s.title or "")[:160], yes="", no=s.token_id)
+            for t, p in self.pf.positions.items():
+                meta.setdefault(t, dict(cid=p.group, event=p.group, category="", end_ts=p.end_ts,
+                                        title=(p.title or "")[:160], yes="", no=t))
+            self.booklog.record(now, books, meta, None)
         n_open = int(self.sc.get("max_open_positions", 20))
         n_new = int(self.sc.get("max_new_per_step", 3))  # spread entries over time, not all in one scan
         # best edge first (fair value minus ask); "safest first" strategies by price

@@ -72,6 +72,15 @@ stream:
 storage:
   db_path: data/polyarb.sqlite
 
+booklog:                        # Orderbuch-Mitschnitt für Offline-Replay. Aus, solange enabled: false ist.
+  enabled: false               # true: data/booklog/YYYY-MM-DD.sqlite, ein Stand je Token alle every_s
+  every_s: 60                  # nicht öfter. Die Gebote lesen das nicht, der Handel ändert sich nicht.
+  depth: 3                     # Level je Seite, das beste zuerst
+  keep_days: 7                 # ältere Tagesdateien (samt WAL) werden gelöscht
+  # Größe grob: 400 Byte je Zeile. 200 Token × 1440 Stände ≈ 110 MB/Tag, 7 Tage ≈ 0,8 GB.
+  # Der laufende MM-Satz liegt eher bei 100–200 MB/Tag, weil sich Token über die Szenarien teilen.
+  # Enger stellen: every_s: 300 oder keep_days: 3. Replay: python -m arb.bookreplay data/booklog/*.sqlite
+
 services:                      # 14.10.: abgeschaltet (Nutzer-Entscheidung) – Daten, Seiten und Exporte bleiben
   arbitrage_bot: false         # polyarb.service: echte Arbitrage, praktisch nie erreichbar
   wxobs_study: false           # polyarb-wxobs.timer: Wetter-Messwert-Studie (Wetter-Strategien beendet)

@@ -328,6 +328,8 @@ class MarketMaker:
                               secrets_path=os.path.join(data_dir, "secrets.env"))
         self.scan: dict = {}
         self.quoted: Optional[set] = None  # market ids select() chose to quote (None until the first selection)
+        from .booklog import open_log
+        self.booklog = open_log(cfg)  # off unless booklog.enabled; quotes do not read it
 
     def _quote_floor(self, spread: float) -> float:
         """min_quote_frac: closest a bid or an exit ask may stand to the mid, as a share of the reward spread.
@@ -563,6 +565,15 @@ class MarketMaker:
         scored.sort(key=lambda x: -x[0])
         want = int(self.sc.get("max_markets", 15))
         st["erwarteter Reward $/Tag"] = round(sum(e for e, _ in scored[:want]), 2)
+        if self.booklog.enabled and books:  # the books this scan already loaded; scoring above is unchanged
+            from .study import categorize
+            meta = {}
+            for _rate, m, _v, _size, end, toks in cands:
+                cid = str(m.get("conditionId") or m.get("id"))
+                info = dict(cid=cid, event=event_key(m, cid), category=categorize(m), end_ts=end,
+                            title=(m.get("question") or "")[:160], yes=str(toks[0]), no=str(toks[1]))
+                meta[str(toks[0])] = meta[str(toks[1])] = info
+            self.booklog.record(self.clock.now(), books, meta, None)
         return [c for _, c in scored]
 
     # ------------------------------------------------------------------ fills
@@ -1164,6 +1175,13 @@ class MarketMaker:
         if self.pool is not None and len(books) < len(tokens) and now - self._last["book"] > 60:
             self._last["book"] = now  # websocket not (yet) delivering: fall back to REST once a minute
             books = dict(self.client.books(tokens), **books)
+        if self.booklog.enabled and books:
+            meta = {}
+            for mk in self.st.markets.values():
+                info = dict(cid=mk.cid, event=mk.event or f"m:{mk.cid}", category=mk.category, end_ts=mk.end_ts,
+                            title=(mk.title or "")[:160], yes=mk.yes, no=mk.no)
+                meta[mk.yes] = meta[mk.no] = info
+            self.booklog.record(now, books, meta, getattr(self.books, "last", None))
         live = self.gw is not None and self.gw.live
         if live:
             self.books.trades.clear()  # real orders: what was really filled counts, not the simulation's guess

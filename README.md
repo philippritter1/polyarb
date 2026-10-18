@@ -97,6 +97,14 @@ Die vielen Market-Making-Varianten laufen auf dem Server weiter, solange sie in 
 
 `exit.min_share` gilt nur, wo es gesetzt ist. Ohne den Schlüssel ändern sich die laufenden Market-Making-Szenarien nicht.
 
+### Orderbuch-Mitschnitt
+
+`booklog` in `config.yaml` steht auf `enabled: false`. Erst `enabled: true` schreibt mit. Der Bot speichert dann von jedem Markt, dessen Buch er ohnehin schon geladen hat (quotierte MM-Märkte, die beim Auswählen gelesenen Bücher, Szenario-Signale, Wetter-Sniper-Kandidaten, und die Arbitrage-Körbe falls der Dienst läuft), höchstens alle `every_s` Sekunden den besten Bid und Ask, drei Level je Seite, die Mitte, den letzten Trade und Marktdaten (Kategorie, Ende, Event). Eine Datei pro UTC-Tag: `data/booklog/YYYY-MM-DD.sqlite`. Dateien älter als `keep_days` fallen weg.
+
+Grobe Größe: etwa 400 Byte je Zeile. 200 verschiedene Token im Minutentakt sind rund 110 MB am Tag und etwa 0,8 GB über 7 Tage. Der laufende Market-Making-Satz liegt eher bei 100–200 MB am Tag, weil sich die Token über die Szenarien teilen. Die Arbitrage-Liste ist deutlich größer, der Dienst ist aber aus. Enger wird es mit `every_s: 300` oder `keep_days: 3`.
+
+Offline, ohne den Bot: `python -m arb.bookreplay data/booklog/2026-10-18.sqlite --distance 0.02`. Das ist eine einfache Gebotsregel (Mitte minus Abstand). Ein Fill zählt, wenn ein späterer Stand einen Trade unter dem Gebot zeigt. Die Queue bildet das nicht ab.
+
 ## Markt-Studie und Export
 
 **Studie** (Tab „Studie“): `polyarb-study.timer` sammelt alle 30 Minuten aufgelöste Märkte der letzten 120 Tage (ab 1.000 $ Volumen; Temperatur-Buckets aus Wetter-Events schon ab 50 $, weil sie einzeln wenig gehandelt werden) mit ihrem Preisverlauf und speichert den YES-Preis 7 Tage, 1 Tag, 6 h und 1 h vor Schluss plus das Ergebnis (`data/study.sqlite`, inkrementell). Der Tab zeigt daraus die Kalibrierung: Gewinnen Seiten, die zu 95 % gehandelt wurden, wirklich in 95 % der Fälle? Nach Preisbereich, Zeitpunkt und Kategorie, mit 95-%-Bereich. Grün/rot markiert ist nur, was statistisch klar ist. So lassen sich Ideen wie Endspiel-Ernte oder Longshot-NO an Tausenden vergangener Märkte prüfen, statt Wochen auf Paper-Ergebnisse zu warten. Von Hand: `python run.py study --days 120`.

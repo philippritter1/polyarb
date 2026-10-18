@@ -124,11 +124,18 @@ class WxSniperStrategy(Strategy):
                    margin=ruled["margin"], unit=ruled["unit"], yes_px=yes_px, no_ask=ask, depth=depth,
                    depth_usd=round(ask * depth, 2) if ask is not None else None, buyable=buyable, edge=edge,
                    note=note)
+        end = _parse_ts(m.get("endDate")) or _parse_ts(ev.get("endDate"))
+        gid = ev.get("id")
+        group = f"event:{gid}" if gid not in (None, "") else row["cid"]
+        blog = getattr(self, "booklog", None)
+        if blog is not None and books:
+            from .booklog import meta_for
+            blog.record(now, books, meta_for(
+                [yes_tok, no_tok],
+                dict(cid=row["cid"], event=group, category="Wetter", end_ts=end, title=question[:160],
+                     yes=yes_tok, no=no_tok)), None)
         if buyable:
-            end = _parse_ts(m.get("endDate")) or _parse_ts(ev.get("endDate"))
             fee = self.fees.resolve(m, "weather")
-            gid = ev.get("id")
-            group = f"event:{gid}" if gid not in (None, "") else row["cid"]
             out.append(Signal(no_tok, group, question[:200], f"NO {ruled['city']}", fair=1.0, max_price=ask,
                               fee=fee, end_ts=end, delay_s=_delay(m),
                               reason=(f"Station {ruled['station']} {ruled['reading']:.0f}°{ruled['unit']} "

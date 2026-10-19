@@ -52,6 +52,14 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
 - `arb/sharp.py` – Pinnacle-Quoten (The Odds API) vs. Polymarket-Fußball (Strategie `sharp`)
 - `arb/kalshi.py` – Kalshi-Studie; `arb/ladder.py` + `arb/scanner.py` – Arbitrage
 - `dashboard.py` – statisches Dashboard + Exporte; `deploy/notify.py` – 4-h-Bericht per Push
+- `arb/replaylab.py` (ab 19.10.) – Replay-Labor: 32 MM-Regeln (Abstand 0,25/0,5/0,7/0,9 × Pause × Mitte 5–95/20–80 %
+  × ≥ 0/14 Tage) auf dem Orderbuch-Mitschnitt, Rewards nach Formel (Parameter aus `mm_reward_params`) × 0,6, Fill = Ask
+  fällt aufs Gebot oder neuer Handel darunter, Verkauf zum Bid 60 Min. später; **Walk-forward** in 12-h-Blöcken (beste
+  Regel bis dahin gegen den nächsten Block). Läuft als `polyarb-replay.timer` (02:50/14:50, Nice 19, max. 400 MB),
+  schreibt `data/replay-*.csv` + `replaylab.json`; Karte im Cockpit, Export-Gruppe „Replay-Labor“. Ändert keine Szenarien.
+  Rewards sind eine Obergrenze (nur 3 Level je Seite im Mitschnitt). Urteil erst ab ~6 Blöcken (3 Tage Mitschnitt).
+- Cockpit-Karte „Entscheidungshilfe Stufe 1“ (19.10.): je Szenario Rewards × 0,6 je 1 $ gefüllt, Zeitraum in zwei Hälften
+  geteilt; „ja“ nur, wenn beide Hälften > 25 % und netto (mit echten Handelskosten der Generalprobe) > 0.
 - `arb/cockpit.py` – Reiter „Cockpit“ (`/cockpit/`, ab 15.10.): Echtgeld-Kacheln der Generalprobe (Kontowert, echte
   Rewards heute/gestern, Polymarket-Anteil vs. Schätzung) und alle aktiven MM-Szenarien seit 11.10.: Rewards vs. Handel
   (Balken), Rendite-Verlauf (Kleinbilder), Kennzahlen (netto/Tag, Handel je 1 $ Rewards, Bestand, Kurs nach Fill).

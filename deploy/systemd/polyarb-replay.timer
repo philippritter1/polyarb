@@ -1,0 +1,8 @@
+[Unit]
+Description=Polyarb Replay-Labor zweimal täglich (und einmal 20 Min. nach dem ersten Start)
+[Timer]
+OnActiveSec=20min
+OnCalendar=*-*-* 02,14:50:00
+Persistent=true
+[Install]
+WantedBy=timers.target

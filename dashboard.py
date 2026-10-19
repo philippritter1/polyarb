@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sqlite3
+import shutil
 import zipfile
 from collections import Counter
 from datetime import datetime, timezone
@@ -736,7 +737,7 @@ def build_all(cfg: dict, out: str) -> list:
                 for p in pages if p["kind"] == "mm" and not p.get("done") and p["key"] != "mm_probe"]
         (root / "cockpit").mkdir(parents=True, exist_ok=True)
         _write(root / "cockpit" / "index.html", _page("Cockpit", nav_for("cockpit"),
-               cockpit.page_body(scen, cockpit.live_numbers(data_dir))), "utf-8")
+               cockpit.page_body(scen, cockpit.live_numbers(data_dir), cockpit.replay_numbers(data_dir))), "utf-8")
     except Exception as e:  # noqa – never let the cockpit break the scenario pages
         print("cockpit failed:", type(e).__name__, e)
     built = [build(p["db"], str(p["out"]), p["start"], title=p["title"], kind=p["kind"], nav=nav_for(p["key"]),
@@ -881,6 +882,13 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
                exp / "wetter-stationen.csv", "wetter-messwerte/stationen.csv"),
               ("Kalshi", "Diagnose des letzten Laufs (Anfragen, Fehler, Felder der API)", "kalshi-diagnose.csv",
                exp / "kalshi-diagnose.csv", "kalshi/diagnose.csv")]
+    for name, label in (("replay-regeln.csv", "MM-Regeln auf dem Orderbuch-Mitschnitt: Rewards×0,6, Kurs nach Fill, netto"),
+                        ("replay-walkforward.csv", "Walk-forward: beste Regel bis dahin gegen den nächsten 12-h-Block"),
+                        ("replay-kategorien.csv", "Beste Regel und Vergleich je Kategorie")):
+        src = Path(study_db).parent / name  # written by arb/replaylab.py (polyarb-replay.timer)
+        if src.exists():
+            shutil.copyfile(src, exp / name)
+            files.append(("Replay-Labor", label, name, exp / name, f"replay/{name[len('replay-'):]}"))
     stage("polyarb-export.zip")
     _zip(exp / "polyarb-export.zip", files)
     stage("polyarb-kompakt.zip")

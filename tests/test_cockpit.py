@@ -49,3 +49,24 @@ def test_calibration_uses_the_probes_final_result_when_it_is_off():
     rows = [dict(key="mm_sofort", label="sofort", n=dict(filled=1000.0, rewards=500.0, trading=-60.0, m60=-50.0, days=2.0))]
     out = calibration_card(rows, dict(filled=None, pnl_total=None))
     assert "Echt (Generalprobe)" in out and f"{(500 + 1000 * -29.2 / 121) / 2:+.1f}".replace(".", ",") in out
+
+
+def test_decision_needs_both_halves_over_the_threshold(tmp_path):
+    from arb.cockpit import decision_card, decision_rows
+    db = str(tmp_path / "a.sqlite")
+    _db(db, [2500, 2510, 2530, 2540, 2560], 0.0)
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE mm_markout(ts REAL, cid TEXT, token TEXT, side TEXT, price REAL, qty REAL, m5 REAL, m60 REAL)")
+    con.execute("INSERT INTO mm_markout VALUES(?, 'c', 't', 'yes', 0.5, 200, 0, 0)", (T + 1800,))       # 100 $, 1st half
+    con.execute("INSERT INTO mm_markout VALUES(?, 'c', 't', 'yes', 0.5, 200, 0, 0)", (T + 3 * 3600,))   # 100 $, 2nd half
+    con.execute("INSERT INTO settlements VALUES(?, 'x', 'reward', 0, 100, 100)", (T + 3 * 3600,))       # 2nd half only
+    con.commit()
+    con.close()
+    n = cockpit.scenario_numbers(db, 2500, {})
+    assert len(n["halves"]) == 2 and n["halves"][0]["filled"] == 100 and n["halves"][1]["rewards"] == 100
+    rows = [dict(key="a", label="A", n=n)]
+    d = decision_rows(rows)[0]
+    assert d["h1"] < 0.25 < d["h2"] and d["verdict"] != "ja"   # one good half is not enough
+    assert "Kein Szenario besteht beide Hälften" in decision_card(rows, None)
+    n["halves"][0]["rewards"] = 100
+    assert decision_rows(rows)[0]["verdict"] == "ja"

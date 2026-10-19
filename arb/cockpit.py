@@ -50,6 +50,7 @@ def scenario_numbers(db_path: str, start: float, scan: dict) -> Optional[dict]:
         except sqlite3.OperationalError:
             mk, filled = (0, None, 0, None), 0.0
         fills = db.execute("SELECT COUNT(*) FROM executions WHERE ts >= ? AND matched_qty > 0", (first[0],)).fetchone()[0]
+        halves = _halves(db, first[0], last[0])
     except sqlite3.OperationalError:
         return None
     finally:
@@ -63,7 +64,30 @@ def scenario_numbers(db_path: str, start: float, scan: dict) -> Optional[dict]:
                 ret=net / start if start else 0.0, curve=[(t, (e - base) / start if start else 0) for t, e in curve],
                 est_rew_day=met[0] if met else None, share=met[1] if met else None, fills=fills,
                 trade_per_rew=(trading / rew) if rew > 0 else None, inv=inv, inv_pct=inv / start if start else None,
-                m60=mk[1] if mk and mk[0] else None, m60_n=mk[0] if mk else 0, start_ts=first[0], filled=filled)
+                m60=mk[1] if mk and mk[0] else None, m60_n=mk[0] if mk else 0, start_ts=first[0], filled=filled,
+                halves=halves, start=start)
+
+
+def _halves(db: sqlite3.Connection, t0: float, t1: float) -> List[dict]:
+    """The window cut in two by time: rewards, filled $ and trading (equity change minus rewards) per half. A rule
+    that only works in one half is luck or a phase, not an edge – the same test as walk-forward, on live data."""
+    def eq(t):
+        r = db.execute("SELECT equity FROM equity WHERE ts <= ? ORDER BY ts DESC LIMIT 1", (t,)).fetchone()
+        return r[0] if r else None
+    mid = (t0 + t1) / 2
+    out = []
+    for a, b in ((t0, mid), (mid, t1)):
+        rew = db.execute("SELECT COALESCE(SUM(pnl), 0) FROM settlements WHERE kind='reward' AND ts > ? AND ts <= ?",
+                         (a, b)).fetchone()[0]
+        try:
+            filled = db.execute("SELECT COALESCE(SUM(price * qty), 0) FROM mm_markout WHERE ts > ? AND ts <= ?",
+                                (a, b)).fetchone()[0]
+        except sqlite3.OperationalError:
+            filled = 0.0
+        ea, eb = eq(a), eq(b)
+        out.append(dict(rewards=rew, filled=filled, trading=None if ea is None or eb is None else eb - ea - rew,
+                        days=(b - a) / 86400))
+    return out
 
 
 def live_numbers(data_dir: Path) -> Optional[dict]:
@@ -198,7 +222,125 @@ def calibration_card(rows: List[dict], live: Optional[dict]) -> str:
             f'<div class="tblwrap"><table>{th}{trs}</table></div></div>')
 
 
-def page_body(scen: List[dict], live: Optional[dict]) -> str:
+REAL_REWARD_FACTOR = 0.6  # echte Rewards ≈ 60 % der Schätzung (Generalprobe 14.–16.10.)
+STAGE1_THRESHOLD = 0.25   # Plan 18.10.: Stufe 2 nur, wenn echte Rewards je 1 $ gefüllt > ~25 %
+STAGE1_CAPITAL = 150.0    # Stufe 1: 100–150 $ echt
+
+
+def _real_trade_rate(live: Optional[dict]) -> float:
+    if live and (live.get("filled") or 0) > 20 and live.get("pnl_total") is not None:
+        real_rew = float(live.get("paid_total") or 0) + float(live.get("today") or 0)
+        return (live["pnl_total"] - real_rew) / live["filled"]
+    return PROBE_RESULT["trade_rate"]
+
+
+def decision_rows(rows: List[dict], live: Optional[dict] = None) -> List[dict]:
+    """Per scenario, everything per 1 $ filled: rewards at 60 % of the estimate, in each half of the window and in
+    total; net with the real trading cost of the probe; what that would be per day at 150 $ (Stufe 1); a verdict.
+    "ja" only if both halves clear the threshold and net is positive – one good half is not enough."""
+    trade = _real_trade_rate(live)
+    out = []
+    for r in rows:
+        n = r.get("n") or {}
+        filled = n.get("filled") or 0
+        if filled <= 20 or r.get("key") == "mm_probe":
+            continue
+        rew = REAL_REWARD_FACTOR * n["rewards"] / filled
+        hs = [REAL_REWARD_FACTOR * h["rewards"] / h["filled"] if h["filled"] > 5 else None for h in n.get("halves") or []]
+        net = rew + trade
+        cap = n.get("start") or 0
+        per_day = filled / n["days"] / cap * STAGE1_CAPITAL * net if cap else None
+        ok_h = len(hs) == 2 and all(h is not None and h > STAGE1_THRESHOLD for h in hs)
+        verdict = "ja" if ok_h and net > 0 else "knapp" if rew > STAGE1_THRESHOLD or (net > 0 and any(
+            h is not None and h > STAGE1_THRESHOLD for h in hs)) else "nein"
+        out.append(dict(key=r["key"], label=r["label"], filled=filled, rew=rew, h1=hs[0] if hs else None,
+                        h2=hs[1] if len(hs) > 1 else None, sim_trade=n["trading"] / filled, net=net,
+                        per_day150=per_day, verdict=verdict, days=n["days"]))
+    order = {"ja": 0, "knapp": 1, "nein": 2}
+    out.sort(key=lambda d: (order[d["verdict"]], -d["net"]))
+    return out
+
+
+def decision_card(rows: List[dict], live: Optional[dict]) -> str:
+    dec = decision_rows(rows, live)
+    if not dec:
+        return ""
+    trade = _real_trade_rate(live)
+    pct = lambda v: "–" if v is None else _de(v * 100, 1) + " %"  # noqa: E731
+    th = ("<tr><th>Szenario</th><th class='num'>gefüllt $</th><th class='num'>Rewards×0,6 je 1 $ – 1. Hälfte</th>"
+          "<th class='num'>2. Hälfte</th><th class='num'>gesamt</th><th class='num'>Handel je 1 $ (Sim)</th>"
+          f"<th class='num'>netto je 1 $ (Handel echt {_de(trade * 100, 0)} %)</th>"
+          f"<th class='num'>bei {_de(STAGE1_CAPITAL, 0)} $: $/Tag</th><th>Stufe 1?</th></tr>")
+    trs = "".join(
+        f"<tr><td><a href='../{d['key']}/'>{html.escape(d['label'])}</a></td><td class='num'>{_de(d['filled'], 0)}</td>"
+        f"<td class='num'>{pct(d['h1'])}</td><td class='num'>{pct(d['h2'])}</td><td class='num'><b>{pct(d['rew'])}</b></td>"
+        f"<td class='num'>{_de(d['sim_trade'] * 100, 1, sign=True)} %</td>"
+        f"<td class='num {'pos' if d['net'] > 0 else 'neg'}'>{_de(d['net'] * 100, 1, sign=True)} %</td>"
+        f"<td class='num'>{'–' if d['per_day150'] is None else _de(d['per_day150'], 2, sign=True)}</td>"
+        f"<td class='{'pos' if d['verdict'] == 'ja' else 'neg' if d['verdict'] == 'nein' else ''}'><b>{d['verdict']}</b></td></tr>"
+        for d in dec)
+    best = dec[0]
+    if best["verdict"] == "ja":
+        head = (f"Kandidat für Stufe 1: <b>{html.escape(best['label'])}</b> – Rewards×0,6 je 1 $ gefüllt in beiden "
+                f"Hälften über {_de(STAGE1_THRESHOLD * 100, 0)} %, netto {_de(best['net'] * 100, 1, sign=True)} % je 1 $ gefüllt.")
+    else:
+        head = (f"Kein Szenario besteht beide Hälften – Stufe 1 nur als Messung (Rewards echt je 1 $ gefüllt), nicht "
+                f"als Gewinnerwartung. Am nächsten: <b>{html.escape(best['label'])}</b> ({best['verdict']}).")
+    return ('<div class="card"><h2>Entscheidungshilfe Stufe 1 (Echt-Test 100–150 $)</h2>'
+            f'<p>{head}</p><p class="note">Regel aus dem Plan vom 18.10.: echte Rewards je 1 $ gefüllt müssen die echten '
+            f'Handelskosten (Generalprobe {_de(trade * 100, 0)} % je 1 $) schlagen, Schwelle ~{_de(STAGE1_THRESHOLD * 100, 0)} %. '
+            f'Rewards hier = Schätzung × {_de(REAL_REWARD_FACTOR, 1)} (echt war ~60 % der Schätzung). Zeitraum je Szenario '
+            'seit 11.10. bzw. Start, in zwei gleich lange Hälften geteilt: „ja“ nur, wenn beide Hälften über der Schwelle '
+            'liegen (Stabilität statt Glückstreffer). „bei 150 $“ = gefüllte $ je $ Kapital und Tag aus der Simulation × '
+            '150 $ × netto je 1 $ – grob, Rewards und Füllrate skalieren nicht linear.</p>'
+            f'<div class="tblwrap"><table>{th}{trs}</table></div></div>')
+
+
+def replay_numbers(data_dir: Path) -> Optional[dict]:
+    try:
+        return json.loads((data_dir / "replaylab.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def replay_card(res: Optional[dict]) -> str:
+    """Nightly replay (arb/replaylab.py): the rule grid on the order-book recording and the walk-forward check."""
+    if not res or not res.get("rules"):
+        return ""
+    top = sorted(res["rules"], key=lambda d: -d["net"])[:6]
+    base = next((r for r in res["rules"] if r["rule"] == res.get("baseline")), None)
+    if base and base not in top:
+        top.append(base)
+    th = ("<tr><th>Regel</th><th class='num'>netto $</th><th class='num'>Rewards×0,6 $</th><th class='num'>Bid 60 Min. $</th>"
+          "<th class='num'>gefüllt $</th><th class='num'>netto je 1 $ gefüllt</th><th class='num'>Blöcke positiv</th></tr>")
+    trs = "".join(
+        f"<tr><td>{html.escape(r['rule'])}{' (Vergleich)' if base and r is base else ''}</td>"
+        f"<td class='num {'pos' if r['net'] > 0 else 'neg'}'>{_de(r['net'], 2, sign=True)}</td>"
+        f"<td class='num'>{_de(r['rewards60'])}</td><td class='num'>{_de(r['m60bid'], 2, sign=True)}</td>"
+        f"<td class='num'>{_de(r['filled'], 0)}</td>"
+        f"<td class='num'>{'–' if not r['filled'] else _de(r['net'] / r['filled'] * 100, 1, sign=True) + ' %'}</td>"
+        f"<td class='num'>{r['blocks_pos']}/{r['blocks']}</td></tr>" for r in top)
+    wf = res.get("walk_forward") or []
+    if wf:
+        n = len(wf)
+        verdict = (f"Walk-forward über {n} {'Block' if n == 1 else 'Blöcke'} à {_de(res['block_h'], 0)} h: gewählte Regeln "
+                   f"<b class='{'pos' if res['wf_test'] > 0 else 'neg'}'>{_de(res['wf_test'], 2, sign=True)} $</b> außerhalb "
+                   f"der Stichprobe (davor im Schnitt {_de(res['wf_train_best'] / n, 2, sign=True)} $ je Block), "
+                   f"Vergleich {html.escape(res['baseline'])} {_de(res['wf_base'], 2, sign=True)} $.")
+        if n < 6:
+            verdict += " Noch zu wenige Blöcke für ein Urteil – ab ~6 (3 Tage) aussagekräftiger."
+    else:
+        verdict = "Noch kein Walk-forward – dafür braucht es mindestens zwei Blöcke Mitschnitt."
+    when = time.strftime("%d.%m. %H:%M", time.localtime(res.get("ts") or 0))
+    return ('<div class="card"><h2>Replay-Labor – Regeln auf dem Orderbuch-Mitschnitt</h2>'
+            f'<p>{verdict}</p><p class="note">{res["markets"]} Reward-Märkte, Gebot {_de(res["size_usd"], 0)} $ je Seite. '
+            'netto = Rewards × 0,6 (Obergrenze: der Mitschnitt hat nur 3 Level je Seite, die Konkurrenz ist größer) + '
+            'Verkauf zum Bid 60 Min. nach dem Fill. Fill = Ask fällt auf unser Gebot oder ein neuer Handel darunter, '
+            f'ohne Warteschlange. Stand {when}; alle Regeln in replay-regeln.csv (Export).</p>'
+            f'<div class="tblwrap"><table>{th}{trs}</table></div></div>')
+
+
+def page_body(scen: List[dict], live: Optional[dict], replay: Optional[dict] = None) -> str:
     parts = []
     scen = [dict(r, label=short(r["label"])) for r in scen]
     if live:
@@ -268,6 +410,9 @@ def page_body(scen: List[dict], live: Optional[dict]) -> str:
                      '„Kurs 60 Min. nach Fill“: negativ = von Besserinformierten getroffen (Messung ab 15.10.).</p>'
                      f'<div class="tblwrap"><table>{th}{trs}</table></div></div>')
     parts.append(calibration_card(rows, live))
+    parts.append(replay_card(replay))
+    if rows:
+        parts.insert(2 if live else 0, decision_card(rows, live))
     if not parts:
         parts.append("<p class='note'>Noch keine Daten.</p>")
     parts.append(f'<p class="note">Stand {time.strftime("%d.%m. %H:%M")}</p>')

@@ -767,6 +767,14 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert k["min_quote_frac"] >= k["quote_frac"] and k["quote_usd"] <= 20 and k["pause"] and k["exit"]["stop_ticks"]
     assert n["enabled"] is True and "live" not in n and n["max_age_days"] <= 3 and "overcommit" not in n
     assert n["exit"]["min_share"] > 0 and n["max_inventory_usd"] <= 50 and n["quote_frac"] == 0.5
+    assert n["min_days_to_end"] >= 14 and n["rewards_active"] is True and n["min_event_volume_24h"] >= 10000
+    assert "Kultur" in n["skip_categories"] and n["skip_re"] and n["pause"]["ticks"] >= 3
+    assert n["exit"]["stop_ticks"] >= 3 and "skew" not in n
+    q = sc["mm_robust_quotealter"]
+    assert q["enabled"] is True and "live" not in q and q["strategy"] == "mm"
+    assert q["max_quote_age_s"] == 30 and q["requote_ticks"] == 1
+    assert q["skew"]["fav_frac"] == r["skew"]["fav_frac"] >= 0.5
+    assert "max_quote_age_s" not in r and "requote_ticks" not in r
     w = sc["wetter_sniper"]
     assert w["enabled"] is True and w["strategy"] == "wxsniper" and "live" not in w
     assert w["min_margin"] >= 1 and w["min_yes"] >= 0.03 and w["max_slippage"] == 0
@@ -843,6 +851,14 @@ def test_skew_leans_to_the_favourite_and_quotes_the_middle_symmetrically(tmp_pat
     mm.sc["skew"] = dict(SKEW, long_usd=0)
     y_off, n_off = mm.planned_quotes(0.80, 0.04, 20)
     assert y_off and n_off is None and y and n
+    mm.sc["skew"] = dict(SKEW, long_usd=1)  # 1 $ at ~0.17 is 5 shares, under rewardsMinSize 20: side stays off
+    y_small, n_small = mm.planned_quotes(0.80, 0.04, 20)
+    assert y_small and n_small is None
+    mm.step()
+    assert mm.st.markets["a"].bid_no is None and mm.scan.get("Außenseiter unter Reward-Mindestgröße", 0) >= 1
+    full = MarketMaker("mm_rewards", _cfg(tmp_path / "full", quote_usd=20), Client([]), SimClock(NOW),
+                       books=BookStore(), pool=None)
+    assert full._sized(0.50, 20, 50) == 50  # the full quote is still raised to the reward minimum
     book = OrderBook("Y", [Level(0.78, 100)], [Level(0.82, 100)])
     other = OrderBook("N", [Level(0.18, 100)], [Level(0.22, 100)])
     assert reward_share(book, other, y_off, None, 0.80, 0.04, 20) < reward_share(book, other, y, n, 0.80, 0.04, 20)
@@ -865,6 +881,16 @@ def test_fill_records_quote_age_band_and_markouts(tmp_path):
     mm.step()
     age, dist, band, price = mm.store.db.execute("SELECT age_s, dist, band, price FROM mm_markout").fetchone()
     assert band == "mitte" and abs(dist - 0.02) < 1e-9 and 9 <= age <= 11 and price == 0.48
+    _book(store, "a", 0.46, 0.50)
+    mm.clock.sleep(2)
+    mm.update_markouts(mm.clock.now(), store.books(["aY", "aN"]))
+    m1s, m10s = mm.store.db.execute("SELECT m1s, m10s FROM mm_markout").fetchone()
+    assert m1s == round((0.48 - 0.48) * 30, 4) and m10s is None  # first book at least 1 s later; step is 2 s
+    _book(store, "a", 0.44, 0.48)
+    mm.clock.sleep(10)
+    mm.update_markouts(mm.clock.now(), store.books(["aY", "aN"]))
+    m10s = mm.store.db.execute("SELECT m10s FROM mm_markout").fetchone()[0]
+    assert m10s == round((0.46 - 0.48) * 30, 4)
     _book(store, "a", 0.40, 0.44)
     mm.clock.sleep(3600)
     mm.update_markouts(mm.clock.now(), store.books(["aY", "aN"]))
@@ -878,6 +904,9 @@ def test_fill_records_quote_age_band_and_markouts(tmp_path):
     db = str(tmp_path / "scenario-mm_rewards.sqlite")
     rows = dashboard.markout_rows(db)
     assert rows[0][9] == 2.0 and rows[0][14] == age and rows[0][15] == "Mitte" and rows[0][16] == m1
+    assert rows[0][18] == m1s and rows[0][19] == m10s
+    mm._write_scan(mm.clock.now())
+    assert "Mitte" in mm.scan["Markout nach Seite je 1 $"] and "60 Min" in mm.scan["Markout nach Seite je 1 $"]
     ages = dashboard.markout_age(db)
     hit = [r for r in ages if r[0] == "< 30 s" and r[1] == "Mitte"]
     assert hit and hit[0][2] == 1 and abs(hit[0][6] - (m60 / (0.48 * 30))) < 1e-3
@@ -885,7 +914,8 @@ def test_fill_records_quote_age_band_and_markouts(tmp_path):
     dashboard.build(db, str(page), 1000, kind="mm", title="MM")
     text = page.read_text(encoding="utf-8")
     assert "Gebotsalter und Favorit" in text and "< 30 s" in text
-    assert "Gebotsalter s" in (page.parent / "fills.csv").read_text(encoding="utf-8")
+    fills = (page.parent / "fills.csv").read_text(encoding="utf-8")
+    assert "Gebotsalter s" in fills and "Kursbewegung 1 s $" in fills and "Kursbewegung 10 s $" in fills
     assert (page.parent / "gebotsalter.csv").exists()
 
 
@@ -933,19 +963,51 @@ def test_quote_refresh_options_do_nothing_unless_set(tmp_path):
     assert mm3.st.markets["a"].bid_yes["placed_ts"] > ts and mm3.st.markets["a"].bid_yes["price"] == 0.49
 
 
+def test_ended_markets_are_not_polled_for_resolution_every_pass(tmp_path):
+    calls = []
+
+    class Counting(Client):
+        def token_resolution(self, t):
+            calls.append(t)
+            if t == "boom":
+                raise RuntimeError("gamma down")
+            return self.res.get(t)
+
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path), Counting([]), SimClock(NOW), books=BookStore(), pool=None)
+    mm.store.db.execute(
+        "INSERT INTO mm_markout(ts, cid, token, side, price, qty, ytok, days_left) VALUES(?,?,?,?,?,?,?,?)",
+        (NOW - 86400, "gone", "goneY", "yes", 0.40, 10, "goneY", 0.0))
+    mm.store.db.execute(
+        "INSERT INTO mm_markout(ts, cid, token, side, price, qty, ytok, days_left) VALUES(?,?,?,?,?,?,?,?)",
+        (NOW - 86400, "err", "boom", "yes", 0.40, 10, "boom", 0.0))
+    mm._close_markouts(NOW)
+    mm._close_markouts(NOW + 60)
+    assert calls.count("goneY") == 1 and calls.count("boom") == 1
+    mm._close_markouts(NOW + 601)
+    assert calls.count("goneY") == 2 and calls.count("boom") == 2
+    mm.store.db.execute(
+        "INSERT INTO mm_markout(ts, cid, token, side, price, qty, ytok, days_left) VALUES(?,?,?,?,?,?,?,?)",
+        (NOW, "known", "knownY", "no", 0.30, 10, "knownY", 30))
+    mm._close_markouts(NOW + 601, "known", 1.0)  # the settle path already knows the price and does not wait
+    assert mm.store.db.execute("SELECT m_res FROM mm_markout WHERE cid='known'").fetchone()[0] == round((0 - 0.30) * 10, 4)
+    assert calls.count("knownY") == 0
+
+
 def test_running_scenarios_do_not_pick_up_the_new_filters():
     import yaml
     cfg = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml"))
     assert cfg["booklog"]["enabled"] is True and cfg["booklog"]["every_s"] == 60 and cfg["booklog"]["keep_days"] == 7
     sc = cfg["scenarios"]
-    for name in ("mm_robust", "mm_konservativ"):
+    for name in ("mm_robust", "mm_konservativ", "mm_robust_quotealter"):
         s = sc[name]
         assert s["enabled"] is True and "live" not in s
         assert s["rewards_active"] is True and s["min_event_volume_24h"] >= 10000
         assert s["min_mid"] <= 0.10 and s["max_mid"] >= 0.90
-        assert s["skew"]["long_usd"] > 0 and s["skew"]["fav_frac"] < s["quote_frac"]
-        assert "max_quote_age_s" not in s and "requote_ticks" not in s
+        assert s["skew"]["long_usd"] > 0 and s["skew"]["fav_frac"] >= 0.5
+    assert "max_quote_age_s" not in sc["mm_robust"] and "requote_ticks" not in sc["mm_robust"]
+    assert sc["mm_robust_quotealter"]["max_quote_age_s"] == 30 and sc["mm_robust_quotealter"]["requote_ticks"] == 1
     for name, s in sc.items():
-        if name in ("mm_robust", "mm_konservativ"):
+        if name in ("mm_robust", "mm_konservativ", "mm_robust_quotealter", "mm_neu_vorsichtig"):
             continue
         assert "skew" not in s and "rewards_active" not in s and "min_event_volume_24h" not in s
+        assert "max_quote_age_s" not in s and "requote_ticks" not in s

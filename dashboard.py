@@ -288,7 +288,8 @@ MM_DAILY_HEADER = ["Tag", "Reward-Pool ausgewählt $/Tag", "Pool unserer Gebote 
 MARKOUT_HEADER = ["Zeit (UTC)", "Stunde (UTC)", "Markt", "Kategorie", "Seite", "Preis", "Menge", "Betrag $",
                   "Mitte beim Fill", "Abstand zur Mitte (ct)", "Tage bis Ende", "Kursbewegung 5 Min $",
                   "Kursbewegung 60 Min $", "Kursbewegung 60 Min je Anteil (ct)", "Gebotsalter s",
-                  "Seite (Favorit/Außenseiter/Mitte)", "Kursbewegung 1 Min $", "Kursbewegung bis Auflösung $"]
+                  "Seite (Favorit/Außenseiter/Mitte)", "Kursbewegung 1 Min $", "Kursbewegung bis Auflösung $",
+                  "Kursbewegung 1 s $", "Kursbewegung 10 s $"]
 
 AGE_HEADER = ["Gruppe", "Seite", "Fills", "gefüllt $", "1 Min je 1 $", "5 Min je 1 $", "60 Min je 1 $",
               "Auflösung je 1 $"]
@@ -321,14 +322,15 @@ def markout_rows(db_path: str) -> list:
             "NULL", "NULL", "price * qty", "NULL", "NULL")
         q = (f"SELECT ts, {title}, {cat}, side, price, qty, {usd}, {mid}, {days}, "
              f"{c('m5', 'NULL')}, {c('m60', 'NULL')}, {c('age_s', 'NULL')}, {c('band', 'NULL')}, "
-             f"{c('m1', 'NULL')}, {c('m_res', 'NULL')} FROM mm_markout ORDER BY ts")
+             f"{c('m1', 'NULL')}, {c('m_res', 'NULL')}, {c('m1s', 'NULL')}, {c('m10s', 'NULL')} "
+             f"FROM mm_markout ORDER BY ts")
         out = []
-        for ts, title, cat, side, price, qty, usd, mid, days, m5, m60, age, band, m1, mres in db.execute(q):
+        for ts, title, cat, side, price, qty, usd, mid, days, m5, m60, age, band, m1, mres, m1s, m10s in db.execute(q):
             t = _time.gmtime(ts)
             out.append([_time.strftime("%Y-%m-%d %H:%M", t), t.tm_hour, title or "", cat or "", "JA" if side == "yes" else "NEIN",
                         price, qty, usd, mid, None if mid is None else round((mid - price) * 100, 2), days, m5, m60,
                         None if m60 is None or not qty else round(m60 / qty * 100, 2), age, _band_label(band, price),
-                        m1, mres])
+                        m1, mres, m1s, m10s])
         db.close()
         return out
     except sqlite3.Error:

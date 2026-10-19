@@ -862,7 +862,7 @@ scenarios:
       max_daily_loss_usd: 10
       day_reset: "2026-10-16 Nutzer"  # 16.10. Nutzer: Tagesbasis neu (Text ändern = neuer Tagesstart beim aktuellen Konto)
       deposits_usd: 87.0         # eingezahlt insgesamt (14.10. 11,00 + 15.10. 76,00) – bei jeder Ein-/Auszahlung anpassen
-  mm_robust:
+  mm_robust: &mm_robust
     enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block, das Order-Modul wird nicht erzeugt.
                                  # Der Server startet polyarb-scenario@mm_robust beim nächsten update.
                                  # Auswertung ab dem eigenen Start, eigene Datenbank.
@@ -916,15 +916,16 @@ scenarios:
     min_quote_frac: 0.5          # Verkaufsgebot und die symmetrische Zone bleiben mindestens so weit weg
     quote_usd: 50
     skew:                        # außerhalb 30–70 ct zum Favoriten (Seite ab 70 ct). Einseitig zählt die Liquidität
-                                 # zwischen 10 und 90 ct nur zu einem Drittel. fav_frac darf näher als min_quote_frac.
+                                 # zwischen 10 und 90 ct nur zu einem Drittel. Liegt die Außenseitergröße
+                                 # unter rewardsMinSize, wird die Seite nicht quotiert.
       band_lo: 0.30
       band_hi: 0.70
       min_mid: 0.10              # Live-Mitte außerhalb: Gebote weg
       max_mid: 0.90
-      fav_frac: 0.25             # Favorit näher (bei 4 ct Abstand eine Tick-Stufe vor quote_frac 0,5)
+      fav_frac: 0.50             # nicht näher als die Hälfte (0,25 war in der Auswertung −17,5 %)
       long_frac: 0.75            # Außenseiter weiter weg, noch im Reward-Band
-      long_usd: 15               # Außenseiter kleiner; 0 würde die Seite ganz weglassen
-    # max_quote_age_s und requote_ticks bleiben aus: erst messen, ob alte Gebote die schlechten Fills sind
+      long_usd: 15               # Außenseiter kleiner; unter rewardsMinSize fällt die Seite weg
+    # max_quote_age_s und requote_ticks bleiben hier aus: Kontrollgruppe gegen mm_robust_quotealter
     max_inventory_usd: 100       # einseitiger Bestand je Markt
     max_event_usd: 150           # alle Märkte desselben Events zusammen (Buckets teilen sich das Limit)
     max_total_inventory_usd: 1500
@@ -934,6 +935,13 @@ scenarios:
     reward_asks: true
     latency_s: 1
     step_s: 2
+  mm_robust_quotealter:
+    <<: *mm_robust
+    title: Market Making (robust, Gebotsalter)
+    # Testgruppe gegen mm_robust: ruhende Gebote nach 30 s neu, und schon bei 1 Tick Kursbewegung.
+    # Papier, kein live:-Block. Auswertung: ob frische Gebote die schlechten Fills der Kontrollgruppe vermeiden.
+    max_quote_age_s: 30
+    requote_ticks: 1
   mm_konservativ:
     enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block. Laufende Varianten bleiben, wie sie sind.
     title: Market Making (konservativ)
@@ -957,15 +965,15 @@ scenarios:
     quote_frac: 0.85             # in der Mitte (30–70 ct) weit weg: 85 % des Reward-Abstands
     min_quote_frac: 0.85         # Verkaufsgebot und die symmetrische Zone bleiben so weit weg
     quote_usd: 15
-    skew:                        # dieselbe Schräge wie mm_robust, nur vorsichtiger: Favorit etwas näher,
-                                 # Außenseiter so weit weg wie es noch zählt, und klein. 0 bei long_usd = Seite aus.
+    skew:                        # dieselbe Schräge wie mm_robust, nur vorsichtiger: Favorit nicht näher als
+                                 # die Hälfte, Außenseiter so weit weg wie es noch zählt, und klein.
       band_lo: 0.30
       band_hi: 0.70
       min_mid: 0.10
       max_mid: 0.90
-      fav_frac: 0.50             # näher als 0,85, weiter weg als bei mm_robust
+      fav_frac: 0.50             # mindestens die Hälfte; näher als die symmetrischen 0,85, nicht näher als 0,5
       long_frac: 0.95
-      long_usd: 5
+      long_usd: 5                # unter rewardsMinSize fällt die Seite weg (oft bei 5 $)
     max_inventory_usd: 40
     max_total_inventory_usd: 300
     pause:                       # wie mm_ruhig: Sprung der Mitte → eine Weile nicht bieten
@@ -983,17 +991,45 @@ scenarios:
     enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block. mm_sofort / mm_nah / mm_treppe / mm_ueberbucht laufen weiter.
     title: Market Making (neu, vorsichtig)
     strategy: mm                 # 18.10.: nur die ersten Tage eines Markts (dort lag der Reward in der Simulation),
-    # feste kleine Deckel, kein Überbuchen, Abstand 0,5 (nah an der Mitte war der schlechteste Handel). Raus, wenn der
-    # geschätzte Anteil am Reward-Pool unter min_share fällt – Gebote weg, Bestand zum Bid. Eigene Datenbank.
+    # feste kleine Deckel, kein Überbuchen, Abstand 0,5. Raus, wenn der geschätzte Anteil am Reward-Pool unter
+    # min_share fällt – Gebote weg, Bestand zum Bid. 19.10. Review: dieselben Filter wie mm_robust (14 Tage,
+    # laufendes Reward-Programm, 10k $ Eventvolumen, Kultur und View-Counts). Pause und Stop-Loss hat mm_robust
+    # nicht; hier die Schalter von mm_konservativ (3 Ticks / 10 Min., Stop 3 Ticks). Eigene Datenbank.
     capital_usd: 2500
     max_markets: 8
     max_age_days: 3              # nur Märkte, die jünger als 3 Tage sind
     rank: share
     prefilter: 60
+    list_orders: [volume, liquidity, volume24hr, startDate]
     min_liquidity: 0
     min_daily_rate: 5
-    skip_categories: [Sport, Krypto]
-    min_days_to_end: 3
+    rewards_active: true
+    min_event_volume_24h: 10000
+    skip_categories: [Sport, Krypto, Kultur, Social]
+    skip_tags:
+      - culture
+      - pop-culture
+      - entertainment
+      - movies
+      - movie
+      - film
+      - television
+      - music
+      - youtube
+      - streaming
+      - box-office
+      - celebrities
+      - celebrity
+      - gaming
+      - video-games
+      - oscars
+      - grammys
+    skip_re:
+      - '\b(views?|viewership|box office|rotten tomatoes|trailer|attend(?:ance|ees)?)\b'
+      - '\b(streams?|streaming|livestream)\b'
+      - '\b(gta\s*(vi|6)|grand theft auto)\b'
+      - '\b(oscar|oscars|grammy|grammys|emmy|box office|imdb|metacritic|billboard)\b'
+    min_days_to_end: 14
     stop_hours_before_end: 24
     min_mid: 0.15
     max_mid: 0.85
@@ -1001,10 +1037,15 @@ scenarios:
     quote_usd: 25                # fester Deckel je Gebot
     max_inventory_usd: 50        # fester Deckel je Markt
     max_total_inventory_usd: 300 # fester Deckel über alles
+    pause:                       # wie mm_konservativ: Sprung der Mitte → eine Weile nicht bieten
+      ticks: 3
+      window_s: 300
+      pause_s: 600
     exit:
       after_h: 0                 # einseitiger Bestand: sofort Verkaufsgebot (wie mm_sofort)
       dump_after_h: 96
       min_share: 0.05            # geschätzter Anteil am Pool darunter → Gebote weg, Bestand zum Bid
+      stop_ticks: 3              # wie mm_konservativ: Mitte 3 Ticks unter Einstand → zum Bid
     reward_asks: true
     latency_s: 1
     step_s: 2

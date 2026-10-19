@@ -28,8 +28,8 @@ Outside that, the favourite (the side priced at 0.70 or more) stands closer and 
 further out. A one-sided book scores only a third of the two-sided score while the mid is between 0.10 and 0.90
 (`q_min`), so turning the longshot off is a measured trade against the rewards. `min_event_volume_24h` and
 `rewards_active` are filters and stay off unless set. Fills record how long the bid had rested, how far it
-stood from the mid, whether the side was the favourite, and the markout after 1, 5 and 60 minutes and at
-resolution. `max_quote_age_s` and `requote_ticks` replace a resting bid; both stay off unless set.
+stood from the mid, whether the side was the favourite, and the markout after 1 s, 10 s, 1, 5 and 60
+minutes and at resolution. `max_quote_age_s` and `requote_ticks` replace a resting bid; both stay off unless set.
 """
 from __future__ import annotations
 
@@ -364,14 +364,17 @@ class MarketMaker:
         have = {r[1] for r in self.store.db.execute("PRAGMA table_info(mm_markout)")}
         for col, typ in (("title", "TEXT"), ("cat", "TEXT"), ("mid", "REAL"), ("days_left", "REAL"), ("usd", "REAL"),
                          ("age_s", "REAL"), ("dist", "REAL"), ("band", "TEXT"), ("m1", "REAL"), ("m_res", "REAL"),
-                         ("ytok", "TEXT")):
-            if col not in have:  # measurement only: quote age, distance, favourite/longshot, 1 min and resolution
+                         ("ytok", "TEXT"), ("m1s", "REAL"), ("m10s", "REAL")):
+            if col not in have:  # measurement only: quote age, distance, favourite/longshot, short and long markouts
                 self.store.db.execute(f"ALTER TABLE mm_markout ADD COLUMN {col} {typ}")
         self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_reward_params(ts REAL, cid TEXT, title TEXT,
             daily_rate REAL, max_spread_ct REAL, min_size REAL, volume_24h REAL, programs TEXT)""")
-        self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m1=r[5], m5=r[6], cid=r[7])
+        self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m1=r[5], m5=r[6], cid=r[7],
+                              m1s=r[8], m10s=r[9])
                          for r in self.store.db.execute(
-                             "SELECT rowid, ts, token, price, qty, m1, m5, cid FROM mm_markout WHERE m60 IS NULL")]
+                             "SELECT rowid, ts, token, price, qty, m1, m5, cid, m1s, m10s FROM mm_markout "
+                             "WHERE m60 IS NULL")]
+        self._res_try: Dict[str, float] = {}  # token -> last resolution lookup for an ended, still open market
         # learn (self-learning, 16.10.): per market the estimated rewards against the markout of our fills; a market
         # whose fills cost more than it paid (or that keeps jumping) is blocked for a while, longer on each repeat
         self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_ledger(cid TEXT PRIMARY KEY, title TEXT, rew REAL, mo REAL,
@@ -651,13 +654,16 @@ class MarketMaker:
         return dy, dn, uy, un, True
 
     def _sized(self, price: float, side_usd: float, min_size: float) -> float:
-        """Shares for one bid. The full quote_usd is at least the reward minimum; a reduced longshot stays
-        at its configured dollars, even under that minimum (it then scores nothing on that side)."""
+        """Shares for one bid. The full quote_usd is at least the reward minimum. A smaller side (the longshot)
+        is not quoted at all when those dollars buy fewer shares than rewardsMinSize — that size scores nothing
+        and only adds fill risk. long_usd 0 still means the side is off."""
         if price < self.tick or side_usd <= 0:
             return 0.0
         size = math.floor(side_usd / price)
         if side_usd + 1e-9 >= float(self.sc.get("quote_usd", 50)):
             size = max(min_size, size)
+        elif size < min_size:
+            return 0.0
         return float(size)
 
     def _remember_rewards(self, now: float, raw: dict, mk: MMMarket, rate: float) -> None:
@@ -756,7 +762,7 @@ class MarketMaker:
              round((mk.end_ts - now) / DAY, 2) if mk.end_ts else None, round(cost, 2),
              age_s, dist, side_band(price), mk.yes))
         self._markout.append(dict(rowid=cur.lastrowid, ts=now, token=tok, price=price, qty=qty, m1=None, m5=None,
-                                  cid=mk.cid))
+                                  cid=mk.cid, m1s=None, m10s=None))
         self.st.cash -= cost
         if side == "yes":
             mk.qty_yes += qty
@@ -958,13 +964,20 @@ class MarketMaker:
         return bool(self.sc.get("learn")) and e is not None and now < e["blocked_until"]
 
     def update_markouts(self, now: float, books: Dict[str, OrderBook]) -> None:
-        """Fill price vs. the token's mid 1, 5 and 60 minutes later, times the shares (+ = the price rose after we
-        bought). Books of dropped markets may be missing: such fills are given up after 2 hours."""
+        """Fill price vs. the token's mid 1 s, 10 s, 1 min, 5 min and 60 min later, times the shares (+ = the
+        price rose after we bought). The loop steps every step_s (2 s), so 1 s is the first book at least a
+        second after the fill. Books of dropped markets may be missing: such fills are given up after 2 hours."""
         keep = []
         for m in self._markout:
             age = now - m["ts"]
             bk = books.get(m["token"])
             mid = (bk.best_bid + bk.best_ask) / 2 if bk and bk.bids and bk.asks else None
+            if mid is not None and m.get("m1s") is None and age >= 1:
+                m["m1s"] = round((mid - m["price"]) * m["qty"], 4)
+                self.store.db.execute("UPDATE mm_markout SET m1s=? WHERE rowid=?", (m["m1s"], m["rowid"]))
+            if mid is not None and m.get("m10s") is None and age >= 10:
+                m["m10s"] = round((mid - m["price"]) * m["qty"], 4)
+                self.store.db.execute("UPDATE mm_markout SET m10s=? WHERE rowid=?", (m["m10s"], m["rowid"]))
             if mid is not None and m.get("m1") is None and age >= 60:
                 m["m1"] = round((mid - m["price"]) * m["qty"], 4)
                 self.store.db.execute("UPDATE mm_markout SET m1=? WHERE rowid=?", (m["m1"], m["rowid"]))
@@ -1190,8 +1203,8 @@ class MarketMaker:
                     new = None  # skew: stop buying the side we already hold too much of (or just got filled on)
                 else:
                     size = self._sized(price, side_usd, mk.min_size)
-                    if 0 < size < mk.min_size:
-                        n_small += 1
+                    if size <= 0 and mk.min_size > 0 and math.floor(side_usd / price) < mk.min_size:
+                        n_small += 1  # configured dollars buy fewer shares than rewardsMinSize: side stays off
                     if cap_ev is not None and not short_this:
                         size = self._fit_event(price, size, mk.min_size, base_ev, adding_ev, cap_ev)
                     fresh = not stale and not moved
@@ -1365,6 +1378,9 @@ class MarketMaker:
                 continue
             groups.setdefault(str(ytok), []).append((rowid, side, price, qty))
         for ytok, items in groups.items():
+            if now - self._res_try.get(ytok, -1e18) < 600:  # ended but still unresolved: at most one lookup / 10 min
+                continue
+            self._res_try[ytok] = now  # stamp before the call, also when it returns nothing or raises
             try:
                 resolved = self.client.token_resolution(ytok)
             except Exception:  # noqa
@@ -1467,6 +1483,25 @@ class MarketMaker:
             n1, m1 = self.store.db.execute("SELECT COUNT(m1), SUM(m1) FROM mm_markout").fetchone()
             if n1:
                 self.scan["Kursbewegung nach Fill 1 Min $"] = f"{m1 or 0:+.2f} ({n1} Fills)"
+            for label, col in (("1 s", "m1s"), ("10 s", "m10s")):
+                ns, ms = self.store.db.execute(f"SELECT COUNT({col}), SUM({col}) FROM mm_markout").fetchone()
+                if ns:
+                    self.scan[f"Kursbewegung nach Fill {label} $"] = f"{ms or 0:+.2f} ({ns} Fills)"
+            names = {"favorit": "Favorit", "ausenseiter": "Außenseiter", "mitte": "Mitte"}
+            parts_band = []
+            for band, usd60, m60b, n60b, usdres, mres, nres in self.store.db.execute(
+                    "SELECT band, SUM(CASE WHEN m60 IS NOT NULL THEN usd END), SUM(m60), COUNT(m60), "
+                    "SUM(CASE WHEN m_res IS NOT NULL THEN usd END), SUM(m_res), COUNT(m_res) "
+                    "FROM mm_markout WHERE band IS NOT NULL GROUP BY band"):
+                bits = []
+                if n60b and usd60:
+                    bits.append(f"60 Min {m60b / usd60 * 100:+.1f} % ({n60b})")
+                if nres and usdres:
+                    bits.append(f"Auflösung {mres / usdres * 100:+.1f} % ({nres})")
+                if bits:
+                    parts_band.append(f"{names.get(band, band)} " + ", ".join(bits))
+            if parts_band:
+                self.scan["Markout nach Seite je 1 $"] = "; ".join(parts_band)
             aged = list(self.store.db.execute(
                 "SELECT age_s, usd, m60 FROM mm_markout WHERE age_s IS NOT NULL AND m60 IS NOT NULL AND usd > 0"))
             if aged:

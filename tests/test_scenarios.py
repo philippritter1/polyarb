@@ -543,6 +543,16 @@ def test_max_day_usd_caps_one_end_date(tmp_path):
     assert "sized down by day" in reasons and "no capacity (day)" in reasons
 
 
+def test_thin_ask_is_rejected_for_min_size_not_for_capacity(tmp_path):
+    m = _market("c1", "Will X happen by Sep 21?", ["0.97", "0.03"], ["Y1", "N1"])
+    cl = FakeClient(markets=[m], books={"Y1": ob("Y1", [(0.96, 500)], [(0.97, 4)])})
+    eng = ScenarioEngine("endgame", _cfg(tmp_path, "endgame", max_position_usd=40), cl, SimClock(NOW))
+    eng.step()
+    assert eng.pf.positions == {}
+    reason = eng.store.db.execute("SELECT reason FROM opportunities").fetchone()[0]
+    assert reason.startswith("unter Mindestgröße (") and " < " in reason and "no capacity" not in reason
+
+
 def test_band_scan_stats_and_topic_tags(tmp_path):
     fkw = dict(end="2026-09-21T20:00:00Z", volumeNum=5000)
     btc = _market("k1", "Bitcoin Up or Down - September 21, 4:00PM-4:05PM ET", ["0.50", "0.50"], ["BU", "BD"], **fkw)

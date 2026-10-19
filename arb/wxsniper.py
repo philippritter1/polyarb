@@ -5,8 +5,9 @@ that bucket cannot win (same rounding as arb.wxobs). The market may still show a
 This scenario does not place live orders. Every such bucket is logged with the real NO book
 (best ask, size at that ask, displayed YES, margin, city, station, time). A paper buy of NO,
 at the best ask only, happens when the displayed YES is still at least `min_yes` (default 3 cents)
-and the ask has size. Resolution of those paper buys is the realized result; the log is how often
-the ask was actually there.
+and the size at the best ask, after the execution depth haircut, is at least the book's minimum
+order. Resolution of those paper buys is the realized result; the log is how often the ask was
+actually there. A bucket is judged only on station readings from its own local calendar day.
 """
 from __future__ import annotations
 
@@ -52,6 +53,7 @@ class WxSniperStrategy(Strategy):
         self.obs = LiveObs(client.get_json, ttl_s=float(cfg.get("obs_ttl_s", 600)))
         self.snaps: List[dict] = []
         self.scan: dict = {}
+        self.haircut = 1.0  # ScenarioEngine overwrites this with execution.depth_haircut
 
     def candidates(self, now: float) -> List[Signal]:
         c = self.cfg
@@ -109,6 +111,8 @@ class WxSniperStrategy(Strategy):
         if yes_px is None and ask is not None:
             yes_px = round(1 - ask, 4)  # displayed price missing: the ask itself is the YES-equivalent
         edge = round(1 - ask, 4) if ask is not None else None
+        hair = float(getattr(self, "haircut", 1.0) or 0.0)
+        minimum = float(nb.min_order_size) if nb is not None else 0.0
         if ask is None:
             note, buyable = "kein NO-Ask", 0
         elif depth <= 1e-9:
@@ -117,6 +121,8 @@ class WxSniperStrategy(Strategy):
             note, buyable = "JA unter 3 ct", 0
         elif not no_tok:
             note, buyable = "kein Token", 0
+        elif depth * hair + 1e-9 < minimum:
+            note, buyable = "unter Mindestgröße", 0
         else:
             note, buyable = "kaufbar", 1
         row = dict(ts=now, cid=str(m.get("conditionId") or m.get("id") or ""), token=no_tok,

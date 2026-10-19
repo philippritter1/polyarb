@@ -262,15 +262,18 @@ def equity_csv(db_path: str, every_s: float = 300) -> str:
             if r[0] - last >= every_s:
                 line = [datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M:%S"), *r[1:6], r[6] or ""]
                 if parts and r[0] in parts["by_ts"]:
-                    line.extend(round(v, 6) for v in parts["by_ts"][r[0]])
+                    trade, rewards, rebates = parts["by_ts"][r[0]]
+                    line.extend(round(v, 6) for v in (trade, rewards, rebates))
+                    line.append(round(float(r[1]) - 0.4 * rewards, 6))
                 elif parts:
-                    line.extend(["", "", ""])
+                    line.extend(["", "", "", ""])
                 rows.append(line)
                 last = r[0]
         db.close()
     header = ["Zeit", "Equity $", "Cash $", "Gebunden $", "Offene Reste $", "Realisiert kumuliert $", "Pausiert"]
     if parts:
-        header += ["Handel kumuliert $", "Rewards geschätzt kumuliert $", "Rebates kumuliert $"]
+        header += ["Handel kumuliert $", "Rewards geschätzt kumuliert $", "Rebates kumuliert $",
+                   "Equity bei 60 % Rewards $"]
     return _csv(header, rows)
 
 
@@ -567,6 +570,7 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
                 p["r"] = round(float(start_capital) + hit[0], 2)
                 p["rw"] = round(hit[1], 2)
                 p["rb"] = round(hit[2], 2)
+                p["h"] = round(p["e"] - 0.4 * hit[1], 2)  # equity counting only 60 % of estimated rewards
             data["kpi"]["real"] = data["split"]["trade"]
             data["kpi"]["real_ret"] = (data["split"]["trade"] / float(start_capital)) if start_capital else 0
             data["kpi"]["rewards"] = data["split"]["rewards"]
@@ -1410,7 +1414,7 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <div class="card" id="agecard" style="display:none"><h2>Market Making: Gebotsalter und Favorit gegen Außenseiter</h2><p class="note">Kursbewegung je 1 $ gefüllt, nachdem das Gebot so lange im Buch lag. Negativ heißt: der Kurs lief nach dem Fill gegen uns. Liegt das vor allem bei alten Geboten, sind die Quotes zu langsam. <b>Favorit</b> = gekaufte Seite ab 70 ct, <b>Außenseiter</b> = bis 30 ct, sonst <b>Mitte</b>. „alle Alter“ enthält auch Fills von vor dem Gebotsalter. Auflösung ist der Wert der Seite am Ende minus Kaufpreis.</p><div class="tblwrap"><table id="agetbl"></table></div></div>
 <div class="card" id="rwparam" style="display:none"><h2>Reward-Parameter der ausgewählten Märkte</h2><p class="note">Aus der Gamma-Liste beim letzten Auswahl-Lauf: Tagesbudget (<code>clobRewards.rewardsDailyRate</code>), maximaler Abstand (<code>rewardsMaxSpread</code>, in Cent), Mindestgröße (<code>rewardsMinSize</code>, Anteile) und der Zeitraum des Programms. Ohne Datum gilt der Satz als laufend. Geboten wird nur, wo das Tagesbudget die Schwelle erreicht.</p><div class="tblwrap"><table id="rwparamtbl"></table></div></div>
 <div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
-<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i><span id="eqlegl">Vermögen realisiert (Start + realisierter PnL)</span></span></div><div id="eq"></div></div>
+<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i><span id="eqlegl">Vermögen realisiert (Start + realisierter PnL)</span></span><span id="eqlegh" style="display:none"><i class="sw" style="background:var(--s2)"></i>Equity bei 60 % der geschätzten Rewards</span></div><div id="eq"></div></div>
 <div class="grid2">
  <div class="card"><h2>Erwarteter vs. realisierter Gewinn je Strategie</h2><p class="note" id="pnlnote">Die Lücke ist, was Latenz, Konkurrenz und Leg-Failures kosten.</p>
   <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Erwartet bei Erkennung</span><span><i class="sw" style="background:var(--s2)"></i>Realisiert</span></div><div id="pnl"></div></div>
@@ -1435,9 +1439,10 @@ const tip=$("tip");
 $("ttl").textContent=D.title;document.title=D.title;
 if(D.kind!=="arb"&&D.kind!=="ladder"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
  $("pnlnote").textContent="Erwartet = Gewinn, wenn jede Position so ausgeht, wie die Strategie annimmt. Realisiert zählt erst bei Auflösung."}
-if(D.split){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Die grüne Linie ist Start + Handel (Spread, Verkäufe, Auflösung). Geschätzte Rewards und Rebates stecken im Cash, nicht in „realisiert“.";
+if(D.split){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Die grüne Linie ist Start + Handel (Spread, Verkäufe, Auflösung). Geschätzte Rewards und Rebates stecken im Cash, nicht in „realisiert“. Die orange Linie zählt nur 60 % der geschätzten Rewards (Haircut aus der echten Probe).";
  $("pnlnote").textContent="Realisiert ist der Handel. Rewards sind eine Schätzung nach Polymarkets Formel, keine Auszahlung.";
- if($("eqlegl"))$("eqlegl").textContent="Handel realisiert (ohne Rewards und Rebates)";}
+ if($("eqlegl"))$("eqlegl").textContent="Handel realisiert (ohne Rewards und Rebates)";
+ if($("eqlegh"))$("eqlegh").style.display="";}
 $("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}"${n.real==null?"":` title="realisiert ${(n.real>=0?"+":"")+fmt(n.real*100,1)} %"`}>${n.label}${n.ret==null?"":`<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span>`}</a>`).join(""):"";
 function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";tip.style.top=(e.clientY+14)+"px"}
 function hideTip(){tip.style.display="none"}
@@ -1460,7 +1465,8 @@ if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.loc
 if(D.split){const s=D.split;
  tiles[2]=["Handel realisiert",usd(s.trade),`ohne Rewards und Rebates · ${pct(s.trade/(D.start||1))}`];
  tiles[3]=["Rewards geschätzt",usd(s.rewards),"Polymarket-Formel, keine Auszahlung"];
- tiles.splice(4,0,["Rebates",usd(s.rebates),"geschätzter Anteil der Taker-Gebühr"]);}
+ tiles.splice(1,0,["Equity bei 60 % Rewards",usd(K.equity-0.4*(s.rewards||0)),"40 % der geschätzten Rewards abgezogen (Haircut aus der echten Probe)"]);
+ tiles.splice(5,0,["Rebates",usd(s.rebates),"geschätzter Anteil der Taker-Gebühr"]);}
 if(D.reward_share&&D.reward_share.length){
  $("rstbl").innerHTML=`<tr><th>Tag (UTC)</th><th class="num">geschätzt $/Tag</th><th class="num">Polymarket $/Tag</th><th class="num">Polymarket / geschätzt</th><th class="num">bisher verdient</th><th class="num">Abfragen</th></tr>`+
   D.reward_share.map(r=>`<tr><td>${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${r[2]==null?"–":usd(r[2])}</td><td class="num">${r[3]==null?"–":r[3]+" %"}</td><td class="num">${r[4]==null?"–":"$ "+fmt(r[4],4)}</td><td class="num">${r[5]}</td></tr>`).join("");
@@ -1511,18 +1517,19 @@ $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</
 (function(){
  const box=$("eq"),W=1100,H=260,m={l:56,r:12,t:10,b:26};const c=D.curve;if(c.length<2){box.textContent="Zu wenig Daten.";return}
  const svg=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img","aria-label":"Equity-Verlauf"},box);
- const t0=c[0].t,t1=c[c.length-1].t,ys=c.map(p=>p.e).concat(c.map(p=>p.r??p.e),[D.start]);let y0=Math.min(...ys),y1=Math.max(...ys);const pad=(y1-y0)*0.08||5;y0-=pad;y1+=pad;
+ const t0=c[0].t,t1=c[c.length-1].t,ys=c.map(p=>p.e).concat(c.map(p=>p.r??p.e),c.filter(p=>p.h!=null).map(p=>p.h),[D.start]);let y0=Math.min(...ys),y1=Math.max(...ys);const pad=(y1-y0)*0.08||5;y0-=pad;y1+=pad;
  const X=t=>m.l+(t-t0)/(t1-t0||1)*(W-m.l-m.r),Y=v=>m.t+(1-(v-y0)/(y1-y0))*(H-m.t-m.b);
  for(const v of ticks(y0,y1)){el("line",{x1:m.l,x2:W-m.r,y1:Y(v),y2:Y(v),stroke:"var(--grid)"},svg);el("text",{x:m.l-8,y:Y(v)+4,"text-anchor":"end"},svg).textContent="$"+fmt(v,0)}
  const nx=6;for(let i=0;i<=nx;i++){const t=t0+(t1-t0)*i/nx;el("text",{x:X(t),y:H-6,"text-anchor":i==0?"start":i==nx?"end":"middle"},svg).textContent=dt(t)}
  el("line",{x1:m.l,x2:W-m.r,y1:Y(D.start),y2:Y(D.start),stroke:"var(--muted)","stroke-dasharray":"4 4"},svg);
  el("path",{d:c.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.e).toFixed(1)).join(""),fill:"none",stroke:"var(--s1)","stroke-width":2,"stroke-linejoin":"round"},svg);
  el("path",{d:c.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.r??p.e).toFixed(1)).join(""),fill:"none",stroke:"var(--s3)","stroke-width":2,"stroke-dasharray":"6 4","stroke-linejoin":"round"},svg);
+ const hair=c.filter(p=>p.h!=null);if(hair.length>1)el("path",{d:hair.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.h).toFixed(1)).join(""),fill:"none",stroke:"var(--s2)","stroke-width":2,"stroke-dasharray":"2 3","stroke-linejoin":"round"},svg);
  const cross=el("line",{y1:m.t,y2:H-m.b,stroke:"var(--muted)",visibility:"hidden"},svg),dot=el("circle",{r:4.5,fill:"var(--s1)",stroke:"var(--surface)","stroke-width":2,visibility:"hidden"},svg);
  const hit=el("rect",{x:m.l,y:m.t,width:W-m.l-m.r,height:H-m.t-m.b,fill:"transparent"},svg);
  hit.addEventListener("mousemove",e=>{const r=svg.getBoundingClientRect(),tx=t0+((e.clientX-r.left)*W/r.width-m.l)/(W-m.l-m.r)*(t1-t0);let b=c[0];for(const p of c)if(Math.abs(p.t-tx)<Math.abs(b.t-tx))b=p;
   cross.setAttribute("x1",X(b.t));cross.setAttribute("x2",X(b.t));dot.setAttribute("cx",X(b.t));dot.setAttribute("cy",Y(b.e));cross.setAttribute("visibility","visible");dot.setAttribute("visibility","visible");
-  const extra=b.rw==null?"":`<br>Rewards geschätzt ${usd(b.rw)}<br>Rebates ${usd(b.rb)}`;
+  const extra=b.rw==null?"":`<br>Rewards geschätzt ${usd(b.rw)}<br>Rebates ${usd(b.rb)}`+(b.h==null?"":`<br>Equity bei 60 % Rewards ${usd(b.h)}`);
   showTip(e,`<b>${dt(b.t)}</b><br>Equity ${usd(b.e)}<br>${D.split?"Handel realisiert":"Vermögen realisiert"} ${usd(b.r??b.e)}${extra}<br>davon gebunden ${usd(b.l)}`)});
  hit.addEventListener("mouseleave",()=>{hideTip();cross.setAttribute("visibility","hidden");dot.setAttribute("visibility","hidden")});
 })();

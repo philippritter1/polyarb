@@ -915,6 +915,8 @@ scenarios:
     quote_frac: 0.5              # halber Reward-Abstand, solange die Mitte zwischen 30 und 70 ct liegt
     min_quote_frac: 0.5          # Verkaufsgebot und die symmetrische Zone bleiben mindestens so weit weg
     quote_usd: 50
+    max_min_size_usd: 50         # = quote_usd: Mindestgröße × teurere Seite darüber nicht quotieren
+                                 # (_sized hebt volle Gebote sonst auf rewardsMinSize an, auch über quote_usd)
     skew:                        # außerhalb 30–70 ct zum Favoriten (Seite ab 70 ct). Einseitig zählt die Liquidität
                                  # zwischen 10 und 90 ct nur zu einem Drittel. Liegt die Außenseitergröße
                                  # unter rewardsMinSize, wird die Seite nicht quotiert.
@@ -965,6 +967,7 @@ scenarios:
     quote_frac: 0.85             # in der Mitte (30–70 ct) weit weg: 85 % des Reward-Abstands
     min_quote_frac: 0.85         # Verkaufsgebot und die symmetrische Zone bleiben so weit weg
     quote_usd: 15
+    max_min_size_usd: 15         # = quote_usd, wie mm_pilot: sonst entstehen Gebote von 50–100 $
     skew:                        # dieselbe Schräge wie mm_robust, nur vorsichtiger: Favorit nicht näher als
                                  # die Hälfte, Außenseiter so weit weg wie es noch zählt, und klein.
       band_lo: 0.30
@@ -1035,6 +1038,7 @@ scenarios:
     max_mid: 0.85
     quote_frac: 0.5
     quote_usd: 25                # fester Deckel je Gebot
+    max_min_size_usd: 25         # = quote_usd: Mindestgröße darüber nicht quotieren (Bestandsdeckel 50 $)
     max_inventory_usd: 50        # fester Deckel je Markt
     max_total_inventory_usd: 300 # fester Deckel über alles
     pause:                       # wie mm_konservativ: Sprung der Mitte → eine Weile nicht bieten

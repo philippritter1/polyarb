@@ -747,6 +747,11 @@ def test_dashboard_splits_trading_rewards_and_rebates(tmp_path):
     assert abs(data["kpi"]["real"] - data["split"]["trade"]) < 1e-9
     last = data["curve"][-1]
     assert abs(last["r"] - (1000 + data["split"]["trade"])) < 1e-6 and last["rw"] == data["split"]["rewards"]
+    assert last["h"] == round(last["e"] - 0.4 * parts["rewards"], 2)
+    assert "Equity bei 60 % Rewards" in html and "60 % der geschätzten Rewards" in html
+    mm._write_scan(mm.clock.now())
+    written = json.loads(Path(mm.state_path.replace(".json", ".scan.json")).read_text(encoding="utf-8"))
+    assert written["Equity bei 60 % Rewards $"] == round(mm.st.equity - 0.4 * mm.st.rewards, 2)
 
 
 def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
@@ -775,9 +780,30 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert q["max_quote_age_s"] == 30 and q["requote_ticks"] == 1
     assert q["skew"]["fav_frac"] == r["skew"]["fav_frac"] >= 0.5
     assert "max_quote_age_s" not in r and "requote_ticks" not in r
+    for name in ("mm_robust", "mm_robust_quotealter", "mm_konservativ", "mm_neu_vorsichtig"):
+        s = sc[name]
+        assert s["max_min_size_usd"] == s["quote_usd"] and "live" not in s
     w = sc["wetter_sniper"]
     assert w["enabled"] is True and w["strategy"] == "wxsniper" and "live" not in w
     assert w["min_margin"] >= 1 and w["min_yes"] >= 0.03 and w["max_slippage"] == 0
+
+
+def test_min_size_above_quote_usd_is_not_quoted(tmp_path):
+    """A reward minimum that costs more than quote_usd is not quoted, and a quote that does fit stays within it."""
+    store = BookStore()
+    ms = [_m("ok", "Will the small minimum qualify?", 0.50),
+          dict(_m("big", "Will the minimum exceed the quote?", 0.50), rewardsMinSize=80)]
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, quote_usd=15, max_min_size_usd=15), Client(ms),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "ok", 0.48, 0.52)
+    _book(store, "big", 0.48, 0.52)
+    mm.step()
+    assert list(mm.st.markets) == ["ok"] and mm.scan["Mindestgröße zu groß"] == 1
+    assert "big" not in mm.st.markets
+    mk = mm.st.markets["ok"]
+    assert mk.bid_yes and mk.bid_no
+    for q in (mk.bid_yes, mk.bid_no):
+        assert q["price"] * q["size"] <= 15 + 1e-6
 
 
 def test_min_share_pulls_quotes_and_sells_inventory_only_when_set(tmp_path):

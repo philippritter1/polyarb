@@ -1532,7 +1532,11 @@ class MarketMaker:
                                      if self.sc.get("exit") else {}),
                                   **({"davon Rewards aus Verkaufsgeboten $": round(st.ask_rewards, 2)}
                                      if self.sc.get("reward_asks") else {}),
-                                  "Bestand $": round(st.inventory_value(), 2), "ts": now})
+                                  "Bestand $": round(st.inventory_value(), 2),
+                                  # rewards are already in the cash, so 60 % of the estimate is the full equity
+                                  # minus the 40 % the live probe did not actually pay
+                                  "Equity bei 60 % Rewards $": round(st.equity - 0.4 * st.rewards, 2),
+                                  "ts": now})
         try:
             with open(self.state_path.replace(".json", ".scan.json"), "w", encoding="utf-8") as f:
                 json.dump(scan, f)

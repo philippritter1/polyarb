@@ -91,11 +91,25 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv bleibt nur Market Making (mm_rewards, mm_breit, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, mm_schutz, mm_schutz_neu, mm_stop, mm_probe) plus `sharp_fussball2` und Studie/Kalshi-Studie.
+Aktiv (19.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_stop, mm_robust, mm_robust_quotealter, mm_neu_vorsichtig2, wetter_sniper, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
 (Langzeit-Trend) und `mm_nah` laufen bis zur Auswertung am 19.10. weiter. Ein Pilot baut auf dem Sieger auf, nicht auf mm_pilot.
+
+Änderungen 19.10. (Nutzer mit anderem Agenten, PR #1/#2, von Claude geprüft): Bestand wird jetzt zum **Bid** bewertet
+(statt Mitte – Equity-Kurven springen am 19.10. nach unten, Vergleiche besser ab 19.10.), Scan/Dashboard „Equity bei 60 %
+Rewards“; je Fill Gebotsalter/Abstand/Favorit/Markout 1 s, 10 s, 1/5/60 Min., Auflösung; Orderbuch-Mitschnitt
+(`booklog`, arb/booklog.py + bookreplay.py, 60 s, 7 Tage) für Offline-Replay neuer Regeln; neue Optionen `skew:`
+(Favorit näher/Außenseiter kleiner außerhalb 30–70 ct), `rewards_active`, `min_event_volume_24h`, `skip_tags`,
+`max_event_usd`, `exit.min_share`, `max_quote_age_s`/`requote_ticks`; neue Papier-Szenarien `mm_robust` (14 Tage, 10k $
+Volumen, Skew), `mm_robust_quotealter` (dto. + Gebot alle 30 s erneuert – echt nicht geeignet, API-Limits), `mm_konservativ`,
+`mm_neu_vorsichtig`, `wetter_sniper` (arb/wxsniper.py: Temperatur-Buckets, die laut Station schon ausgeschlossen sind).
+Mit 60 % Rewards + Bid-Bewertung: mm_sofort ≈ 0, ueberbucht −10 %, nah −14 % → diese 5 mit wind_down.
+**RAM-Engpass 19.10.** (165 MB frei, 1 GB Swap; MM-Prozesse ~130 MB durch 4 Gamma-Listen à ~7.000 Märkte): `release_memory()`
+(arb/memtrim.py, gc + glibc malloc_trim) nach jeder Marktauswahl und in sharp; archiviert: mm_probe (allow_real false),
+mm_konservativ (0,03 $/Tag erwartet), mm_neu_vorsichtig (10k-Filter ließ 5 Märkte, 0,58 $/Tag) → `mm_neu_vorsichtig2`
+(gleich, 24h-Volumen ab 1.000 $), ladder. Bei weiteren Szenarien: Server vergrößern (Hetzner 4 GB) oder Listen teilen.
 
 Aktive Kandidaten im Live-Test:
 - `wetter_no_breit` / `wetter_no_mess` / `wetter_no_streng`: NO auf Temperatur-Buckets, 55–97 %, 2–12 h vor Schluss,

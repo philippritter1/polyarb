@@ -808,13 +808,19 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert sc["mm_ruhig"]["enabled"] is True and sc["mm_stop"]["enabled"] is True and sc["mm_rewards"]["enabled"] is True
     assert "Kultur" not in sc["mm_rewards"]["skip_categories"]
     k, n = sc["mm_konservativ"], sc["mm_neu_vorsichtig"]
-    assert k["enabled"] is True and "live" not in k and k["min_days_to_end"] >= 30 and k["quote_frac"] >= 0.8
+    # 19.10. owner: mm_konservativ (0,03 $/day expected) and mm_neu_vorsichtig (10k volume filter: 5 markets) archived
+    assert k["enabled"] is False and k["archive"] is True and n["enabled"] is False and n["archive"] is True
+    assert "live" not in k and k["min_days_to_end"] >= 30 and k["quote_frac"] >= 0.8
     assert k["min_quote_frac"] >= k["quote_frac"] and k["quote_usd"] <= 20 and k["pause"] and k["exit"]["stop_ticks"]
-    assert n["enabled"] is True and "live" not in n and n["max_age_days"] <= 3 and "overcommit" not in n
+    assert "live" not in n and n["max_age_days"] <= 3 and "overcommit" not in n
     assert n["exit"]["min_share"] > 0 and n["max_inventory_usd"] <= 50 and n["quote_frac"] == 0.5
     assert n["min_days_to_end"] >= 14 and n["rewards_active"] is True and n["min_event_volume_24h"] >= 10000
     assert "Kultur" in n["skip_categories"] and n["skip_re"] and n["pause"]["ticks"] >= 3
     assert n["exit"]["stop_ticks"] >= 3 and "skew" not in n
+    n2 = sc["mm_neu_vorsichtig2"]  # the same, but 24-h volume from 1,000 $
+    assert n2["enabled"] is True and "live" not in n2 and n2["min_event_volume_24h"] == 1000
+    assert {k_: v for k_, v in n2.items() if k_ not in ("enabled", "title", "min_event_volume_24h")} == \
+        {k_: v for k_, v in n.items() if k_ not in ("enabled", "archive", "title", "min_event_volume_24h")}
     q = sc["mm_robust_quotealter"]
     assert q["enabled"] is True and "live" not in q and q["strategy"] == "mm"
     assert q["max_quote_age_s"] == 30 and q["requote_ticks"] == 1
@@ -1066,14 +1072,14 @@ def test_running_scenarios_do_not_pick_up_the_new_filters():
     sc = cfg["scenarios"]
     for name in ("mm_robust", "mm_konservativ", "mm_robust_quotealter"):
         s = sc[name]
-        assert s["enabled"] is True and "live" not in s
+        assert (s["enabled"] is True or name == "mm_konservativ") and "live" not in s
         assert s["rewards_active"] is True and s["min_event_volume_24h"] >= 10000
         assert s["min_mid"] <= 0.10 and s["max_mid"] >= 0.90
         assert s["skew"]["long_usd"] > 0 and s["skew"]["fav_frac"] >= 0.5
     assert "max_quote_age_s" not in sc["mm_robust"] and "requote_ticks" not in sc["mm_robust"]
     assert sc["mm_robust_quotealter"]["max_quote_age_s"] == 30 and sc["mm_robust_quotealter"]["requote_ticks"] == 1
     for name, s in sc.items():
-        if name in ("mm_robust", "mm_konservativ", "mm_robust_quotealter", "mm_neu_vorsichtig"):
+        if name in ("mm_robust", "mm_konservativ", "mm_robust_quotealter", "mm_neu_vorsichtig", "mm_neu_vorsichtig2"):
             continue
         assert "skew" not in s and "rewards_active" not in s and "min_event_volume_24h" not in s
         assert "max_quote_age_s" not in s and "requote_ticks" not in s

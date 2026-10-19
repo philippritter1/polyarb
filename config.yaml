@@ -104,7 +104,8 @@ scenarios:
   # Alle Szenarien starten mit demselben Budget wie die Arbitrage (2.500 $), damit die
   # Renditen vergleichbar sind. Ändert sich capital_usd, startet das Szenario neu (alte Daten archiviert).
   ladder:
-    enabled: true
+    enabled: false               # 19.10. Nutzer: archiviert – 13 offene Arbitrage-Positionen ohne Ergebnis, nichts mehr zu lernen; RAM
+    archive: true
     wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus
     title: Logische Arbitrage
     strategy: ladder             # Leitern wie "über 100k / über 110k" oder "bis Oktober / bis Dezember"
@@ -807,7 +808,8 @@ scenarios:
       max_total_usd: 300
       max_daily_loss_usd: 30     # Kontowert fällt an einem Tag um mehr: Not-Aus für alles
   mm_probe:
-    enabled: true
+    enabled: false               # 19.10. Nutzer: Generalprobe beendet (16.10. Not-Aus), Dienst aus – Server-RAM
+    archive: true
     title: Market Making (Generalprobe)
     strategy: mm                 # 14.10.: Generalprobe mit echtem Geld (Nutzer-Entscheidung), Schleife einmal echt
     # durchlaufen (bieten, Fill, Verkaufsgebot, Notverkauf, Konto-Abgleich). 15.10. Nutzer: auf ~60 $ aufgestockt, damit
@@ -864,7 +866,7 @@ scenarios:
     latency_s: 1
     step_s: 2
     live:
-      allow_real: true           # nur dieses Szenario; echt erst, wenn auf /admin/ "Echt" gewählt ist
+      allow_real: false           # nur dieses Szenario; echt erst, wenn auf /admin/ "Echt" gewählt ist
       quote_usd: 8
       max_order_usd: 12
       max_market_usd: 12
@@ -955,7 +957,8 @@ scenarios:
     max_quote_age_s: 30
     requote_ticks: 1
   mm_konservativ:
-    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block. Laufende Varianten bleiben, wie sie sind.
+    enabled: false               # 19.10. Nutzer: aus – erwartete Rewards 0,03 $/Tag (Filter lassen fast nichts übrig), RAM
+    archive: true
     title: Market Making (konservativ)
     strategy: mm                 # 18.10.: das ruhige Ende des Reward-Geschäfts als ein Szenario. Pause und Stop-Loss sind
     # dieselben Schalter wie bei mm_ruhig und mm_stop (pause:, exit.stop_ticks) – hier an, sonst aus. Weit von der Mitte,
@@ -1001,7 +1004,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_neu_vorsichtig:
-    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block. mm_sofort / mm_nah / mm_treppe / mm_ueberbucht laufen weiter.
+    enabled: false               # 19.10. Nutzer: aus – 0,58 $/Tag in 5 Märkten (neue Märkte haben selten 10k $ 24h-Volumen); ersetzt durch mm_neu_vorsichtig2
+    archive: true
     title: Market Making (neu, vorsichtig)
     strategy: mm                 # 18.10.: nur die ersten Tage eines Markts (dort lag der Reward in der Simulation),
     # feste kleine Deckel, kein Überbuchen, Abstand 0,5. Raus, wenn der geschätzte Anteil am Reward-Pool unter
@@ -1018,6 +1022,69 @@ scenarios:
     min_daily_rate: 5
     rewards_active: true
     min_event_volume_24h: 10000
+    skip_categories: [Sport, Krypto, Kultur, Social]
+    skip_tags:
+      - culture
+      - pop-culture
+      - entertainment
+      - movies
+      - movie
+      - film
+      - television
+      - music
+      - youtube
+      - streaming
+      - box-office
+      - celebrities
+      - celebrity
+      - gaming
+      - video-games
+      - oscars
+      - grammys
+    skip_re:
+      - '\b(views?|viewership|box office|rotten tomatoes|trailer|attend(?:ance|ees)?)\b'
+      - '\b(streams?|streaming|livestream)\b'
+      - '\b(gta\s*(vi|6)|grand theft auto)\b'
+      - '\b(oscar|oscars|grammy|grammys|emmy|box office|imdb|metacritic|billboard)\b'
+    min_days_to_end: 14
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.5
+    quote_usd: 25                # fester Deckel je Gebot
+    max_min_size_usd: 25         # = quote_usd: Mindestgröße darüber nicht quotieren (Bestandsdeckel 50 $)
+    max_inventory_usd: 50        # fester Deckel je Markt
+    max_total_inventory_usd: 300 # fester Deckel über alles
+    pause:                       # wie mm_konservativ: Sprung der Mitte → eine Weile nicht bieten
+      ticks: 3
+      window_s: 300
+      pause_s: 600
+    exit:
+      after_h: 0                 # einseitiger Bestand: sofort Verkaufsgebot (wie mm_sofort)
+      dump_after_h: 96
+      min_share: 0.05            # geschätzter Anteil am Pool darunter → Gebote weg, Bestand zum Bid
+      stop_ticks: 3              # wie mm_konservativ: Mitte 3 Ticks unter Einstand → zum Bid
+    reward_asks: true
+    latency_s: 1
+    step_s: 2
+  mm_neu_vorsichtig2:
+    enabled: true                # 19.10. Nutzer: wie mm_neu_vorsichtig, aber 24h-Volumen ab 1.000 $ statt 10.000 $
+    title: Market Making (neu, vorsichtig 2)
+    strategy: mm                 # 18.10.: nur die ersten Tage eines Markts (dort lag der Reward in der Simulation),
+    # feste kleine Deckel, kein Überbuchen, Abstand 0,5. Raus, wenn der geschätzte Anteil am Reward-Pool unter
+    # min_share fällt – Gebote weg, Bestand zum Bid. 19.10. Review: dieselben Filter wie mm_robust (14 Tage,
+    # laufendes Reward-Programm, 10k $ Eventvolumen, Kultur und View-Counts). Pause und Stop-Loss hat mm_robust
+    # nicht; hier die Schalter von mm_konservativ (3 Ticks / 10 Min., Stop 3 Ticks). Eigene Datenbank.
+    capital_usd: 2500
+    max_markets: 8
+    max_age_days: 3              # nur Märkte, die jünger als 3 Tage sind
+    rank: share
+    prefilter: 60
+    list_orders: [volume, liquidity, volume24hr, startDate]
+    min_liquidity: 0
+    min_daily_rate: 5
+    rewards_active: true
+    min_event_volume_24h: 1000   # 19.10.: neue Märkte < 3 Tage erreichen 10k $ selten (Vorgänger: 5 Märkte, 0,58 $/Tag)
     skip_categories: [Sport, Krypto, Kultur, Social]
     skip_tags:
       - culture

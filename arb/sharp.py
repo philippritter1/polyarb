@@ -24,6 +24,7 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from .memtrim import release_memory
 from .client import _parse_json_list, _parse_ts
 from .odds import OTHER_TEAM, devig, similar
 from .scenarios import Signal, Strategy, _iso
@@ -257,4 +258,6 @@ class SharpStrategy(Strategy):
                                       max_spread=float(c.get("max_spread", 0.03)),
                                       reason=f"Pinnacle {fair:.3f} vs Polymarket {price:.3f} "
                                              f"({mt['home']} – {mt['away']}, {mt['league']})"))
+        del evs
+        release_memory()  # the Polymarket event listing is no longer needed
         return out

@@ -42,6 +42,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from .memtrim import release_memory
 from .client import FeeResolver, _parse_json_list, _parse_ts
 from .scenarios import _iso
 from .models import Basket, ExecutionResult, FeeSpec, Fill, Leg, Opportunity, OrderBook
@@ -1435,6 +1436,7 @@ class MarketMaker:
             self._last["select"] = now
             try:
                 self.select(now)
+                release_memory()  # the listing (thousands of markets) is no longer needed
             except Exception as e:  # noqa
                 log.error("%s: market selection failed (%s: %s)", self.name, type(e).__name__, e)
         tokens = [t for m in self.st.markets.values() for t in (m.yes, m.no)]

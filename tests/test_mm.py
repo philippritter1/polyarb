@@ -47,6 +47,46 @@ def _book(store, cid, bid, ask, size=200):
     store.snapshot(f"{cid}N", [{"price": round(1 - ask, 3), "size": size}], [{"price": round(1 - bid, 3), "size": size}], NOW)
 
 
+def test_wind_down_pulls_bids_and_still_exits_inventory(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, exit={"after_h": 0, "dump_after_h": 96}),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes and mk.bid_no
+    mk.qty_yes, mk.cost_yes = 10.0, 4.8
+    mm.sc["wind_down"] = True
+    mm._last["select"] = -1e18
+    mm.clock.sleep(2)
+    mm.step()
+    assert "a" in mm.st.markets and mk.bid_yes is None and mk.bid_no is None and mk.qty_yes == 10
+    assert mk.ask and mk.ask["side"] == "yes" and mm.scan["wind_down"] == "keine neuen Gebote"
+    mk.qty_yes = mk.cost_yes = 0
+    mm._last["select"] = -1e18
+    mm.clock.sleep(2)
+    mm.step()
+    assert "a" not in mm.st.markets
+
+
+def test_aggressive_mm_scenarios_wind_down_and_the_others_do_not():
+    import yaml
+    sc = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml", encoding="utf-8"))["scenarios"]
+    titles = {
+        "mm_sofort": "sofort verkaufen",
+        "mm_nah": "nah an der Mitte",
+        "mm_ueberbucht": "überbucht",
+        "mm_treppe": "Abbau-Treppe",
+        "mm_ruhig": "Pause bei Sprüngen",
+    }
+    for name, bit in titles.items():
+        s = sc[name]
+        assert s["wind_down"] is True and s["enabled"] is True and bit in s["title"] and "live" not in s
+    for name in ("mm_rewards", "mm_robust", "mm_robust_quotealter", "mm_konservativ", "mm_neu_vorsichtig",
+                 "mm_probe", "mm_breit", "mm_schutz", "mm_schutz_neu", "mm_stop"):
+        assert not sc[name].get("wind_down")
+
+
 def test_reward_scoring():
     assert abs(score([(0.48, 100)], 0.50, 0.04, True) - 25) < 1e-9
     assert score([(0.45, 100)], 0.50, 0.04, True) == 0.0  # outside the qualifying spread

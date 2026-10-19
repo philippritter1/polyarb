@@ -436,6 +436,8 @@ scenarios:
     step_s: 2
   mm_sofort:
     enabled: true
+    wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
+                                 # Keine neuen Gebote, offene Gebote weg, Bestand läuft über exit und Auflösung aus.
     title: Market Making (sofort verkaufen)
     strategy: mm                 # 14.10.: wie mm_abbau, aber jede einseitige Position bekommt SOFORT ein Verkaufsgebot
     # zur Mitte + Abstand (statt nach 24 h) – Generalprobe: auch Verkaufsgebote zählen für Rewards, ohne Cash zu binden.
@@ -465,6 +467,8 @@ scenarios:
     step_s: 2
   mm_treppe:
     enabled: true
+    wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
+                                 # Keine neuen Gebote, offene Gebote weg, Bestand läuft über exit und Auflösung aus.
     title: Market Making (Abbau-Treppe)
     strategy: mm                 # 15.10. Nutzer-Idee: wie mm_sofort (Verkaufsgebot sofort), aber das Verkaufsgebot rückt
     # jede Stunde ein Stück näher: von Mitte + Abstand in 6 Stufen bis zur Mitte – immer im Reward-Bereich (Nutzer:
@@ -495,6 +499,8 @@ scenarios:
     step_s: 2
   mm_ruhig:
     enabled: true
+    wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
+                                 # Keine neuen Gebote, offene Gebote weg, Bestand läuft über exit und Auflösung aus.
     title: Market Making (Pause bei Sprüngen)
     strategy: mm                 # 15.10. Nutzer: Hebel gegen schlechte Fills – wie mm_treppe, aber springt die Mitte binnen
     # 5 Min. um >= 3 Ticks, keine Gebote in diesem Markt für 10 Min. (dann handeln oft Informierte). Vergleich mit
@@ -704,6 +710,8 @@ scenarios:
     step_s: 2
   mm_nah:
     enabled: true
+    wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
+                                 # Keine neuen Gebote, offene Gebote weg, Bestand läuft über exit und Auflösung aus.
     title: Market Making (nah an der Mitte)
     strategy: mm                 # 15.10. Nutzer-Frage: wo verdient man mehr, nah an der Mitte oder weiter weg? Wie
     # mm_sofort, aber Gebote (und das Verkaufsgebot) bei 1/4 statt 1/2 des Reward-Abstands: Reward-Punkte
@@ -732,6 +740,8 @@ scenarios:
     step_s: 2
   mm_ueberbucht:
     enabled: true
+    wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
+                                 # Keine neuen Gebote, offene Gebote weg, Bestand läuft über exit und Auflösung aus.
     title: Market Making (überbucht)
     strategy: mm                 # 15.10. Nutzer-Idee: wie mm_sofort, aber Gebote zusammen bis 2x das Cash (Limit-Orders
     # binden kein Geld, Rewards zählen die Größe im Buch) und Bestand schneller loswerden: Verkaufsgebot näher an der
@@ -1066,6 +1076,7 @@ scenarios:
     max_events: 400
     min_margin: 1                # ganze Grad jenseits des Buckets (24°C ist bei 25°C draußen; 2 = die strengere Studie)
     min_yes: 0.03                # JA noch mindestens 3 ct, sonst ist der NO-Ask schon bei ~1
+                                 # kaufbar erst, wenn Tiefe am besten Ask × depth_haircut ≥ Mindestgröße des Buchs
     obs_delay_min: 15            # nur Messungen, die schon 15 min veröffentlicht sind
     obs_ttl_s: 600
     interval_min: 10

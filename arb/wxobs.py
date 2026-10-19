@@ -655,8 +655,8 @@ class LiveObs:
         return out
 
     def gap(self, question: str, description: str, now: float, delay_s: float = 900) -> str:
-        """Where today's running max (min) of the market's station stands relative to its bucket."""
-        from zoneinfo import ZoneInfo
+        """Where today's running max (min) of the market's station stands relative to its bucket.
+        Only readings on the market's local calendar day count."""
         pq = parse_question(question, datetime.fromtimestamp(now, tz=timezone.utc).year)
         station = station_from(description or "")
         if not pq or not station:
@@ -665,16 +665,15 @@ class LiveObs:
         tz = self.tz(station)
         if not tz:
             return "keine Messung"
-        start = datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(tz)).timestamp()
-        vals = [to_unit(f, unit) for t, f in self.readings(station, now) if start <= t <= now - delay_s
-                and t < start + 86400]
+        vals = self._day_vals(station, tz, day, now, delay_s, unit)
         v = (max(vals) if kind == "max" else min(vals)) if vals else None
         return gap_class(kind, lo, hi, v, unit)
 
     def ruling(self, question: str, description: str, now: float, delay_s: float = 900) -> Optional[dict]:
-        """Where today's running extreme stands. None when station, time zone or a reading is missing.
-        `margin` is `degrees_outside` (0 while the bucket can still win)."""
-        from zoneinfo import ZoneInfo
+        """Where the market day's running extreme stands, in the station's time zone.
+        None when station, time zone or a reading from that local day is missing.
+        `margin` is `degrees_outside` (0 while the bucket can still win). A reading on the next
+        local day does not count, including after the market day has ended."""
         pq = parse_question(question, datetime.fromtimestamp(now, tz=timezone.utc).year)
         station = station_from(description or "")
         if not pq or not station:
@@ -683,14 +682,27 @@ class LiveObs:
         tz = self.tz(station)
         if not tz:
             return None
-        start = datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(tz)).timestamp()
-        vals = [to_unit(f, unit) for t, f in self.readings(station, now) if start <= t <= now - delay_s
-                and t < start + 86400]
+        vals = self._day_vals(station, tz, day, now, delay_s, unit)
         if not vals:
             return None
         ext = max(vals) if kind == "max" else min(vals)
         return dict(kind=kind, city=city, station=station, lo=lo, hi=hi, unit=unit, day=day.isoformat(),
                     reading=ext, margin=degrees_outside(kind, lo, hi, ext), tz=tz)
+
+    def _day_vals(self, station: str, tz: str, day: date, now: float, delay_s: float, unit: str) -> List[int]:
+        """Whole-degree readings whose timestamp falls on `day` in the station's time zone.
+
+        The window is local midnight to the next local midnight (not a fixed 24 h, so a DST change
+        does not pull in the next morning). A market whose day is already over is judged only on
+        that day's readings; a reading on the following local day never counts. Unpublished
+        readings (younger than delay_s) stay out."""
+        from zoneinfo import ZoneInfo
+        z = ZoneInfo(tz)
+        start = datetime(day.year, day.month, day.day, tzinfo=z)
+        end = start + timedelta(days=1)
+        lo, hi = start.timestamp(), end.timestamp()
+        return [to_unit(f, unit) for t, f in self.readings(station, now)
+                if lo <= t < hi and t <= now - delay_s]
 
 
 def _parse_iso(v) -> Optional[float]:

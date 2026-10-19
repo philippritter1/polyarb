@@ -474,6 +474,9 @@ class MarketMaker:
         mid 0.15-0.85, a qualifying spread of at least 2 ticks. The largest pools first – or, with
         rank: share, the largest EXPECTED reward: pool x our share against the orders already in the book.
         max_age_days keeps only markets started within that many days (early, little competition)."""
+        if self.sc.get("wind_down"):
+            self._wind_down_book()
+            return
         sc = self.sc
         min_days = float(sc.get("min_days_to_end", 3))
         skip = set(sc.get("skip_categories", ["Sport", "Krypto"]))
@@ -1092,8 +1095,24 @@ class MarketMaker:
                     n += 1
         return n
 
+    def _wind_down_book(self) -> None:
+        """wind_down: no new markets and no bids. Positions stay, so exit orders and resolution still run."""
+        for cid in list(self.st.markets):
+            mk = self.st.markets[cid]
+            mk.bid_yes = mk.bid_no = None
+            if mk.qty_yes <= 1e-9 and mk.qty_no <= 1e-9:
+                del self.st.markets[cid]
+        self.quoted = set()
+        self.scan["wind_down"] = "keine neuen Gebote"
+
     # ------------------------------------------------------------------ quoting
     def quote(self, now: float, books: Dict[str, OrderBook]) -> None:
+        if self.sc.get("wind_down"):
+            for mk in self.st.markets.values():
+                self._mark(mk, books.get(mk.yes), books.get(mk.no))
+                mk.bid_yes = mk.bid_no = None
+            self.scan["wind_down"] = "keine neuen Gebote"
+            return
         sc = self.sc
         frac = float(sc.get("quote_frac", 0.5))      # distance from the mid as a share of the qualifying spread
         usd = float(sc.get("quote_usd", 50))          # per side

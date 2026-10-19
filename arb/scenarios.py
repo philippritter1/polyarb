@@ -490,6 +490,7 @@ class ScenarioEngine:
         ex = cfg["execution"]
         self.latency_s = float(ex.get("latency_ms", 350)) / 1000
         self.haircut = float(ex.get("depth_haircut", 1.0))
+        self.strategy.haircut = self.haircut  # wxsniper: "kaufbar" uses the same haircut as the fill
         self.market_delay = bool(ex.get("respect_market_delay", True))
         self.max_slippage = float(self.sc.get("max_slippage", 0.03))
         self._cooldown: Dict[str, float] = {}
@@ -642,7 +643,13 @@ class ScenarioEngine:
                           edge_bps=(qty * s.fair - spend) / spend * 1e4 if spend else 0.0,
                           lockup_days=max(((s.end_ts or now) - now) / DAY, 0.0), detected_ts=now)
         if qty < ob.min_order_size:
-            self.store.opportunity(opp, "rejected", f"no capacity ({binding})", qty)
+            visible = math.floor(sum(lv.size * self.haircut for lv in ob.asks
+                                     if lv.price <= s.max_price + 1e-9) * 100) / 100
+            if visible + 1e-9 < ob.min_order_size:
+                why = f"unter Mindestgröße ({qty:.2f} < {ob.min_order_size})"
+            else:
+                why = f"no capacity ({binding})"  # the book could fill the minimum; a budget cap stopped it
+            self.store.opportunity(opp, "rejected", why, qty)
             self._cooldown[s.token_id] = now + 1800
             return
         self.store.opportunity(opp, "accepted", "full size" if binding == "position" else f"sized down by {binding}", qty)

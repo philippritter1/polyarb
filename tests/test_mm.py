@@ -753,7 +753,7 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     import yaml
     sc = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml", encoding="utf-8"))["scenarios"]
     r = sc["mm_robust"]
-    assert r["enabled"] is False and r["strategy"] == "mm"
+    assert r["enabled"] is True and r["strategy"] == "mm" and "live" not in r
     assert r["min_days_to_end"] >= 14 and r["min_quote_frac"] >= 0.5 and r["quote_frac"] >= r["min_quote_frac"]
     assert r["max_event_usd"] > 0 and "Kultur" in r["skip_categories"] and r["skip_tags"] and r["skip_re"]
     assert sc["mm_sofort"]["min_days_to_end"] == 3 and "max_event_usd" not in sc["mm_sofort"]
@@ -763,12 +763,12 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert sc["mm_ruhig"]["enabled"] is True and sc["mm_stop"]["enabled"] is True and sc["mm_rewards"]["enabled"] is True
     assert "Kultur" not in sc["mm_rewards"]["skip_categories"]
     k, n = sc["mm_konservativ"], sc["mm_neu_vorsichtig"]
-    assert k["enabled"] is False and k["min_days_to_end"] >= 30 and k["quote_frac"] >= 0.8
+    assert k["enabled"] is True and "live" not in k and k["min_days_to_end"] >= 30 and k["quote_frac"] >= 0.8
     assert k["min_quote_frac"] >= k["quote_frac"] and k["quote_usd"] <= 20 and k["pause"] and k["exit"]["stop_ticks"]
-    assert n["enabled"] is False and n["max_age_days"] <= 3 and "overcommit" not in n
+    assert n["enabled"] is True and "live" not in n and n["max_age_days"] <= 3 and "overcommit" not in n
     assert n["exit"]["min_share"] > 0 and n["max_inventory_usd"] <= 50 and n["quote_frac"] == 0.5
     w = sc["wetter_sniper"]
-    assert w["enabled"] is False and w["strategy"] == "wxsniper" and "live" not in w
+    assert w["enabled"] is True and w["strategy"] == "wxsniper" and "live" not in w
     assert w["min_margin"] >= 1 and w["min_yes"] >= 0.03 and w["max_slippage"] == 0
 
 
@@ -935,10 +935,13 @@ def test_quote_refresh_options_do_nothing_unless_set(tmp_path):
 
 def test_running_scenarios_do_not_pick_up_the_new_filters():
     import yaml
-    sc = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
+    cfg = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml"))
+    assert cfg["booklog"]["enabled"] is True and cfg["booklog"]["every_s"] == 60 and cfg["booklog"]["keep_days"] == 7
+    sc = cfg["scenarios"]
     for name in ("mm_robust", "mm_konservativ"):
         s = sc[name]
-        assert s["enabled"] is False and s["rewards_active"] is True and s["min_event_volume_24h"] >= 10000
+        assert s["enabled"] is True and "live" not in s
+        assert s["rewards_active"] is True and s["min_event_volume_24h"] >= 10000
         assert s["min_mid"] <= 0.10 and s["max_mid"] >= 0.90
         assert s["skew"]["long_usd"] > 0 and s["skew"]["fav_frac"] < s["quote_frac"]
         assert "max_quote_age_s" not in s and "requote_ticks" not in s

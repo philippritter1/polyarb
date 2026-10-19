@@ -72,8 +72,8 @@ stream:
 storage:
   db_path: data/polyarb.sqlite
 
-booklog:                        # Orderbuch-Mitschnitt für Offline-Replay. Aus, solange enabled: false ist.
-  enabled: false               # true: data/booklog/YYYY-MM-DD.sqlite, ein Stand je Token alle every_s
+booklog:                        # Orderbuch-Mitschnitt für Offline-Replay. 19.10. an (Philipp).
+  enabled: true                # data/booklog/YYYY-MM-DD.sqlite, ein Stand je Token alle every_s
   every_s: 60                  # nicht öfter. Die Gebote lesen das nicht, der Handel ändert sich nicht.
   depth: 3                     # Level je Seite, das beste zuerst
   keep_days: 7                 # ältere Tagesdateien (samt WAL) werden gelöscht
@@ -863,9 +863,9 @@ scenarios:
       day_reset: "2026-10-16 Nutzer"  # 16.10. Nutzer: Tagesbasis neu (Text ändern = neuer Tagesstart beim aktuellen Konto)
       deposits_usd: 87.0         # eingezahlt insgesamt (14.10. 11,00 + 15.10. 76,00) – bei jeder Ein-/Auszahlung anpassen
   mm_robust:
-    enabled: false               # bewusst aus: einschalten erst nach Merge, siehe unten. Der Server startet es dann
-                                 # beim nächsten update (polyarb-scenario@mm_robust). Auswertung ab dem eigenen Start,
-                                 # eigene Datenbank – nicht mit den Läufen davor vergleichen.
+    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block, das Order-Modul wird nicht erzeugt.
+                                 # Der Server startet polyarb-scenario@mm_robust beim nächsten update.
+                                 # Auswertung ab dem eigenen Start, eigene Datenbank.
     title: Market Making (robust)
     strategy: mm                 # 18.10., aus der Dashboard-Auswertung, als eigenes Szenario (laufende Varianten
     # unverändert): Handel verliert 11–23 % je 1 $ gefüllt; der Papiergewinn sind geschätzte Rewards. Markout
@@ -935,7 +935,7 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_konservativ:
-    enabled: false               # neuer Satz, noch aus. Laufende Varianten (mm_ruhig, mm_stop, …) bleiben, wie sie sind.
+    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block. Laufende Varianten bleiben, wie sie sind.
     title: Market Making (konservativ)
     strategy: mm                 # 18.10.: das ruhige Ende des Reward-Geschäfts als ein Szenario. Pause und Stop-Loss sind
     # dieselben Schalter wie bei mm_ruhig und mm_stop (pause:, exit.stop_ticks) – hier an, sonst aus. Weit von der Mitte,
@@ -980,7 +980,7 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_neu_vorsichtig:
-    enabled: false               # verdichtet mm_sofort / mm_nah / mm_treppe / mm_ueberbucht. Die vier laufen weiter.
+    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block. mm_sofort / mm_nah / mm_treppe / mm_ueberbucht laufen weiter.
     title: Market Making (neu, vorsichtig)
     strategy: mm                 # 18.10.: nur die ersten Tage eines Markts (dort lag der Reward in der Simulation),
     # feste kleine Deckel, kein Überbuchen, Abstand 0,5 (nah an der Mitte war der schlechteste Handel). Raus, wenn der
@@ -1009,7 +1009,7 @@ scenarios:
     latency_s: 1
     step_s: 2
   wetter_sniper:
-    enabled: false               # nur Papier und Messung. Kein live:-Block, die Szenario-Engine schickt keine Orders.
+    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block, die Szenario-Engine schickt keine Orders.
     title: Wetter-Sniper
     strategy: wxsniper           # arb/wxsniper.py (18.10.): Temperatur-Bucket, den die Station schon um mindestens
     # min_margin Grad ausgeschlossen hat. Jeder solche Fall wird mit dem echten NO-Ask, der Tiefe dort, dem angezeigten

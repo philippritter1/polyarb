@@ -53,6 +53,8 @@ class Engine:
         self.confirm_rest = bool(cfg["execution"].get("confirm_with_rest", True))
         self.market_delay = bool(cfg["execution"].get("respect_market_delay", True))
         self.baskets: List[Basket] = []
+        from .booklog import open_log
+        self.booklog = open_log(cfg)  # off unless booklog.enabled; never read by the scanner
         self._universe_ts = 0.0
         self.max_trades_per_scan = 5
         self._cooldown: Dict[str, float] = {}
@@ -126,6 +128,16 @@ class Engine:
         tokens = [t for b in self.baskets for t in b.token_ids] + list(self.broker.pf.residuals)
         now = self.clock.now()
         books = self.consumed.apply(self.client.books(tokens), now)
+        if self.booklog.enabled and books:  # snapshot only; books are not modified
+            meta = {}
+            for b in self.baskets:
+                info = dict(cid=b.basket_id, event=b.basket_id, category=b.category, end_ts=b.end_ts,
+                            title=(b.title or "")[:160],
+                            yes=b.token_ids[0] if b.token_ids else "",
+                            no=b.token_ids[1] if len(b.token_ids) > 1 else "")
+                for t in b.token_ids:
+                    meta[t] = info
+            self.booklog.record(now, books, meta, None)
         raw_before = self.scanner.stats["raw_signals"]
         opps = self.scanner.scan(self.baskets, books, now)
 

@@ -9,7 +9,7 @@ import os
 import sqlite3
 import zipfile
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -33,6 +33,42 @@ def capacity_rows(db_path: str) -> list:
         rows = []
     db.close()
     return [dict(day=r[0], n=r[1], slip=r[2] or 0, c2=r[3] or 0, band=r[4] or 0, bought=r[5] or 0) for r in rows]
+
+
+def sniper_summary(db_path: str) -> dict | None:
+    """Wetter-Sniper log: how often a ruled-out bucket was buyable at the real NO ask, and what the paper buys did."""
+    if not Path(db_path).exists():
+        return None
+    db = sqlite3.connect(db_path)
+    try:
+        n, markets, buy_n, buy_m, edge = db.execute(
+            """SELECT COUNT(*), COUNT(DISTINCT cid), COALESCE(SUM(buyable), 0),
+                      COUNT(DISTINCT CASE WHEN buyable=1 THEN cid END),
+                      AVG(CASE WHEN buyable=1 THEN edge END)
+               FROM wx_snap""").fetchone()
+        recent = db.execute(
+            """SELECT ts, city, station, question, margin, unit, yes_px, no_ask, depth, edge, buyable, note
+               FROM wx_snap ORDER BY id DESC LIMIT 12""").fetchall()
+    except sqlite3.OperationalError:
+        db.close()
+        return None
+    try:
+        bought, spent = db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(locked), 0) FROM executions WHERE matched_qty > 0").fetchone()
+        settled = db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(payout > 0), 0), COALESCE(SUM(pnl), 0) FROM settlements WHERE kind='position'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        bought, spent, settled = 0, 0.0, (0, 0, 0.0)
+    db.close()
+    if not n:
+        return None
+    return dict(checks=n, markets=markets, buyable=buy_n, buyable_markets=buy_m,
+                avg_edge=None if edge is None else round(edge, 4),
+                bought=bought or 0, spent=round(spent or 0, 2),
+                settled=settled[0] or 0, wins=settled[1] or 0, pnl=round(settled[2] or 0, 2),
+                recent=[dict(ts=r[0], city=r[1], station=r[2], question=r[3], margin=r[4], unit=r[5],
+                             yes=r[6], ask=r[7], depth=r[8], edge=r[9], buyable=r[10], note=r[11]) for r in recent])
 
 
 def collect(db_path: str, start_capital: float) -> dict:
@@ -131,7 +167,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
                   "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell",
-                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
+                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "mm_robust_mm": "Market Making (robust)", "mm_konservativ_mm": "Market Making (konservativ)", "mm_neu_vorsichtig_mm": "Market Making (neu, vorsichtig)", "wetter_sniper": "Wetter-Sniper", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -212,17 +248,33 @@ def _write_csv(path: Path, header: list, rows) -> None:
 
 
 def equity_csv(db_path: str, every_s: float = 300) -> str:
-    """Equity curve, one row per `every_s` (the bot logs every few seconds)."""
+    """Equity curve, one row per `every_s` (the bot logs every few seconds).
+
+    Market making adds the three parts of the booked total: trading, estimated rewards, rebates.
+    "Realisiert kumuliert $" stays the sum, so older spreadsheets keep their column.
+    """
     rows = []
+    parts = mm_equity_parts(db_path) if Path(db_path).exists() else None
     if Path(db_path).exists():
         db = sqlite3.connect(db_path)
         last = -1e18
         for r in _q(db, "SELECT ts, equity, cash, locked, residual, realized_cum, halted FROM equity ORDER BY ts"):
             if r[0] - last >= every_s:
-                rows.append([datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M:%S"), *r[1:6], r[6] or ""])
+                line = [datetime.fromtimestamp(r[0]).strftime("%Y-%m-%d %H:%M:%S"), *r[1:6], r[6] or ""]
+                if parts and r[0] in parts["by_ts"]:
+                    trade, rewards, rebates = parts["by_ts"][r[0]]
+                    line.extend(round(v, 6) for v in (trade, rewards, rebates))
+                    line.append(round(float(r[1]) - 0.4 * rewards, 6))
+                elif parts:
+                    line.extend(["", "", "", ""])
+                rows.append(line)
                 last = r[0]
         db.close()
-    return _csv(["Zeit", "Equity $", "Cash $", "Gebunden $", "Offene Reste $", "Realisiert kumuliert $", "Pausiert"], rows)
+    header = ["Zeit", "Equity $", "Cash $", "Gebunden $", "Offene Reste $", "Realisiert kumuliert $", "Pausiert"]
+    if parts:
+        header += ["Handel kumuliert $", "Rewards geschätzt kumuliert $", "Rebates kumuliert $",
+                   "Equity bei 60 % Rewards $"]
+    return _csv(header, rows)
 
 
 def _write(path: Path, text: str, encoding: str) -> None:
@@ -238,27 +290,143 @@ MM_DAILY_HEADER = ["Tag", "Reward-Pool ausgewählt $/Tag", "Pool unserer Gebote 
 
 MARKOUT_HEADER = ["Zeit (UTC)", "Stunde (UTC)", "Markt", "Kategorie", "Seite", "Preis", "Menge", "Betrag $",
                   "Mitte beim Fill", "Abstand zur Mitte (ct)", "Tage bis Ende", "Kursbewegung 5 Min $",
-                  "Kursbewegung 60 Min $", "Kursbewegung 60 Min je Anteil (ct)"]
+                  "Kursbewegung 60 Min $", "Kursbewegung 60 Min je Anteil (ct)", "Gebotsalter s",
+                  "Seite (Favorit/Außenseiter/Mitte)", "Kursbewegung 1 Min $", "Kursbewegung bis Auflösung $",
+                  "Kursbewegung 1 s $", "Kursbewegung 10 s $"]
+
+AGE_HEADER = ["Gruppe", "Seite", "Fills", "gefüllt $", "1 Min je 1 $", "5 Min je 1 $", "60 Min je 1 $",
+              "Auflösung je 1 $"]
+
+
+def _band_label(band, price) -> str:
+    names = {"favorit": "Favorit", "ausenseiter": "Außenseiter", "mitte": "Mitte"}
+    if band in names:
+        return names[band]
+    if price is None:
+        return ""
+    if price >= 0.70:
+        return "Favorit"
+    if price <= 0.30:
+        return "Außenseiter"
+    return "Mitte"
 
 
 def markout_rows(db_path: str) -> list:
-    """One row per fill of a market-making scenario: what it was and how the price moved 5 / 60 min later."""
+    """One row per fill of a market-making scenario: what it was and how the price moved afterwards."""
     try:
         db = sqlite3.connect(db_path)
         cols = {r[1] for r in db.execute("PRAGMA table_info(mm_markout)")}
         if not cols:
             return []
-        ext = all(c in cols for c in ("title", "cat", "mid", "days_left", "usd"))
-        q = ("SELECT ts, title, cat, side, price, qty, usd, mid, days_left, m5, m60 FROM mm_markout ORDER BY ts" if ext else
-             "SELECT ts, NULL, NULL, side, price, qty, price * qty, NULL, NULL, m5, m60 FROM mm_markout ORDER BY ts")
+        def c(name, fallback):
+            return name if name in cols else fallback
+        ext = all(x in cols for x in ("title", "cat", "mid", "days_left", "usd"))
+        title, cat, usd, mid, days = ("title", "cat", "usd", "mid", "days_left") if ext else (
+            "NULL", "NULL", "price * qty", "NULL", "NULL")
+        q = (f"SELECT ts, {title}, {cat}, side, price, qty, {usd}, {mid}, {days}, "
+             f"{c('m5', 'NULL')}, {c('m60', 'NULL')}, {c('age_s', 'NULL')}, {c('band', 'NULL')}, "
+             f"{c('m1', 'NULL')}, {c('m_res', 'NULL')}, {c('m1s', 'NULL')}, {c('m10s', 'NULL')} "
+             f"FROM mm_markout ORDER BY ts")
         out = []
-        for ts, title, cat, side, price, qty, usd, mid, days, m5, m60 in db.execute(q):
+        for ts, title, cat, side, price, qty, usd, mid, days, m5, m60, age, band, m1, mres, m1s, m10s in db.execute(q):
             t = _time.gmtime(ts)
             out.append([_time.strftime("%Y-%m-%d %H:%M", t), t.tm_hour, title or "", cat or "", "JA" if side == "yes" else "NEIN",
                         price, qty, usd, mid, None if mid is None else round((mid - price) * 100, 2), days, m5, m60,
-                        None if m60 is None or not qty else round(m60 / qty * 100, 2)])
+                        None if m60 is None or not qty else round(m60 / qty * 100, 2), age, _band_label(band, price),
+                        m1, mres, m1s, m10s])
         db.close()
         return out
+    except sqlite3.Error:
+        return []
+
+
+def _per_dollar(total, usd):
+    return None if not usd else round(total / usd, 4)
+
+
+def markout_age(db_path: str) -> list:
+    """Quote-age buckets against the later price move, and the same split by favourite / longshot / middle.
+    Each number after the filled dollars is the markout per 1 $ filled (0.037 = +3.7 %). Old fills have no
+    quote age; they still count in the 'alle Alter' rows, with the side taken from the fill price."""
+    try:
+        db = sqlite3.connect(db_path)
+        cols = {r[1] for r in db.execute("PRAGMA table_info(mm_markout)")}
+        if "price" not in cols:
+            db.close()
+            return []
+        def c(name, fallback):
+            return name if name in cols else fallback
+        q = (f"SELECT {c('age_s', 'NULL')}, {c('band', 'NULL')}, price, {c('usd', 'price * qty')}, "
+             f"{c('m1', 'NULL')}, {c('m5', 'NULL')}, {c('m60', 'NULL')}, {c('m_res', 'NULL')} FROM mm_markout")
+        raw = db.execute(q).fetchall()
+        db.close()
+    except sqlite3.Error:
+        return []
+    buckets = (("< 30 s", 0, 30), ("30 s – 2 min", 30, 120), ("2 – 10 min", 120, 600), ("> 10 min", 600, 1e18))
+
+    def band_of(band, price):
+        if band in ("favorit", "ausenseiter", "mitte"):
+            return band
+        if price is None:
+            return None
+        return "favorit" if price >= 0.70 else "ausenseiter" if price <= 0.30 else "mitte"
+
+    def pack(rows):
+        cells = {}
+        for age, band, price, usd, m1, m5, m60, mres in rows:
+            key = band_of(band, price)
+            if key is None or not usd:
+                continue
+            slot = cells.setdefault(key, [0, 0.0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0, 0])
+            slot[0] += 1
+            slot[1] += usd
+            for i, val in ((2, m1), (4, m5), (6, m60), (8, mres)):
+                if val is not None:
+                    slot[i] += val
+                    slot[i + 1] += usd
+        order = (("favorit", "Favorit"), ("ausenseiter", "Außenseiter"), ("mitte", "Mitte"))
+        out = []
+        for key, label in order:
+            s = cells.get(key)
+            if not s:
+                continue
+            out.append([label, s[0], round(s[1], 2), _per_dollar(s[2], s[3]), _per_dollar(s[4], s[5]),
+                        _per_dollar(s[6], s[7]), _per_dollar(s[8], s[9])])
+        if len(cells) > 1:
+            n = sum(s[0] for s in cells.values())
+            usd = sum(s[1] for s in cells.values())
+            def mix(i):
+                den = sum(s[i + 1] for s in cells.values())
+                num = sum(s[i] for s in cells.values())
+                return _per_dollar(num, den)
+            out.append(["alle Seiten", n, round(usd, 2), mix(2), mix(4), mix(6), mix(8)])
+        return out
+
+    table = []
+    for name, lo, hi in buckets:
+        hit = [r for r in raw if r[0] is not None and lo <= r[0] < hi]
+        for row in pack(hit):
+            table.append([name, *row])
+    for row in pack(raw):
+        table.append(["alle Alter", *row])
+    return table
+
+
+def reward_param_rows(db_path: str) -> list:
+    """Latest selection's reward params per market (Gamma clobRewards / rewardsMaxSpread / rewardsMinSize)."""
+    try:
+        db = sqlite3.connect(db_path)
+        if "mm_reward_params" not in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}:
+            db.close()
+            return []
+        last = db.execute("SELECT MAX(ts) FROM mm_reward_params").fetchone()[0]
+        if last is None:
+            db.close()
+            return []
+        rows = db.execute("""SELECT title, daily_rate, max_spread_ct, min_size, volume_24h, programs
+                             FROM mm_reward_params WHERE ts=? ORDER BY daily_rate DESC""", (last,)).fetchall()
+        db.close()
+        return [[t, r, s, n, v, p] for t, r, s, n, v, p in rows]
     except sqlite3.Error:
         return []
 
@@ -333,9 +501,80 @@ def reward_share_daily(db_path: str) -> list:
     return out
 
 
+def _is_mm_db(db) -> bool:
+    try:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mm_metrics'").fetchone():
+            return True
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settlements'").fetchone() \
+                and db.execute("SELECT 1 FROM settlements WHERE kind='reward' LIMIT 1").fetchone():
+            return True
+    except sqlite3.Error:
+        return False
+    return False
+
+
+def mm_equity_parts(db_path: str):
+    """Trading PnL, estimated rewards and rebates at every equity timestamp of a market-making book.
+
+    `realized_cum` stays the sum of the three, so older rows and the 4-hour report do not jump. Rows written
+    after the split store the components; older rows are rebuilt from settlements (everything but kind
+    'reward' is trading, and whatever is left of realized_cum is rebates). None for other books.
+    """
+    if not Path(db_path).exists():
+        return None
+    db = sqlite3.connect(db_path)
+    try:
+        if not _is_mm_db(db):
+            return None
+        cols = {r[1] for r in db.execute("PRAGMA table_info(equity)")}
+        has = "trade_cum" in cols
+        q = ("SELECT ts, realized_cum, rewards_cum, rebates_cum, trade_cum FROM equity ORDER BY ts" if has else
+             "SELECT ts, realized_cum FROM equity ORDER BY ts")
+        rows = db.execute(q).fetchall()
+        settles = db.execute("SELECT ts, kind, COALESCE(pnl, 0) FROM settlements ORDER BY ts").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        db.close()
+    if not rows:
+        return None
+    by, si, tr, rw = {}, 0, 0.0, 0.0
+    for row in rows:
+        ts, booked = row[0], row[1] or 0.0
+        while si < len(settles) and settles[si][0] <= ts + 1e-6:
+            if settles[si][1] == "reward":
+                rw += settles[si][2]
+            else:
+                tr += settles[si][2]
+            si += 1
+        if has and row[4] is not None:
+            trade, rewards, rebates = float(row[4]), float(row[2] or 0.0), float(row[3] or 0.0)
+        else:
+            trade, rewards, rebates = tr, rw, booked - tr - rw
+        by[ts] = (trade, rewards, rebates)
+    last = by[rows[-1][0]]
+    return dict(trade=last[0], rewards=last[1], rebates=last[2], by_ts=by)
+
+
 def build(db_path: str, out: str, start_capital: float, source: str = "auto", title: str = "",
           kind: str = "arb", nav: list | None = None, overview: list | None = None, scan: dict | None = None) -> str:
     data = collect(db_path, float(start_capital))
+    if kind == "mm":
+        parts = mm_equity_parts(db_path)
+        if parts:
+            data["split"] = {k: round(parts[k], 2) for k in ("trade", "rewards", "rebates")}
+            for p in data["curve"]:
+                hit = parts["by_ts"].get(p["t"])
+                if not hit:
+                    continue
+                p["r"] = round(float(start_capital) + hit[0], 2)
+                p["rw"] = round(hit[1], 2)
+                p["rb"] = round(hit[2], 2)
+                p["h"] = round(p["e"] - 0.4 * hit[1], 2)  # equity counting only 60 % of estimated rewards
+            data["kpi"]["real"] = data["split"]["trade"]
+            data["kpi"]["real_ret"] = (data["split"]["trade"] / float(start_capital)) if start_capital else 0
+            data["kpi"]["rewards"] = data["split"]["rewards"]
+            data["kpi"]["rebates"] = data["split"]["rebates"]
     if source == "auto":
         source = "mock" if "mock" in Path(db_path).name else "paper"
     cap = capacity_rows(db_path) if kind not in ("arb", "ladder") else []
@@ -353,8 +592,25 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     mo = markout_rows(db_path) if kind == "mm" else []
     if mo:
         _write(Path(out).with_name("fills.csv"), _csv(MARKOUT_HEADER, mo), "utf-8-sig")
+    ages = markout_age(db_path) if kind == "mm" else []
+    if ages:
+        _write(Path(out).with_name("gebotsalter.csv"), _csv(AGE_HEADER, ages), "utf-8-sig")
+    rparams = reward_param_rows(db_path) if kind == "mm" else []
+    sniper = sniper_summary(db_path) if kind == "wxsniper" else None
+    if sniper:
+        sdb = sqlite3.connect(db_path)
+        snap_rows = sdb.execute(
+            """SELECT ts, city, station, question, margin, unit, yes_px, no_ask, depth, edge, buyable, note
+               FROM wx_snap ORDER BY id""").fetchall()
+        sdb.close()
+        _write(Path(out).with_name("snaps.csv"), _csv(
+            ["Zeit (UTC)", "Stadt", "Station", "Frage", "Abstand", "Einheit", "JA angezeigt", "NO-Ask", "Tiefe",
+             "Edge", "kaufbar", "Notiz"],
+            [[datetime.fromtimestamp(r[0], tz=timezone.utc).strftime("%Y-%m-%d %H:%M"), *r[1:]] for r in snap_rows]),
+            "utf-8-sig")
     data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
-                metrics=metrics, rewards_cmp=rcmp, reward_share=rshare,
+                sniper=sniper,
+                metrics=metrics, rewards_cmp=rcmp, reward_share=rshare, markout_age=ages, reward_params=rparams,
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -378,8 +634,13 @@ def _summary(db_path: str, start: float) -> dict:
     except sqlite3.OperationalError:
         row = res = opn = None
     db.close()
+    parts = mm_equity_parts(db_path)
     if row and start:
-        out.update(equity=row[0], real=row[1] or 0.0, ret=row[0] / start - 1, real_ret=(row[1] or 0.0) / start)
+        # market making: "realisiert" is the trading result. Rewards and rebates stay out of that number.
+        real = parts["trade"] if parts else (row[1] or 0.0)
+        out.update(equity=row[0], real=real, ret=row[0] / start - 1, real_ret=real / start)
+        if parts:
+            out.update(rewards=parts["rewards"], rebates=parts["rebates"])
     if res:
         out.update(n=res[0] or 0, won=res[1] or 0)
     if opn:
@@ -594,8 +855,11 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
             files.append((p["label"], "Market Making je Tag: Pool, unser Anteil, Spread, Rewards (Trend)", rel + "kennzahlen.csv",
                           folder / "kennzahlen.csv", f"{slug}/kennzahlen.csv"))
         if (folder / "fills.csv").exists():
-            files.append((p["label"], "Jeder Fill: Markt, Kategorie, Abstand, Kursbewegung 5/60 Min. danach", rel + "fills.csv",
-                          folder / "fills.csv", f"{slug}/fills.csv"))
+            files.append((p["label"], "Jeder Fill: Markt, Kategorie, Abstand, Gebotsalter, Kursbewegung 1/5/60 Min.",
+                          rel + "fills.csv", folder / "fills.csv", f"{slug}/fills.csv"))
+        if (folder / "gebotsalter.csv").exists():
+            files.append((p["label"], "Gebotsalter und Favorit/Außenseiter gegen die Kursbewegung je 1 $ gefüllt",
+                          rel + "gebotsalter.csv", folder / "gebotsalter.csv", f"{slug}/gebotsalter.csv"))
         if (folder / "scan.csv").exists():
             files.append((p["label"], "Letzter Scan: wo Märkte am Filter hängen bleiben", rel + "scan.csv",
                           folder / "scan.csv", f"{slug}/scan.csv"))
@@ -1139,12 +1403,18 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <p class="sub" id="range"></p>
 <p class="note" id="scan"></p>
 <div id="halt"></div>
-<div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur, was aufgelöst (ausgezahlt oder verloren) ist – das ist der tatsächlich erzielte Gewinn. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
+<div class="card" id="allcard" style="display:none"><h2>Alle Strategien</h2><p class="note">Equity zählt offene Positionen zum aktuellen Bid mit. <b>Realisiert</b> zählt nur den Handel (Auszahlung, Zusammenlegen, Verkauf). Bei Market Making sind geschätzte Rewards und Rebates darin nicht enthalten. Startkapital je 2.500 $.</p><div class="tblwrap"><table id="alltbl"></table></div></div>
+<div class="card" id="snipcard" style="display:none"><h2>Wetter-Sniper: Bucket schon von der Station ausgeschlossen</h2>
+<p class="note" id="snipnote"></p><div class="kpis" id="snipkpis"></div>
+<div class="tblwrap"><table id="sniptbl"></table></div>
+<p class="note">Die letzten Prüfungen. Der Export <a href="snaps.csv">snaps.csv</a> enthält alle. Auswertung ab dem ersten Scan dieser Datenbank.</p></div>
 <div class="kpis" id="kpis"></div>
 <div class="card" id="rwcard" style="display:none"><h2>Pilot: Rewards echt vs. geschätzt</h2><p class="note">Was Polymarket für unsere echten Gebote tatsächlich gezahlt hat (einmal täglich abgerechnet, Tag = UTC), neben unserer Schätzung für denselben Tag. Die Kernzahl des Pilots: liegt „echt / geschätzt“ deutlich unter 100 %, überschätzt die Simulation die Rewards.</p><div class="tblwrap"><table id="rwtbl"></table></div><p class="note" id="rsnote" style="display:none">Laufend, auch unter der Auszahlungsgrenze von 1 $/Tag: Polymarkets eigener Anteil am Pool unserer Märkte (alle 10 Min. abgefragt) × Tagesbudget, neben unserer Schätzung zum selben Zeitpunkt. „bisher verdient“ = was Polymarket für den Tag schon ausweist.</p><div class="tblwrap"><table id="rstbl"></table></div></div>
-<div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
+<div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> ist der Handel, dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt und nicht Teil von „realisiert“. Bestand zum Bid. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
+<div class="card" id="agecard" style="display:none"><h2>Market Making: Gebotsalter und Favorit gegen Außenseiter</h2><p class="note">Kursbewegung je 1 $ gefüllt, nachdem das Gebot so lange im Buch lag. Negativ heißt: der Kurs lief nach dem Fill gegen uns. Liegt das vor allem bei alten Geboten, sind die Quotes zu langsam. <b>Favorit</b> = gekaufte Seite ab 70 ct, <b>Außenseiter</b> = bis 30 ct, sonst <b>Mitte</b>. „alle Alter“ enthält auch Fills von vor dem Gebotsalter. Auflösung ist der Wert der Seite am Ende minus Kaufpreis.</p><div class="tblwrap"><table id="agetbl"></table></div></div>
+<div class="card" id="rwparam" style="display:none"><h2>Reward-Parameter der ausgewählten Märkte</h2><p class="note">Aus der Gamma-Liste beim letzten Auswahl-Lauf: Tagesbudget (<code>clobRewards.rewardsDailyRate</code>), maximaler Abstand (<code>rewardsMaxSpread</code>, in Cent), Mindestgröße (<code>rewardsMinSize</code>, Anteile) und der Zeitraum des Programms. Ohne Datum gilt der Satz als laufend. Geboten wird nur, wo das Tagesbudget die Schwelle erreicht.</p><div class="tblwrap"><table id="rwparamtbl"></table></div></div>
 <div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
-<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i>Vermögen realisiert (Start + realisierter PnL)</span></div><div id="eq"></div></div>
+<div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i><span id="eqlegl">Vermögen realisiert (Start + realisierter PnL)</span></span><span id="eqlegh" style="display:none"><i class="sw" style="background:var(--s2)"></i>Equity bei 60 % der geschätzten Rewards</span></div><div id="eq"></div></div>
 <div class="grid2">
  <div class="card"><h2>Erwarteter vs. realisierter Gewinn je Strategie</h2><p class="note" id="pnlnote">Die Lücke ist, was Latenz, Konkurrenz und Leg-Failures kosten.</p>
   <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Erwartet bei Erkennung</span><span><i class="sw" style="background:var(--s2)"></i>Realisiert</span></div><div id="pnl"></div></div>
@@ -1169,6 +1439,10 @@ const tip=$("tip");
 $("ttl").textContent=D.title;document.title=D.title;
 if(D.kind!=="arb"&&D.kind!=="ladder"){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Startkapital als Referenzlinie.";
  $("pnlnote").textContent="Erwartet = Gewinn, wenn jede Position so ausgeht, wie die Strategie annimmt. Realisiert zählt erst bei Auflösung."}
+if(D.split){$("eqnote").textContent="Gesamtwert = Cash + offene Positionen (zum Bid). Die grüne Linie ist Start + Handel (Spread, Verkäufe, Auflösung). Geschätzte Rewards und Rebates stecken im Cash, nicht in „realisiert“. Die orange Linie zählt nur 60 % der geschätzten Rewards (Haircut aus der echten Probe).";
+ $("pnlnote").textContent="Realisiert ist der Handel. Rewards sind eine Schätzung nach Polymarkets Formel, keine Auszahlung.";
+ if($("eqlegl"))$("eqlegl").textContent="Handel realisiert (ohne Rewards und Rebates)";
+ if($("eqlegh"))$("eqlegh").style.display="";}
 $("nav").innerHTML=D.nav.length>1?D.nav.map(n=>`<a class="tab${n.active?" on":""}" href="${n.href}"${n.real==null?"":` title="realisiert ${(n.real>=0?"+":"")+fmt(n.real*100,1)} %"`}>${n.label}${n.ret==null?"":`<span class="${n.ret>0.00005?"pos":n.ret<-0.00005?"neg":""}">${(n.ret>=0?"+":"")+fmt(n.ret*100,1)} %</span>`}</a>`).join(""):"";
 function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";tip.style.top=(e.clientY+14)+"px"}
 function hideTip(){tip.style.display="none"}
@@ -1188,6 +1462,11 @@ const tiles=[["Equity",usd(K.equity),`Start ${usd(D.start)} · inkl. offener Pos
  ["PnL",usd(K.realized),`gebunden ${usd(K.locked)} · Reste ${usd(K.residual)}`],["Trefferquote",pct(K.hit),`${K.attempts} Ausführungsversuche`],
  ["Capture",pct(K.capture),"realisiert / erwartet"],["Chancen erkannt",K.opps.toLocaleString("de-AT"),"nach Fees & Mindest-Edge"]];
 if(D.kind!=="arb"&&D.kind!=="ladder"){tiles[4][2]=`offene Positionen ${usd(K.locked)} (zu Kosten)`;tiles[6]=["Offen",D.calib.open[0],`gebunden ${usd(D.calib.open[1])}`];tiles[7][2]="Preis unter der Strategie-Grenze"}
+if(D.split){const s=D.split;
+ tiles[2]=["Handel realisiert",usd(s.trade),`ohne Rewards und Rebates · ${pct(s.trade/(D.start||1))}`];
+ tiles[3]=["Rewards geschätzt",usd(s.rewards),"Polymarket-Formel, keine Auszahlung"];
+ tiles.splice(1,0,["Equity bei 60 % Rewards",usd(K.equity-0.4*(s.rewards||0)),"40 % der geschätzten Rewards abgezogen (Haircut aus der echten Probe)"]);
+ tiles.splice(5,0,["Rebates",usd(s.rebates),"geschätzter Anteil der Taker-Gebühr"]);}
 if(D.reward_share&&D.reward_share.length){
  $("rstbl").innerHTML=`<tr><th>Tag (UTC)</th><th class="num">geschätzt $/Tag</th><th class="num">Polymarket $/Tag</th><th class="num">Polymarket / geschätzt</th><th class="num">bisher verdient</th><th class="num">Abfragen</th></tr>`+
   D.reward_share.map(r=>`<tr><td>${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${r[2]==null?"–":usd(r[2])}</td><td class="num">${r[3]==null?"–":r[3]+" %"}</td><td class="num">${r[4]==null?"–":"$ "+fmt(r[4],4)}</td><td class="num">${r[5]}</td></tr>`).join("");
@@ -1199,7 +1478,28 @@ if(D.rewards_cmp&&D.rewards_cmp.length){
 if(D.metrics&&D.metrics.length){
  $("mmtbl").innerHTML=`<tr><th>Tag</th><th class="num">Pool ausgewählt</th><th class="num">Pool unserer Gebote</th><th class="num">Rewards/Tag (geschätzt)</th><th class="num">Anteil am Pool</th><th class="num">Spread/Auflösung</th><th class="num">Rewards</th><th class="num">Rebates</th><th class="num">Bestand</th><th class="num">Märkte</th><th class="num">Ausführungen</th><th class="num">Std.</th></tr>`+
   D.metrics.map(m=>`<tr><td>${m[0]}</td><td class="num">${usd(m[1])}</td><td class="num">${usd(m[2])}</td><td class="num">${usd(m[3])}</td><td class="num">${m[4]==null?"–":fmt(m[4],2)+" %"}</td><td class="num ${m[5]>0?"pos":m[5]<0?"neg":""}">${usd(m[5])}</td><td class="num">${usd(m[6])}</td><td class="num">${usd(m[7])}</td><td class="num">${usd(m[8])}</td><td class="num">${m[9]}</td><td class="num">${m[10]}</td><td class="num">${m[11]}</td></tr>`).join("");
- $("mmcard").style.display=""}
+  $("mmcard").style.display=""}
+if(D.markout_age&&D.markout_age.length){
+ const cell=v=>v==null?"–":pct(v);
+ $("agetbl").innerHTML=`<tr><th>Gebotsalter</th><th>Seite</th><th class="num">Fills</th><th class="num">gefüllt</th><th class="num">1 Min je 1 $</th><th class="num">5 Min je 1 $</th><th class="num">60 Min je 1 $</th><th class="num">Auflösung je 1 $</th></tr>`+
+  D.markout_age.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td class="num">${r[2]}</td><td class="num">${usd(r[3])}</td><td class="num">${cell(r[4])}</td><td class="num">${cell(r[5])}</td><td class="num">${cell(r[6])}</td><td class="num">${cell(r[7])}</td></tr>`).join("");
+ $("agecard").style.display=""}
+if(D.reward_params&&D.reward_params.length){
+ $("rwparamtbl").innerHTML=`<tr><th>Markt</th><th class="num">$/Tag</th><th class="num">Abstand ct</th><th class="num">Mindestgröße</th><th class="num">Volumen 24 h</th><th>Programm</th></tr>`+
+  D.reward_params.map(r=>`<tr><td class="t">${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${fmt(r[2],1)}</td><td class="num">${fmt(r[3],0)}</td><td class="num">${usd(r[4])}</td><td>${r[5]}</td></tr>`).join("");
+ $("rwparam").style.display=""}
+if(D.sniper){const S=D.sniper;
+ $("snipnote").textContent="Jeder Bucket, den die Station schon ausgeschlossen hat, wird mit dem echten NO-Buch geloggt. Papierkauf nur zum besten Ask, und nur wenn der angezeigte JA-Preis noch über der Schwelle liegt und am Ask Größe da ist. Edge = 1 − NO-Ask. Die Kurve dieser Seite beginnt mit dem ersten Scan.";
+ const tile=(l,v,d)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+ $("snipkpis").innerHTML=[
+  tile("Gelegenheiten",S.markets,`${S.checks} Prüfungen`),
+  tile("Kaufbar am Ask",S.buyable_markets,`${S.buyable} von ${S.checks} Prüfungen`),
+  tile("Ø Edge",S.avg_edge==null?"–":pct(S.avg_edge),"1 − NO-Ask, nur kaufbare"),
+  tile("Papierkäufe",S.bought,`eingesetzt ${usd(S.spent)}`),
+  tile("Aufgelöst",`${S.wins} / ${S.settled}`,`PnL ${usd(S.pnl)}`)].join("");
+ $("sniptbl").innerHTML=`<tr><th>Zeit</th><th>Stadt</th><th>Station</th><th>Frage</th><th class="num">Abstand</th><th class="num">JA</th><th class="num">NO-Ask</th><th class="num">Tiefe</th><th class="num">Edge</th><th>Notiz</th></tr>`+
+  S.recent.map(r=>`<tr><td>${dt(r.ts)}</td><td>${r.city}</td><td>${r.station}</td><td class="t">${r.question}</td><td class="num">${fmt(r.margin,0)}°${r.unit}</td><td class="num">${r.yes==null?"–":fmt(r.yes*100,1)+" ct"}</td><td class="num">${r.ask==null?"–":fmt(r.ask,3)}</td><td class="num">${r.depth==null?"–":fmt(r.depth,0)}</td><td class="num">${r.edge==null?"–":pct(r.edge)}</td><td>${r.note}</td></tr>`).join("");
+ $("snipcard").style.display=""}
 if(D.capacity&&D.capacity.length){const C=D.capacity,avg=f=>C.reduce((a,c)=>a+c[f],0)/C.length;
  $("captbl").innerHTML=`<tr><th>Markttag</th><th class="num">Gelegenheiten</th><th class="num">gekauft</th><th class="num">im Buch bis Kaufgrenze</th><th class="num">bis Ask + 2 ct</th><th class="num">bis Regelgrenze</th></tr>`+
   C.map(c=>`<tr><td>${c.day}</td><td class="num">${c.n}</td><td class="num">${usd(c.bought)}</td><td class="num">${usd(c.slip)}</td><td class="num">${usd(c.c2)}</td><td class="num">${usd(c.band)}</td></tr>`).join("")+
@@ -1217,18 +1517,20 @@ $("kpis").innerHTML=tiles.map(([l,v,d])=>`<div class="kpi"><div class="l">${l}</
 (function(){
  const box=$("eq"),W=1100,H=260,m={l:56,r:12,t:10,b:26};const c=D.curve;if(c.length<2){box.textContent="Zu wenig Daten.";return}
  const svg=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img","aria-label":"Equity-Verlauf"},box);
- const t0=c[0].t,t1=c[c.length-1].t,ys=c.map(p=>p.e).concat(c.map(p=>p.r??p.e),[D.start]);let y0=Math.min(...ys),y1=Math.max(...ys);const pad=(y1-y0)*0.08||5;y0-=pad;y1+=pad;
+ const t0=c[0].t,t1=c[c.length-1].t,ys=c.map(p=>p.e).concat(c.map(p=>p.r??p.e),c.filter(p=>p.h!=null).map(p=>p.h),[D.start]);let y0=Math.min(...ys),y1=Math.max(...ys);const pad=(y1-y0)*0.08||5;y0-=pad;y1+=pad;
  const X=t=>m.l+(t-t0)/(t1-t0||1)*(W-m.l-m.r),Y=v=>m.t+(1-(v-y0)/(y1-y0))*(H-m.t-m.b);
  for(const v of ticks(y0,y1)){el("line",{x1:m.l,x2:W-m.r,y1:Y(v),y2:Y(v),stroke:"var(--grid)"},svg);el("text",{x:m.l-8,y:Y(v)+4,"text-anchor":"end"},svg).textContent="$"+fmt(v,0)}
  const nx=6;for(let i=0;i<=nx;i++){const t=t0+(t1-t0)*i/nx;el("text",{x:X(t),y:H-6,"text-anchor":i==0?"start":i==nx?"end":"middle"},svg).textContent=dt(t)}
  el("line",{x1:m.l,x2:W-m.r,y1:Y(D.start),y2:Y(D.start),stroke:"var(--muted)","stroke-dasharray":"4 4"},svg);
  el("path",{d:c.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.e).toFixed(1)).join(""),fill:"none",stroke:"var(--s1)","stroke-width":2,"stroke-linejoin":"round"},svg);
  el("path",{d:c.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.r??p.e).toFixed(1)).join(""),fill:"none",stroke:"var(--s3)","stroke-width":2,"stroke-dasharray":"6 4","stroke-linejoin":"round"},svg);
+ const hair=c.filter(p=>p.h!=null);if(hair.length>1)el("path",{d:hair.map((p,i)=>(i?"L":"M")+X(p.t).toFixed(1)+","+Y(p.h).toFixed(1)).join(""),fill:"none",stroke:"var(--s2)","stroke-width":2,"stroke-dasharray":"2 3","stroke-linejoin":"round"},svg);
  const cross=el("line",{y1:m.t,y2:H-m.b,stroke:"var(--muted)",visibility:"hidden"},svg),dot=el("circle",{r:4.5,fill:"var(--s1)",stroke:"var(--surface)","stroke-width":2,visibility:"hidden"},svg);
  const hit=el("rect",{x:m.l,y:m.t,width:W-m.l-m.r,height:H-m.t-m.b,fill:"transparent"},svg);
  hit.addEventListener("mousemove",e=>{const r=svg.getBoundingClientRect(),tx=t0+((e.clientX-r.left)*W/r.width-m.l)/(W-m.l-m.r)*(t1-t0);let b=c[0];for(const p of c)if(Math.abs(p.t-tx)<Math.abs(b.t-tx))b=p;
   cross.setAttribute("x1",X(b.t));cross.setAttribute("x2",X(b.t));dot.setAttribute("cx",X(b.t));dot.setAttribute("cy",Y(b.e));cross.setAttribute("visibility","visible");dot.setAttribute("visibility","visible");
-  showTip(e,`<b>${dt(b.t)}</b><br>Equity ${usd(b.e)}<br>Vermögen realisiert ${usd(b.r??b.e)}<br>davon gebunden ${usd(b.l)}`)});
+  const extra=b.rw==null?"":`<br>Rewards geschätzt ${usd(b.rw)}<br>Rebates ${usd(b.rb)}`+(b.h==null?"":`<br>Equity bei 60 % Rewards ${usd(b.h)}`);
+  showTip(e,`<b>${dt(b.t)}</b><br>Equity ${usd(b.e)}<br>${D.split?"Handel realisiert":"Vermögen realisiert"} ${usd(b.r??b.e)}${extra}<br>davon gebunden ${usd(b.l)}`)});
  hit.addEventListener("mouseleave",()=>{hideTip();cross.setAttribute("visibility","hidden");dot.setAttribute("visibility","hidden")});
 })();
 

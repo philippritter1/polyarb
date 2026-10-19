@@ -39,6 +39,7 @@ class BookStore:
         self.updates = 0
         # trades ("last_trade_price"): (asset_id, price, size, ts) – read by the market-making simulation
         self.trades: deque = deque(maxlen=50_000)
+        self.last: Dict[str, tuple] = {}   # token -> (price, size, ts); not consumed, for the book log only
 
     # ---------------------------------------------------------------- writes (WS threads)
     def snapshot(self, tid: str, bids, asks, ts: Optional[float] = None) -> None:
@@ -117,7 +118,9 @@ def handle_message(store: BookStore, raw: str) -> None:
                 store.change(tid, float(ch["price"]), float(ch["size"]), ch.get("side", ""), ts)
         elif et == "last_trade_price":
             try:
-                store.trades.append((str(ev["asset_id"]), float(ev["price"]), float(ev["size"]), ts or time.time()))
+                trade = (str(ev["asset_id"]), float(ev["price"]), float(ev["size"]), ts or time.time())
+                store.trades.append(trade)
+                store.last[trade[0]] = (trade[1], trade[2], trade[3])
             except (KeyError, TypeError, ValueError):
                 pass
         elif et == "tick_size_change":

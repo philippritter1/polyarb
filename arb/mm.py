@@ -22,6 +22,14 @@ Inventory exit (config `exit:`, off unless set): a one-sided position older than
 order at the mid plus the quote distance (filled strictly by a trade ABOVE it, or a complementary trade below
 1 - price); still held after `dump_after_h`, it is sold at the best bid as a taker (fee paid). Without it the
 inventory waits for resolution – capital sits idle, possibly for weeks, and earns no rewards.
+
+Skew (`skew:`, off unless the scenario sets it): between a mid of 0.30 and 0.70 both sides are quoted the same.
+Outside that, the favourite (the side priced at 0.70 or more) stands closer and the longshot is smaller or
+further out. A one-sided book scores only a third of the two-sided score while the mid is between 0.10 and 0.90
+(`q_min`), so turning the longshot off is a measured trade against the rewards. `min_event_volume_24h` and
+`rewards_active` are filters and stay off unless set. Fills record how long the bid had rested, how far it
+stood from the mid, whether the side was the favourite, and the markout after 1 s, 10 s, 1, 5 and 60
+minutes and at resolution. `max_quote_age_s` and `requote_ticks` replace a resting bid; both stay off unless set.
 """
 from __future__ import annotations
 
@@ -51,6 +59,60 @@ def _market_text(m: dict) -> str:
         if isinstance(e, dict):
             parts += [e.get("title"), e.get("slug"), e.get("seriesSlug"), e.get("ticker")]
     return " ".join(str(x) for x in parts if x)
+
+
+def _norm_tag(value) -> str:
+    return re.sub(r"[\s_]+", "-", str(value).strip().lower())
+
+
+def _market_tags(m: dict) -> List[str]:
+    """Gamma tag slugs and labels on the market and its event, normalized."""
+    out = []
+    sources = [m]
+    for e in m.get("events") or []:
+        if isinstance(e, dict):
+            sources.append(e)
+    for src in sources:
+        for t in src.get("tags") or []:
+            if isinstance(t, dict):
+                for key in ("slug", "label", "name"):
+                    if t.get(key):
+                        out.append(_norm_tag(t[key]))
+            elif t:
+                out.append(_norm_tag(t))
+    return out
+
+
+def _tag_listed(tag: str, skip: set) -> bool:
+    """True when the tag is the exclusion itself or one of its hyphen-parts (`culture` hits `pop-culture`)."""
+    return tag in skip or bool(set(tag.split("-")) & skip)
+
+
+def _topic_extra(m: dict, skip_categories: set, skip_tags: set) -> Optional[str]:
+    """Gamma's own category/tag fields, on top of categorize(). None when the market is allowed."""
+    raw = [m.get("category")]
+    for e in m.get("events") or []:
+        if isinstance(e, dict):
+            raw.append(e.get("category"))
+    for c in raw:
+        if not c:
+            continue
+        if str(c) in skip_categories or (skip_tags and _tag_listed(_norm_tag(c), skip_tags)):
+            return "Kategorie ausgelassen"
+    if skip_tags and any(_tag_listed(t, skip_tags) for t in _market_tags(m)):
+        return "Thema ausgelassen"
+    return None
+
+
+def event_key(m: dict, cid: str) -> str:
+    """Markets of one Polymarket event (several view-count buckets of the same trailer) share this key."""
+    for e in m.get("events") or []:
+        if isinstance(e, dict) and e.get("id") not in (None, ""):
+            return f"event:{e['id']}"
+    for e in m.get("events") or []:
+        if isinstance(e, dict) and e.get("slug"):
+            return f"event:{e['slug']}"
+    return f"m:{cid}"
 
 
 @dataclass
@@ -83,6 +145,9 @@ class MMMarket:
     mid: Optional[float] = None
     ask: Optional[dict] = None      # exit: resting sell order {side, price, size, placed_ts}
     inv_ts: Optional[float] = None  # exit: since when the one-sided position is held
+    yes_bid: Optional[float] = None  # last YES bid, for marking inventory at the bid
+    no_bid: Optional[float] = None
+    event: str = ""                  # event_key: exposure cap across the buckets of one event
 
 
 @dataclass
@@ -99,7 +164,29 @@ class MMState:
     ask_rewards: float = 0.0     # reward_asks: part of `rewards` earned by the exit's sell orders
 
     def inventory_value(self) -> float:
-        return sum(m.qty_yes * (m.mid if m.mid is not None else 0.5) + m.qty_no * (1 - (m.mid if m.mid is not None else 0.5))
+        """What a sale would get: each side at its bid. Last mid, then 0.50, when no bid was seen yet."""
+        total = 0.0
+        for m in self.markets.values():
+            if m.yes_bid is not None:
+                y = m.yes_bid
+            elif m.mid is not None:
+                y = m.mid
+            else:
+                y = 0.5
+            if m.no_bid is not None:
+                n = m.no_bid
+            elif m.mid is not None:
+                n = 1 - m.mid
+            else:
+                n = 0.5
+            total += m.qty_yes * y + m.qty_no * n
+        return total
+
+    def inventory_mid(self) -> float:
+        """Mark at the mid. The cash buffer still uses this, so switching the report to the bid does not
+        change how large the quotes of a running scenario are."""
+        return sum(m.qty_yes * (m.mid if m.mid is not None else 0.5)
+                   + m.qty_no * (1 - (m.mid if m.mid is not None else 0.5))
                    for m in self.markets.values())
 
     def inventory_cost(self) -> float:
@@ -175,20 +262,71 @@ def reward_share(yes: OrderBook, no: OrderBook, ours_yes: Optional[dict], ours_n
     return ours / (ours + others) if ours > 0 else 0.0
 
 
-def rewards_of(m: dict) -> Tuple[float, float, float]:
-    """(daily pool $, max spread as price, min size) from a Gamma market; 0 pool if it pays none."""
-    rate = 0.0
+def _num(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _program_active(program: dict, now: float) -> bool:
+    """A clobRewards entry with no dates counts as running. A dated one only inside its window."""
+    start = _parse_ts(program.get("startDate") or program.get("start_date") or program.get("start"))
+    end = _parse_ts(program.get("endDate") or program.get("end_date") or program.get("end"))
+    if start is not None and now < start:
+        return False
+    if end is not None and now >= end:
+        return False
+    return True
+
+
+def reward_programs(m: dict, now: Optional[float] = None, active_only: bool = False) -> List[dict]:
+    """Gamma `clobRewards`: daily rate and the program window. The spread and the minimum size live on the
+    market (`rewardsMaxSpread` in cents, `rewardsMinSize` in shares), not on each entry."""
+    out = []
     for r in m.get("clobRewards") or []:
-        try:
-            rate += float(r.get("rewardsDailyRate") or 0)
-        except (TypeError, ValueError):
-            pass
+        if not isinstance(r, dict):
+            continue
+        if active_only and now is not None and not _program_active(r, now):
+            continue
+        out.append(dict(rate=_num(r.get("rewardsDailyRate")),
+                        start=str(r.get("startDate") or r.get("start_date") or ""),
+                        end=str(r.get("endDate") or r.get("end_date") or "")))
+    return out
+
+
+def rewards_of(m: dict, now: Optional[float] = None, active_only: bool = False) -> Tuple[float, float, float]:
+    """(daily pool $, max spread as price, min size) from a Gamma market; 0 pool if it pays none.
+    active_only drops programs whose start/end says they are not running. Undated programs still count,
+    which is what the listing usually sends."""
+    rate = sum(p["rate"] for p in reward_programs(m, now, active_only))
     try:
         v = float(m.get("rewardsMaxSpread") or 0) / 100  # cents
         size = float(m.get("rewardsMinSize") or 0)
     except (TypeError, ValueError):
         v, size = 0.0, 0.0
     return rate, v, size
+
+
+def volume_24h(m: dict) -> float:
+    """24h volume of the parent event when Gamma sent it, otherwise the market's own 24h volume.
+    One bucket of a multi-market event is not the event."""
+    best = 0.0
+    for ev in m.get("events") or []:
+        if isinstance(ev, dict):
+            best = max(best, _num(ev.get("volume24hr")), _num(ev.get("volume24hrClob")))
+    if best > 0:
+        return best
+    return max(_num(m.get("volume24hr")), _num(m.get("volume24hrClob")))
+
+
+def side_band(price: float) -> str:
+    """The side we bought: favourite at 0.70 and above, longshot at 0.30 and below, else the middle."""
+    if price >= 0.70:
+        return "favorit"
+    if price <= 0.30:
+        return "ausenseiter"
+    return "mitte"
 
 
 class MarketMaker:
@@ -224,11 +362,19 @@ class MarketMaker:
         self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_markout(ts REAL, cid TEXT, token TEXT, side TEXT,
             price REAL, qty REAL, m5 REAL, m60 REAL)""")
         have = {r[1] for r in self.store.db.execute("PRAGMA table_info(mm_markout)")}
-        for col, typ in (("title", "TEXT"), ("cat", "TEXT"), ("mid", "REAL"), ("days_left", "REAL"), ("usd", "REAL")):
-            if col not in have:  # 16.10.: per fill also what it was, for the export (does the move depend on it?)
+        for col, typ in (("title", "TEXT"), ("cat", "TEXT"), ("mid", "REAL"), ("days_left", "REAL"), ("usd", "REAL"),
+                         ("age_s", "REAL"), ("dist", "REAL"), ("band", "TEXT"), ("m1", "REAL"), ("m_res", "REAL"),
+                         ("ytok", "TEXT"), ("m1s", "REAL"), ("m10s", "REAL")):
+            if col not in have:  # measurement only: quote age, distance, favourite/longshot, short and long markouts
                 self.store.db.execute(f"ALTER TABLE mm_markout ADD COLUMN {col} {typ}")
-        self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m5=r[5], cid=r[6]) for r in
-                         self.store.db.execute("SELECT rowid, ts, token, price, qty, m5, cid FROM mm_markout WHERE m60 IS NULL")]
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_reward_params(ts REAL, cid TEXT, title TEXT,
+            daily_rate REAL, max_spread_ct REAL, min_size REAL, volume_24h REAL, programs TEXT)""")
+        self._markout = [dict(rowid=r[0], ts=r[1], token=r[2], price=r[3], qty=r[4], m1=r[5], m5=r[6], cid=r[7],
+                              m1s=r[8], m10s=r[9])
+                         for r in self.store.db.execute(
+                             "SELECT rowid, ts, token, price, qty, m1, m5, cid, m1s, m10s FROM mm_markout "
+                             "WHERE m60 IS NULL")]
+        self._res_try: Dict[str, float] = {}  # token -> last resolution lookup for an ended, still open market
         # learn (self-learning, 16.10.): per market the estimated rewards against the markout of our fills; a market
         # whose fills cost more than it paid (or that keeps jumping) is blocked for a while, longer on each repeat
         self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_ledger(cid TEXT PRIMARY KEY, title TEXT, rew REAL, mo REAL,
@@ -249,6 +395,78 @@ class MarketMaker:
                               secrets_path=os.path.join(data_dir, "secrets.env"))
         self.scan: dict = {}
         self.quoted: Optional[set] = None  # market ids select() chose to quote (None until the first selection)
+        from .booklog import open_log
+        self.booklog = open_log(cfg)  # off unless booklog.enabled; quotes do not read it
+
+    def _quote_floor(self, spread: float) -> float:
+        """min_quote_frac: closest a bid or an exit ask may stand to the mid, as a share of the reward spread.
+        Unset (every scenario but mm_robust) means no extra floor."""
+        floor = self.sc.get("min_quote_frac")
+        if floor in (None, ""):
+            return 0.0
+        return max(self.tick, float(spread) * float(floor))
+
+    def _share_exit(self, mk: MMMarket, by: Optional[OrderBook], bn: Optional[OrderBook], mid: float) -> None:
+        """exit.min_share: pull the bids and mark the inventory for a bid sale when our estimated share of the
+        reward pool, including the bids just set, is below the threshold. Absent key: no-op."""
+        floor = (self.sc.get("exit") or {}).get("min_share")
+        if floor is None or not (mk.bid_yes or mk.bid_no):
+            return
+        if by is None or bn is None or not by.bids or not bn.bids or mid is None or mk.max_spread <= 0:
+            return
+        share = reward_share(by, bn, mk.bid_yes, mk.bid_no, mid, mk.max_spread, mk.min_size, mk.ask)
+        if share + 1e-12 < float(floor):
+            mk.bid_yes = mk.bid_no = None
+            mk.share_out = True
+            self.scan["Reward-Anteil unter Schwelle"] = self.scan.get("Reward-Anteil unter Schwelle", 0) + 1
+
+    def _sided_usd(self, mk: MMMarket) -> float:
+        """One-sided inventory in dollars at the mid — the same basis as max_inventory_usd."""
+        mid = mk.mid if mk.mid is not None else 0.5
+        if mk.qty_yes >= mk.qty_no:
+            return (mk.qty_yes - mk.qty_no) * mid
+        return (mk.qty_no - mk.qty_yes) * (1 - mid)
+
+    def _mark(self, mk: MMMarket, by: Optional[OrderBook], bn: Optional[OrderBook]) -> None:
+        """Refresh mid and bid from the books we have. Paper and live, quoted or not — valuation only."""
+        if by and by.bids and by.asks:
+            mk.mid = (by.best_bid + by.best_ask) / 2
+            mk.yes_bid = by.best_bid
+            if not (bn and bn.bids):
+                mk.no_bid = 1 - by.best_ask
+        if bn and bn.bids:
+            mk.no_bid = bn.best_bid
+            if mk.yes_bid is None and bn.asks:
+                mk.yes_bid = 1 - bn.best_ask
+            if mk.mid is None and bn.asks:
+                mk.mid = 1 - (bn.best_bid + bn.best_ask) / 2
+
+    def _fit_event(self, price: float, size: float, min_size: float, base_ev: float, adding_ev: List[float],
+                   cap_ev: float) -> float:
+        """Shares still allowed on a bid that would add one-sided exposure in this event.
+
+        Only the larger of the two sides of one market counts (a filled pair merges). 0 means pull the bid.
+        """
+        other = max(adding_ev) if adding_ev else 0.0
+        if price * size <= other + 1e-9:
+            return size
+        room = cap_ev - base_ev
+        if price * size <= room + 1e-9:
+            return size
+        shrunk = math.floor(max(0.0, room) / price)
+        if shrunk + 1e-9 < min_size:
+            self.scan["Ereignis-Grenze (Gebot)"] = self.scan.get("Ereignis-Grenze (Gebot)", 0) + 1
+            return 0.0
+        return float(shrunk)
+
+    def _resting_fits(self, cur: Optional[dict], price: float, size: float, short_this: bool, cap_ev) -> bool:
+        """A resting bid may keep its queue place. With an event cap it also has to fit in the remaining room.
+        Without a cap this is true whenever the caller already checked that an order is resting."""
+        if cap_ev is None or short_this:
+            return True
+        if not cur or price <= 0:
+            return False
+        return cur["price"] * cur["size"] <= price * size + 1e-6
 
     # ------------------------------------------------------------------ market choice
     def select(self, now: float) -> None:
@@ -259,6 +477,7 @@ class MarketMaker:
         sc = self.sc
         min_days = float(sc.get("min_days_to_end", 3))
         skip = set(sc.get("skip_categories", ["Sport", "Krypto"]))
+        skip_tags = {_norm_tag(t) for t in sc.get("skip_tags") or [] if str(t).strip()}
         lo, hi = float(sc.get("min_mid", 0.15)), float(sc.get("max_mid", 0.85))
         max_age = sc.get("max_age_days")
         skip_re = re.compile("|".join(f"(?:{r})" for r in sc["skip_re"]), re.I) if sc.get("skip_re") else None
@@ -286,7 +505,8 @@ class MarketMaker:
         cands = []
         pools = {}  # measured only: reward pools by time to the end (where do the big pools sit?)
         for m in markets:
-            rate, v, size = rewards_of(m)
+            rate_all, v, size = rewards_of(m)
+            rate = rewards_of(m, now, True)[0] if sc.get("rewards_active") else rate_all
             toks = _parse_json_list(m.get("clobTokenIds"))
             prices = _parse_json_list(m.get("outcomePrices"))
             end = _parse_ts(m.get("endDate"))
@@ -296,8 +516,13 @@ class MarketMaker:
                 n, tot, top = pools.get(b, (0, 0.0, 0.0))
                 pools[b] = (n + 1, tot + rate, max(top, rate))
             why = None
-            if rate < float(sc.get("min_daily_rate", 5)) or v < 2 * self.tick:
+            min_rate = float(sc.get("min_daily_rate", 5))
+            if sc.get("rewards_active") and rate_all >= min_rate and rate < min_rate:
+                why = "Reward-Programm nicht aktiv"
+            elif rate < min_rate or v < 2 * self.tick:
                 why = "keine/kleine Rewards"
+            elif sc.get("min_event_volume_24h") not in (None, "") and volume_24h(m) < float(sc["min_event_volume_24h"]):
+                why = "Ereignis-Volumen 24h zu klein"
             elif len(toks) != 2 or len(prices) != 2 or not m.get("enableOrderBook"):
                 why = "nicht binär"
             elif not end or end < now + min_days * DAY:
@@ -306,6 +531,8 @@ class MarketMaker:
                 why = "Kategorie ausgelassen"
             elif skip_re and skip_re.search(_market_text(m)):
                 why = "Muster ausgelassen"  # skip_re: e.g. sport season markets, price thresholds
+            elif _topic_extra(m, skip, skip_tags):
+                why = _topic_extra(m, skip, skip_tags)  # gamma category / tags: culture, view-count, ...
             elif self.blocked(str(m.get("conditionId") or m.get("id")), now):
                 why = "gelernt: gesperrt"  # learn: this market cost more than it paid
             elif sc.get("max_min_size_usd") and size * max(float(prices[0]), 1 - float(prices[0])) \
@@ -324,17 +551,36 @@ class MarketMaker:
             cands = self._rank_by_share(cands[:int(sc.get("prefilter", 60))], st)
         want = int(sc.get("max_markets", 15))
         keep = {cid for cid, mk in self.st.markets.items() if mk.qty_yes > 1e-9 or mk.qty_no > 1e-9}
+        cap_ev = float(sc["max_event_usd"]) if sc.get("max_event_usd") not in (None, "") else None
+        quote_usd = float(sc.get("quote_usd", 50))
+        reserved: Dict[str, float] = {}
+        if cap_ev is not None:  # inventory already held counts, so a full event is not refilled
+            for cid0, mk0 in self.st.markets.items():
+                if cid0 in keep:
+                    k = mk0.event or f"m:{cid0}"
+                    reserved[k] = reserved.get(k, 0.0) + self._sided_usd(mk0)
         chosen = {}
         for rate, m, v, size, end, toks in cands:
             if len(chosen) >= want:
                 break
             cid = str(m.get("conditionId") or m.get("id"))
+            ev = event_key(m, cid)
+            if cap_ev is not None and reserved.get(ev, 0.0) + quote_usd > cap_ev + 1e-9:
+                old = self.st.markets.get(cid)
+                if old:  # remember the event, so the inventory counts against the right group next time
+                    old.event = ev
+                st["Ereignis-Grenze"] = st.get("Ereignis-Grenze", 0) + 1
+                continue
             fee = self.fees.resolve(m, categorize(m).lower())
             old = self.st.markets.get(cid)
             mk = old or MMMarket(cid, (m.get("question") or "")[:200], str(toks[0]), str(toks[1]), end, rate, v, size,
                                  categorize(m), fee.rate, fee.exponent)
             mk.daily_rate, mk.max_spread, mk.min_size, mk.end_ts = rate, v, size, end
+            mk.event = ev
             chosen[cid] = mk
+            self._remember_rewards(now, m, mk, rate)
+            if cap_ev is not None:
+                reserved[ev] = reserved.get(ev, 0.0) + quote_usd
         picked = set(chosen)
         for cid in list(self.st.markets):
             if cid not in chosen:
@@ -345,7 +591,9 @@ class MarketMaker:
         # only the chosen ones are quoted; markets kept for their inventory just wait for resolution (until 10.10.
         # quote() bid in every kept market too, so the book grew past max_markets: mm_neu ~100 markets)
         if picked != (self.quoted or set()):
-            log.info("%s: Märkte: %s", self.name, " | ".join(chosen[c].title[:50] for c in picked))
+            log.info("%s: Märkte: %s", self.name, " | ".join(
+                f"{chosen[c].title[:40]} ({chosen[c].daily_rate:.0f} $/Tag, "
+                f"{chosen[c].max_spread * 100:.1f} ct, min {chosen[c].min_size:.0f})" for c in picked))
         self.quoted = picked
         self.st.markets = chosen
         st["ausgewählt"] = len(picked)
@@ -355,16 +603,96 @@ class MarketMaker:
             n, tot, top = pools.get(b, (0, 0.0, 0.0))
             st[f"Reward-Töpfe {b}"] = f"{n} Märkte, {tot:.0f} $/Tag, Ø {tot / n if n else 0:.0f}, max {top:.0f}"
         for k in ("Stop-Loss ausgelöst", "Pausen (schnelle Kursbewegung)", "gelernt: Märkte gesperrt", "echte Fills",
-                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt"):
+                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt",
+                  "Ereignis-Grenze (Gebot)", "Gebote wegen Alter erneuert", "Gebote nach Kursbewegung erneuert"):
             if k in self.scan:  # running counters: keep them across the half-hourly selection (until 17.10. reset)
                 st[k] = self.scan[k]
         self.scan = st
         if self.pool is not None:
             self.pool.set_assets([t for m in chosen.values() for t in (m.yes, m.no)])
 
-    def planned_quotes(self, mid: float, v: float, min_size: float) -> Tuple[dict, dict]:
+    def _side_plan(self, mid: float, v: float) -> Optional[Tuple[float, float, float, float, bool]]:
+        """(distance YES, distance NO, $ YES, $ NO, skewed) for `skew:`. None = this mid is not quoted.
+        Inside band_lo..band_hi the flag is false and the caller keeps the symmetric distances. The favourite
+        is the side priced at band_hi or above. Distances here are not raised to min_quote_frac: an explicit
+        fav_frac closer than that floor is the point of the setting."""
+        sk = self.sc.get("skew") or {}
+        usd = float(self.sc.get("quote_usd", 50))
+        if mid < float(sk.get("min_mid", 0.10)) - 1e-12 or mid > float(sk.get("max_mid", 0.90)) + 1e-12:
+            return None
+        lo, hi = float(sk.get("band_lo", 0.30)), float(sk.get("band_hi", 0.70))
+        if lo <= mid <= hi:
+            return 0.0, 0.0, usd, usd, False
+        fav_yes = mid >= hi
+        base = max(self.tick, v * float(self.sc.get("quote_frac", 0.5)), self._quote_floor(v))
+        dy = dn = base
+        uy, un = usd, usd
+        if sk.get("fav_frac") is not None:
+            d_fav = max(self.tick, v * float(sk["fav_frac"]))
+            if fav_yes:
+                dy = d_fav
+            else:
+                dn = d_fav
+        if sk.get("long_frac") is not None:
+            d_long = max(self.tick, v * float(sk["long_frac"]))
+            if d_long >= v:  # still inside the reward band, otherwise the order scores nothing
+                d_long = max(self.tick, v - self.tick)
+            if fav_yes:
+                dn = d_long
+            else:
+                dy = d_long
+        if sk.get("long_usd") is not None:
+            if fav_yes:
+                un = float(sk["long_usd"])
+            else:
+                uy = float(sk["long_usd"])
+        if sk.get("fav_usd") is not None:
+            if fav_yes:
+                uy = float(sk["fav_usd"])
+            else:
+                un = float(sk["fav_usd"])
+        return dy, dn, uy, un, True
+
+    def _sized(self, price: float, side_usd: float, min_size: float) -> float:
+        """Shares for one bid. The full quote_usd is at least the reward minimum. A smaller side (the longshot)
+        is not quoted at all when those dollars buy fewer shares than rewardsMinSize — that size scores nothing
+        and only adds fill risk. long_usd 0 still means the side is off."""
+        if price < self.tick or side_usd <= 0:
+            return 0.0
+        size = math.floor(side_usd / price)
+        if side_usd + 1e-9 >= float(self.sc.get("quote_usd", 50)):
+            size = max(min_size, size)
+        elif size < min_size:
+            return 0.0
+        return float(size)
+
+    def _remember_rewards(self, now: float, raw: dict, mk: MMMarket, rate: float) -> None:
+        """One row per selected market: the reward params we actually quoted against."""
+        programs = reward_programs(raw, now, active_only=bool(self.sc.get("rewards_active")))
+        text = "; ".join(
+            f"{p['rate']:.2f} $/Tag {p['start'] or '…'}–{p['end'] or '…'}" if p["start"] or p["end"]
+            else f"{p['rate']:.2f} $/Tag ohne Datum" for p in programs) or "keins"
+        self.store.db.execute(
+            "INSERT INTO mm_reward_params(ts, cid, title, daily_rate, max_spread_ct, min_size, volume_24h, programs) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (now, mk.cid, mk.title[:200], round(rate, 4), round(mk.max_spread * 100, 3), mk.min_size,
+             round(volume_24h(raw), 2), text[:300]))
+
+    def planned_quotes(self, mid: float, v: float, min_size: float) -> Tuple[Optional[dict], Optional[dict]]:
         """The two bids quote() would place at this mid (see there)."""
-        d = max(self.tick, v * float(self.sc.get("quote_frac", 0.5)))
+        if self.sc.get("skew"):
+            plan = self._side_plan(mid, v)
+            if plan is None:
+                return None, None
+            dy, dn, uy, un, skewed = plan
+            if skewed:
+                out = []
+                for fair, dist, side_usd in ((mid, dy, uy), (1 - mid, dn, un)):
+                    price = math.floor((fair - dist) / self.tick + 1e-9) * self.tick
+                    size = self._sized(price, side_usd, min_size)
+                    out.append(dict(price=round(price, 4), size=size) if size > 0 and price >= self.tick else None)
+                return out[0], out[1]
+        d = max(self.tick, v * float(self.sc.get("quote_frac", 0.5)), self._quote_floor(v))
         usd = float(self.sc.get("quote_usd", 50))
         out = []
         for price in (math.floor((mid - d) / self.tick + 1e-9) * self.tick,
@@ -388,10 +716,22 @@ class MarketMaker:
                 continue
             mid = (by.best_bid + by.best_ask) / 2
             qy, qn = self.planned_quotes(mid, v, size)
+            if qy is None and qn is None:
+                st["Mitte zu extrem"] = st.get("Mitte zu extrem", 0) + 1
+                continue
             scored.append((rate * reward_share(by, bn, qy, qn, mid, v, size), c))
         scored.sort(key=lambda x: -x[0])
         want = int(self.sc.get("max_markets", 15))
         st["erwarteter Reward $/Tag"] = round(sum(e for e, _ in scored[:want]), 2)
+        if self.booklog.enabled and books:  # the books this scan already loaded; scoring above is unchanged
+            from .study import categorize
+            meta = {}
+            for _rate, m, _v, _size, end, toks in cands:
+                cid = str(m.get("conditionId") or m.get("id"))
+                info = dict(cid=cid, event=event_key(m, cid), category=categorize(m), end_ts=end,
+                            title=(m.get("question") or "")[:160], yes=str(toks[0]), no=str(toks[1]))
+                meta[str(toks[0])] = meta[str(toks[1])] = info
+            self.booklog.record(self.clock.now(), books, meta, None)
         return [c for _, c in scored]
 
     # ------------------------------------------------------------------ fills
@@ -412,12 +752,17 @@ class MarketMaker:
         cost = price * qty
         tok = mk.yes if side == "yes" else mk.no
         own_mid = None if mk.mid is None else (mk.mid if side == "yes" else 1 - mk.mid)
+        placed = q.get("placed_ts")
+        age_s = None if placed is None else round(max(0.0, now - float(placed)), 1)
+        dist = None if own_mid is None else round(own_mid - price, 4)
         cur = self.store.db.execute(
-            "INSERT INTO mm_markout(ts, cid, token, side, price, qty, title, cat, mid, days_left, usd) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO mm_markout(ts, cid, token, side, price, qty, title, cat, mid, days_left, usd, "
+            "age_s, dist, band, ytok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (now, mk.cid, tok, side, price, qty, mk.title[:200], mk.category, own_mid,
-             round((mk.end_ts - now) / DAY, 2) if mk.end_ts else None, round(cost, 2)))
-        self._markout.append(dict(rowid=cur.lastrowid, ts=now, token=tok, price=price, qty=qty, m5=None, cid=mk.cid))
+             round((mk.end_ts - now) / DAY, 2) if mk.end_ts else None, round(cost, 2),
+             age_s, dist, side_band(price), mk.yes))
+        self._markout.append(dict(rowid=cur.lastrowid, ts=now, token=tok, price=price, qty=qty, m1=None, m5=None,
+                                  cid=mk.cid, m1s=None, m10s=None))
         self.st.cash -= cost
         if side == "yes":
             mk.qty_yes += qty
@@ -504,15 +849,16 @@ class MarketMaker:
             if not bk or not bk.bids or not bk.asks:
                 continue
             stop = False
+            share_out = bool(getattr(mk, "share_out", False))
             if ex.get("stop_ticks"):  # stop-loss: the own side's mid fell stop_ticks below the average buy price –
                 held = mk.qty_yes if side == "yes" else mk.qty_no  # the move tends to go on, sell at the bid
                 avg = (mk.cost_yes if side == "yes" else mk.cost_no) / held if held > 1e-9 else 0.0
                 stop = (bk.best_bid + bk.best_ask) / 2 <= avg - float(ex["stop_ticks"]) * self.tick + 1e-9
                 if stop:
                     self.scan["Stop-Loss ausgelöst"] = self.scan.get("Stop-Loss ausgelöst", 0) + 1
-            if age < after and not stop:
+            if age < after and not stop and not share_out:
                 continue
-            if age >= dump or stop:
+            if age >= dump or stop or share_out:
                 q = min(abs(net), bk.bids[0].size)
                 if self.gw is not None and self.gw.live:  # real: send a fill-and-kill sell after the resting ask is
                     # cancelled (sync_orders); booked only when the exchange reports the fill (apply_real_fills)
@@ -527,13 +873,17 @@ class MarketMaker:
                     mk.inv_ts = None
                 continue
             mid = (bk.best_bid + bk.best_ask) / 2
-            d = max(self.tick, mk.max_spread * float(ex.get("ask_frac", frac)))  # ask_frac: sell closer to the mid
+            mind = self._quote_floor(mk.max_spread)
+            d = max(self.tick, mk.max_spread * float(ex.get("ask_frac", frac)), mind)  # ask_frac: sell closer
             price = round(max(math.ceil((mid + d) / self.tick - 1e-9) * self.tick, bk.best_bid + self.tick), 4)
             if ex.get("decay_h"):  # step the sell order down every hour, from mid + d to the mid itself – an ask
                 # scores only between the mid and mid + max_spread, so it never leaves the reward band (and the
-                # closer to the mid, the more it scores); never at or below the best bid (post-only)
+                # closer to the mid, the more it scores); never at or below the best bid (post-only).
+                # min_quote_frac stops the steps at that distance instead of at the mid.
                 done = min(1.0, math.floor((age - after) / 3600) / float(ex["decay_h"]))
                 low = max(math.ceil(mid / self.tick - 1e-9) * self.tick, bk.best_bid + self.tick)
+                if mind:
+                    low = max(low, math.ceil((mid + mind) / self.tick - 1e-9) * self.tick)
                 price = round(max(low, math.ceil((price - (price - low) * done) / self.tick - 1e-9) * self.tick), 4)
                 top = math.floor((mid + mk.max_spread) / self.tick - 1e-9) * self.tick  # strictly inside mid + v
                 if mk.max_spread > 0 and low <= top:
@@ -614,13 +964,23 @@ class MarketMaker:
         return bool(self.sc.get("learn")) and e is not None and now < e["blocked_until"]
 
     def update_markouts(self, now: float, books: Dict[str, OrderBook]) -> None:
-        """Fill price vs. the token's mid 5 and 60 minutes later, times the shares (+ = the price rose after we
-        bought). Books of dropped markets may be missing: such fills are given up after 2 hours."""
+        """Fill price vs. the token's mid 1 s, 10 s, 1 min, 5 min and 60 min later, times the shares (+ = the
+        price rose after we bought). The loop steps every step_s (2 s), so 1 s is the first book at least a
+        second after the fill. Books of dropped markets may be missing: such fills are given up after 2 hours."""
         keep = []
         for m in self._markout:
             age = now - m["ts"]
             bk = books.get(m["token"])
             mid = (bk.best_bid + bk.best_ask) / 2 if bk and bk.bids and bk.asks else None
+            if mid is not None and m.get("m1s") is None and age >= 1:
+                m["m1s"] = round((mid - m["price"]) * m["qty"], 4)
+                self.store.db.execute("UPDATE mm_markout SET m1s=? WHERE rowid=?", (m["m1s"], m["rowid"]))
+            if mid is not None and m.get("m10s") is None and age >= 10:
+                m["m10s"] = round((mid - m["price"]) * m["qty"], 4)
+                self.store.db.execute("UPDATE mm_markout SET m10s=? WHERE rowid=?", (m["m10s"], m["rowid"]))
+            if mid is not None and m.get("m1") is None and age >= 60:
+                m["m1"] = round((mid - m["price"]) * m["qty"], 4)
+                self.store.db.execute("UPDATE mm_markout SET m1=? WHERE rowid=?", (m["m1"], m["rowid"]))
             if mid is not None and m["m5"] is None and age >= 300:
                 m["m5"] = round((mid - m["price"]) * m["qty"], 4)
                 self.store.db.execute("UPDATE mm_markout SET m5=? WHERE rowid=?", (m["m5"], m["rowid"]))
@@ -743,19 +1103,31 @@ class MarketMaker:
         over = bool(cap) and self.st.inventory_cost() >= float(cap)
         if cap:
             self.scan["Bestandsgrenze erreicht"] = int(over)
+        # cash buffer stays on the mid mark, so valuing the report at the bid does not change quote size
         cash_free = self.st.cash * max(1.0, float(sc.get("overcommit", 1))) \
-            - float(sc.get("cash_buffer_pct", 0.10)) * self.st.equity  # overcommit: bids may add up to N x the cash
+            - float(sc.get("cash_buffer_pct", 0.10)) * (self.st.cash + self.st.inventory_mid())
         hyst = float(sc.get("reprice_ticks", 1))  # move a resting bid only when the target is this many ticks away
+        cap_ev = float(sc["max_event_usd"]) if sc.get("max_event_usd") not in (None, "") else None
+        if cap_ev is not None:  # how many bids this pass were pulled, not a lifetime counter
+            self.scan["Ereignis-Grenze (Gebot)"] = 0
+        if (sc.get("exit") or {}).get("min_share") is not None:
+            self.scan["Reward-Anteil unter Schwelle"] = 0
+        for mk in self.st.markets.values():  # marks first, including markets we no longer quote
+            self._mark(mk, books.get(mk.yes), books.get(mk.no))
+        ev_used: Dict[str, float] = {}
+        if cap_ev is not None:
+            for mk in self.st.markets.values():
+                k = mk.event or f"m:{mk.cid}"
+                ev_used[k] = ev_used.get(k, 0.0) + self._sided_usd(mk)
+        n_extreme = n_small = 0
         for mk in self.st.markets.values():
+            mk.share_out = False
             by, bn = books.get(mk.yes), books.get(mk.no)
             if (self.quoted is not None and mk.cid not in self.quoted) or not by or not by.bids or not by.asks \
                     or (mk.end_ts and now > mk.end_ts - stop_h) or mk.daily_rate <= 0 or self.blocked(mk.cid, now):
                 mk.bid_yes = mk.bid_no = None
-                if self.gw is not None and self.gw.live and by and by.bids and by.asks:
-                    mk.mid = (by.best_bid + by.best_ask) / 2  # live: value held positions at the current book
                 continue
-            mid = (by.best_bid + by.best_ask) / 2
-            mk.mid = mid
+            mid = mk.mid if mk.mid is not None else (by.best_bid + by.best_ask) / 2
             pz = sc.get("pause")
             if pz:  # the mid jumped by >= ticks within window_s: no bids for pause_s (informed traders are active)
                 hist = [x for x in self._mids.get(mk.cid, []) if now - x[0] <= float(pz.get("window_s", 300))]
@@ -792,38 +1164,104 @@ class MarketMaker:
                     dn = max(self.tick, mk.max_spread * float(pf), mk.cost_yes / mk.qty_yes - mid + self.tick)
                 elif mk.qty_no > mk.qty_yes + 1e-9:
                     dy = max(self.tick, mk.max_spread * float(pf), mk.cost_no / mk.qty_no - (1 - mid) + self.tick)
+            mind = self._quote_floor(mk.max_spread)
+            if mind:  # never inside min_quote_frac, even when pair_frac would step closer
+                dy, dn = max(dy, mind), max(dn, mind)
+            usd_y = usd_n = usd
+            if sc.get("skew"):
+                plan = self._side_plan(mid, mk.max_spread)
+                if plan is None:
+                    mk.bid_yes = mk.bid_no = None
+                    n_extreme += 1
+                    continue
+                dy_s, dn_s, usd_y, usd_n, skewed = plan
+                if skewed:  # favourite closer, longshot further or smaller; inside the band the floor above stays
+                    dy, dn = dy_s, dn_s
             want_yes = math.floor((fy - dy) / self.tick + 1e-9) * self.tick
             want_no = math.floor((fn - dn) / self.tick + 1e-9) * self.tick
             want_yes = min(want_yes, by.best_ask - self.tick)
             if bn and bn.asks:
                 want_no = min(want_no, bn.best_ask - self.tick)
             net = (mk.qty_yes - mk.qty_no) * (mid if mk.qty_yes >= mk.qty_no else 1 - mid)
-            for side, price in (("yes", want_yes), ("no", want_no)):
+            ev_key = mk.event or f"m:{mk.cid}"
+            base_ev = ev_used.get(ev_key, 0.0) if cap_ev is not None else 0.0
+            adding_ev: List[float] = []
+            for side, price, side_usd in (("yes", want_yes, usd_y), ("no", want_no, usd_n)):
                 cur = mk.bid_yes if side == "yes" else mk.bid_no
                 long_this = (side == "yes" and mk.qty_yes > mk.qty_no) or (side == "no" and mk.qty_no > mk.qty_yes)
                 short_this = (side == "yes" and mk.qty_yes < mk.qty_no) or (side == "no" and mk.qty_no < mk.qty_yes)
-                if price < self.tick or (long_this and abs(net) >= max_inv) or (over and not short_this) \
+                own_mid = mid if side == "yes" else 1 - mid
+                book = by if side == "yes" else bn
+                stale = bool(cur and cur.get("size", 0) > 0 and sc.get("max_quote_age_s") not in (None, "")
+                             and now - float(cur.get("placed_ts") or now) >= float(sc["max_quote_age_s"]) - 1e-9)
+                moved = False
+                if cur and cur.get("size", 0) > 0 and sc.get("requote_ticks") not in (None, "") \
+                        and cur.get("mid") is not None:
+                    moved = abs(own_mid - float(cur["mid"])) >= float(sc["requote_ticks"]) * self.tick - 1e-9
+                if side_usd <= 0 or price < self.tick or (long_this and abs(net) >= max_inv) or (over and not short_this) \
                         or now < self._cool.get((mk.cid, side), 0):
                     new = None  # skew: stop buying the side we already hold too much of (or just got filled on)
                 else:
-                    size = max(mk.min_size, math.floor(usd / price))
-                    if cur and abs(cur["price"] - price) < 1e-9 and cur["size"] > 0:
-                        continue  # unchanged: keep the place in the queue
-                    if cur and cur["size"] > 0 and abs(cur["price"] - price) < hyst * self.tick - 1e-9:
-                        own_mid = mid if side == "yes" else 1 - mid
-                        book = by if side == "yes" else bn
-                        if 0 <= own_mid - cur["price"] < mk.max_spread and cur["price"] < book.best_ask - 1e-9:
-                            continue  # reprice_ticks: the mid flickers by a tick – keep the order while it qualifies
-                    have = (cur["price"] * cur["size"]) if cur else 0.0
-                    if price * size > cash_free + have:
+                    size = self._sized(price, side_usd, mk.min_size)
+                    if size <= 0 and mk.min_size > 0 and math.floor(side_usd / price) < mk.min_size:
+                        n_small += 1  # configured dollars buy fewer shares than rewardsMinSize: side stays off
+                    if cap_ev is not None and not short_this:
+                        size = self._fit_event(price, size, mk.min_size, base_ev, adding_ev, cap_ev)
+                    fresh = not stale and not moved
+                    if size <= 0:
                         new = None
+                    elif fresh and cur and abs(cur["price"] - price) < 1e-9 and cur["size"] > 0 \
+                            and self._resting_fits(cur, price, size, short_this, cap_ev):
+                        if cap_ev is not None and not short_this:
+                            adding_ev.append(cur["price"] * cur["size"])
+                        continue  # unchanged, including a partly filled bid: keep the place in the queue
+                    elif fresh and cur and cur["size"] > 0 and abs(cur["price"] - price) < hyst * self.tick - 1e-9:
+                        if book and book.asks and 0 <= own_mid - cur["price"] < mk.max_spread \
+                                and cur["price"] < book.best_ask - 1e-9 \
+                                and self._resting_fits(cur, price, size, short_this, cap_ev):
+                            if cap_ev is not None and not short_this:
+                                adding_ev.append(cur["price"] * cur["size"])
+                            continue  # reprice_ticks: the mid flickers by a tick – keep the order while it qualifies
+                        have = (cur["price"] * cur["size"]) if cur else 0.0
+                        if price * size > cash_free + have:
+                            new = None
+                        else:
+                            new = dict(price=round(price, 4), size=float(size), placed_ts=now)
+                            cash_free -= price * size - have
                     else:
-                        new = dict(price=round(price, 4), size=float(size), placed_ts=now)
-                        cash_free -= price * size - have
+                        have = (cur["price"] * cur["size"]) if cur else 0.0
+                        if price * size > cash_free + have:
+                            new = None
+                        else:
+                            new = dict(price=round(price, 4), size=float(size), placed_ts=now)
+                            cash_free -= price * size - have
+                    if new is not None and sc.get("requote_ticks") not in (None, ""):
+                        new["mid"] = round(own_mid, 4)
                 if side == "yes":
                     mk.bid_yes = new
                 else:
                     mk.bid_no = new
+                if stale and new:
+                    self.scan["Gebote wegen Alter erneuert"] = self.scan.get("Gebote wegen Alter erneuert", 0) + 1
+                if moved and new:
+                    self.scan["Gebote nach Kursbewegung erneuert"] = self.scan.get("Gebote nach Kursbewegung erneuert", 0) + 1
+                if cap_ev is not None and not short_this and new and new.get("size", 0) > 0:
+                    adding_ev.append(new["price"] * new["size"])
+            if cap_ev is not None:
+                ev_used[ev_key] = base_ev + (max(adding_ev) if adding_ev else 0.0)
+            self._share_exit(mk, by, bn, mid)
+        if n_extreme:
+            self.scan["Mitte zu extrem (Gebot)"] = n_extreme
+        else:
+            self.scan.pop("Mitte zu extrem (Gebot)", None)
+        if n_small:
+            self.scan["Außenseiter unter Reward-Mindestgröße"] = n_small
+        else:
+            self.scan.pop("Außenseiter unter Reward-Mindestgröße", None)
+        if cap_ev is not None and not self.scan.get("Ereignis-Grenze (Gebot)"):
+            self.scan.pop("Ereignis-Grenze (Gebot)", None)
+        if (sc.get("exit") or {}).get("min_share") is not None and not self.scan.get("Reward-Anteil unter Schwelle"):
+            self.scan.pop("Reward-Anteil unter Schwelle", None)
 
     def sync_orders(self, now: float) -> None:
         """The quotes the paper strategy holds, at pilot size (live.quote_usd, at least the reward minimum),
@@ -916,6 +1354,44 @@ class MarketMaker:
             self.store.settlement(now, f"{self.name}:rewards", "reward", 0, r, r)
 
     # ------------------------------------------------------------------ resolution
+    def _close_markouts(self, now: float, cid: Optional[str] = None, final: Optional[float] = None) -> None:
+        """Markout to resolution: (final price of the side we bought − fill price) × shares.
+        With a cid, the caller already knows the resolution. Otherwise ask for tokens whose market should
+        have ended (fills whose market we no longer hold)."""
+        if cid is not None and final is not None:
+            rows = self.store.db.execute(
+                "SELECT rowid, side, price, qty FROM mm_markout WHERE cid=? AND m_res IS NULL", (cid,))
+            for rowid, side, price, qty in rows:
+                fin = float(final) if side == "yes" else 1.0 - float(final)
+                self.store.db.execute("UPDATE mm_markout SET m_res=? WHERE rowid=?",
+                                      (round((fin - float(price)) * float(qty), 4), rowid))
+            return
+        try:
+            rows = list(self.store.db.execute(
+                "SELECT rowid, side, price, qty, ytok, ts, days_left FROM mm_markout "
+                "WHERE m_res IS NULL AND ytok IS NOT NULL AND days_left IS NOT NULL"))
+        except Exception:  # noqa
+            return
+        groups: Dict[str, list] = {}
+        for rowid, side, price, qty, ytok, ts, days in rows:
+            if now + 1 < float(ts) + float(days) * DAY:
+                continue
+            groups.setdefault(str(ytok), []).append((rowid, side, price, qty))
+        for ytok, items in groups.items():
+            if now - self._res_try.get(ytok, -1e18) < 600:  # ended but still unresolved: at most one lookup / 10 min
+                continue
+            self._res_try[ytok] = now  # stamp before the call, also when it returns nothing or raises
+            try:
+                resolved = self.client.token_resolution(ytok)
+            except Exception:  # noqa
+                resolved = None
+            if resolved is None:
+                continue
+            for rowid, side, price, qty in items:
+                fin = float(resolved) if side == "yes" else 1.0 - float(resolved)
+                self.store.db.execute("UPDATE mm_markout SET m_res=? WHERE rowid=?",
+                                      (round((fin - float(price)) * float(qty), 4), rowid))
+
     def settle(self, now: float) -> None:
         for cid, mk in list(self.st.markets.items()):
             if not (mk.qty_yes > 1e-9 or mk.qty_no > 1e-9) or (mk.end_ts and now < mk.end_ts):
@@ -923,12 +1399,14 @@ class MarketMaker:
             final = self.client.token_resolution(mk.yes)
             if final is None:
                 continue
+            self._close_markouts(now, cid, final)
             payout = mk.qty_yes * final + mk.qty_no * (1 - final)
             pnl = payout - mk.cost_yes - mk.cost_no
             self.st.cash += payout
             self.st.realized += pnl
             self.store.settlement(now, f"{self.name}:{mk.cid}", "position", mk.qty_yes + mk.qty_no, payout, pnl)
             del self.st.markets[cid]
+        self._close_markouts(now)
 
     # ------------------------------------------------------------------ loop
     def step(self) -> None:
@@ -945,6 +1423,13 @@ class MarketMaker:
         if self.pool is not None and len(books) < len(tokens) and now - self._last["book"] > 60:
             self._last["book"] = now  # websocket not (yet) delivering: fall back to REST once a minute
             books = dict(self.client.books(tokens), **books)
+        if self.booklog.enabled and books:
+            meta = {}
+            for mk in self.st.markets.values():
+                info = dict(cid=mk.cid, event=mk.event or f"m:{mk.cid}", category=mk.category, end_ts=mk.end_ts,
+                            title=(mk.title or "")[:160], yes=mk.yes, no=mk.no)
+                meta[mk.yes] = meta[mk.no] = info
+            self.booklog.record(now, books, meta, getattr(self.books, "last", None))
         live = self.gw is not None and self.gw.live
         if live:
             self.books.trades.clear()  # real orders: what was really filled counts, not the simulation's guess
@@ -969,7 +1454,10 @@ class MarketMaker:
                 self._last["metrics"] = now
                 self.write_metrics(now)
             st = self.st
-            self.store.equity(now, st.equity, st.cash, st.inventory_cost(), 0.0, st.realized + st.rewards + st.rebates, None)
+            # realized_cum stays the sum, so the 4h report does not jump. trade/rewards/rebates are stored
+            # beside it; the dashboard shows those three and calls only the trading part "realisiert".
+            self.store.equity(now, st.equity, st.cash, st.inventory_cost(), 0.0,
+                              st.realized + st.rewards + st.rebates, None, st.rewards, st.rebates, st.realized)
             self.store.commit()
             st.save(self.state_path)
             self._write_scan(now)
@@ -992,6 +1480,39 @@ class MarketMaker:
                 self.scan["Kursbewegung nach Fill 5 Min $"] = f"{m5 or 0:+.2f} ({n} Fills)"
             if n60:
                 self.scan["Kursbewegung nach Fill 60 Min $"] = f"{m60 or 0:+.2f} ({n60} Fills)"
+            n1, m1 = self.store.db.execute("SELECT COUNT(m1), SUM(m1) FROM mm_markout").fetchone()
+            if n1:
+                self.scan["Kursbewegung nach Fill 1 Min $"] = f"{m1 or 0:+.2f} ({n1} Fills)"
+            for label, col in (("1 s", "m1s"), ("10 s", "m10s")):
+                ns, ms = self.store.db.execute(f"SELECT COUNT({col}), SUM({col}) FROM mm_markout").fetchone()
+                if ns:
+                    self.scan[f"Kursbewegung nach Fill {label} $"] = f"{ms or 0:+.2f} ({ns} Fills)"
+            names = {"favorit": "Favorit", "ausenseiter": "Außenseiter", "mitte": "Mitte"}
+            parts_band = []
+            for band, usd60, m60b, n60b, usdres, mres, nres in self.store.db.execute(
+                    "SELECT band, SUM(CASE WHEN m60 IS NOT NULL THEN usd END), SUM(m60), COUNT(m60), "
+                    "SUM(CASE WHEN m_res IS NOT NULL THEN usd END), SUM(m_res), COUNT(m_res) "
+                    "FROM mm_markout WHERE band IS NOT NULL GROUP BY band"):
+                bits = []
+                if n60b and usd60:
+                    bits.append(f"60 Min {m60b / usd60 * 100:+.1f} % ({n60b})")
+                if nres and usdres:
+                    bits.append(f"Auflösung {mres / usdres * 100:+.1f} % ({nres})")
+                if bits:
+                    parts_band.append(f"{names.get(band, band)} " + ", ".join(bits))
+            if parts_band:
+                self.scan["Markout nach Seite je 1 $"] = "; ".join(parts_band)
+            aged = list(self.store.db.execute(
+                "SELECT age_s, usd, m60 FROM mm_markout WHERE age_s IS NOT NULL AND m60 IS NOT NULL AND usd > 0"))
+            if aged:
+                buckets = (("< 30 s", 0, 30), ("30 s–2 min", 30, 120), ("2–10 min", 120, 600), ("> 10 min", 600, 1e18))
+                parts = []
+                for name, lo, hi in buckets:
+                    hit = [r for r in aged if lo <= r[0] < hi]
+                    if hit:
+                        parts.append(f"{name} {sum(r[2] for r in hit) / sum(r[1] for r in hit) * 100:+.1f} % ({len(hit)})")
+                if parts:
+                    self.scan["Gebotsalter vs 60 Min je 1 $"] = "; ".join(parts)
         except Exception:  # noqa
             pass
         if self.sc.get("learn"):
@@ -1011,7 +1532,11 @@ class MarketMaker:
                                      if self.sc.get("exit") else {}),
                                   **({"davon Rewards aus Verkaufsgeboten $": round(st.ask_rewards, 2)}
                                      if self.sc.get("reward_asks") else {}),
-                                  "Bestand $": round(st.inventory_value(), 2), "ts": now})
+                                  "Bestand $": round(st.inventory_value(), 2),
+                                  # rewards are already in the cash, so 60 % of the estimate is the full equity
+                                  # minus the 40 % the live probe did not actually pay
+                                  "Equity bei 60 % Rewards $": round(st.equity - 0.4 * st.rewards, 2),
+                                  "ts": now})
         try:
             with open(self.state_path.replace(".json", ".scan.json"), "w", encoding="utf-8") as f:
                 json.dump(scan, f)

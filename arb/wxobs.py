@@ -119,6 +119,22 @@ def dead_time(readings: List[Tuple[float, float]], kind: str, lo: float, hi: flo
     return None
 
 
+def degrees_outside(kind: str, lo: float, hi: float, extreme: int) -> float:
+    """Whole degrees the running extreme already sits past the bucket. 0 while the bucket can still win.
+
+    Same rounding as `to_unit` and the same edge as `dead_time(..., margin=0)`: a 24°C bucket is out by
+    1 once the station shows 25. `dead_time(..., margin=1)` is stricter (it needs more than 1 degree past,
+    so 26). Open-ended buckets that a higher max / lower min cannot kill ("or higher" / "or below") stay 0.
+    """
+    if kind == "max":
+        if hi == math.inf or extreme <= hi:
+            return 0.0
+        return float(extreme - hi)
+    if lo == -math.inf or extreme >= lo:
+        return 0.0
+    return float(lo - extreme)
+
+
 def price_after(hist: List[dict], ts: float, end: float) -> Optional[float]:
     """First traded price at or after ts (and before the market closed)."""
     for h in hist:
@@ -654,6 +670,27 @@ class LiveObs:
                 and t < start + 86400]
         v = (max(vals) if kind == "max" else min(vals)) if vals else None
         return gap_class(kind, lo, hi, v, unit)
+
+    def ruling(self, question: str, description: str, now: float, delay_s: float = 900) -> Optional[dict]:
+        """Where today's running extreme stands. None when station, time zone or a reading is missing.
+        `margin` is `degrees_outside` (0 while the bucket can still win)."""
+        from zoneinfo import ZoneInfo
+        pq = parse_question(question, datetime.fromtimestamp(now, tz=timezone.utc).year)
+        station = station_from(description or "")
+        if not pq or not station:
+            return None
+        kind, city, (lo, hi, unit), day = pq
+        tz = self.tz(station)
+        if not tz:
+            return None
+        start = datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(tz)).timestamp()
+        vals = [to_unit(f, unit) for t, f in self.readings(station, now) if start <= t <= now - delay_s
+                and t < start + 86400]
+        if not vals:
+            return None
+        ext = max(vals) if kind == "max" else min(vals)
+        return dict(kind=kind, city=city, station=station, lo=lo, hi=hi, unit=unit, day=day.isoformat(),
+                    reading=ext, margin=degrees_outside(kind, lo, hi, ext), tz=tz)
 
 
 def _parse_iso(v) -> Optional[float]:

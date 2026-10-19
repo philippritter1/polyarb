@@ -33,6 +33,11 @@ class Store:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
+        # beside realized_cum (the sum, kept so old rows and the 4h report stay continuous): the three parts
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(equity)")}
+        for col in ("rewards_cum", "rebates_cum", "trade_cum"):
+            if col not in have:
+                self.db.execute(f"ALTER TABLE equity ADD COLUMN {col} REAL")
 
     def scan(self, ts, n_baskets, n_books, raw, n_opps, best_buy, best_sell, dur_ms):
         self.db.execute("INSERT INTO scans VALUES(?,?,?,?,?,?,?,?)",
@@ -54,9 +59,12 @@ class Store:
              o.capital_usd, o.net_profit_usd, r.realized_pnl, r.locked_capital, r.expected_payout,
              r.residual_exposure_usd, latency_ms, r.note, json.dumps(fills)))
 
-    def equity(self, ts, equity, cash, locked, residual, realized, halted):
-        self.db.execute("INSERT INTO equity VALUES(?,?,?,?,?,?,?)",
-                        (ts, equity, cash, locked, residual, realized, halted))
+    def equity(self, ts, equity, cash, locked, residual, realized, halted, rewards=None, rebates=None, trade=None):
+        """`realized` is the booked total (trading + rewards + rebates for market making). `trade` is trading only."""
+        self.db.execute(
+            "INSERT INTO equity(ts, equity, cash, locked, residual, realized_cum, halted, rewards_cum, rebates_cum, "
+            "trade_cum) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (ts, equity, cash, locked, residual, realized, halted, rewards, rebates, trade))
 
     def settlement(self, ts, ref, kind, qty, payout, pnl):
         self.db.execute("INSERT INTO settlements VALUES(?,?,?,?,?,?)", (ts, ref, kind, qty, payout, pnl))

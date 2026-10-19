@@ -880,7 +880,9 @@ scenarios:
     rank: share                  # Auswahl nach erwartetem Reward, wie die Vergleichsvarianten
     prefilter: 120
     list_orders: [volume, liquidity, volume24hr, startDate]  # Gamma liefert je Liste max. 2.000
-    min_daily_rate: 5
+    min_daily_rate: 5            # Gamma clobRewards.rewardsDailyRate, darunter kein Programm das sich lohnt
+    rewards_active: true         # startDate/endDate muss jetzt laufen; ein Eintrag ohne Datum zählt als laufend
+    min_event_volume_24h: 10000  # Volumen des Ereignisses (sonst des Markts) in den letzten 24 h
     skip_categories: [Sport, Krypto, Kultur, Social]
     skip_tags:                   # Gamma-Kategorie/Tags, zusätzlich zu skip_categories (unsere eigene Einteilung)
       - culture
@@ -907,12 +909,22 @@ scenarios:
       - '\b(oscar|oscars|grammy|grammys|emmy|box office|imdb|metacritic|billboard)\b'
     min_days_to_end: 14          # nichts, das in den nächsten 2 Wochen endet
     stop_hours_before_end: 24
-    min_mid: 0.15
-    max_mid: 0.85
+    min_mid: 0.10                # unter 10 ct und über 90 ct nicht bieten (On-Chain: dort verlieren Maker stark)
+    max_mid: 0.90
     min_liquidity: 1000
-    quote_frac: 0.5              # halber Reward-Abstand, nicht näher
-    min_quote_frac: 0.5          # auch Verkaufsgebot und ein späteres pair_frac bleiben mindestens so weit weg
+    quote_frac: 0.5              # halber Reward-Abstand, solange die Mitte zwischen 30 und 70 ct liegt
+    min_quote_frac: 0.5          # Verkaufsgebot und die symmetrische Zone bleiben mindestens so weit weg
     quote_usd: 50
+    skew:                        # außerhalb 30–70 ct zum Favoriten (Seite ab 70 ct). Einseitig zählt die Liquidität
+                                 # zwischen 10 und 90 ct nur zu einem Drittel. fav_frac darf näher als min_quote_frac.
+      band_lo: 0.30
+      band_hi: 0.70
+      min_mid: 0.10              # Live-Mitte außerhalb: Gebote weg
+      max_mid: 0.90
+      fav_frac: 0.25             # Favorit näher (bei 4 ct Abstand eine Tick-Stufe vor quote_frac 0,5)
+      long_frac: 0.75            # Außenseiter weiter weg, noch im Reward-Band
+      long_usd: 15               # Außenseiter kleiner; 0 würde die Seite ganz weglassen
+    # max_quote_age_s und requote_ticks bleiben aus: erst messen, ob alte Gebote die schlechten Fills sind
     max_inventory_usd: 100       # einseitiger Bestand je Markt
     max_event_usd: 150           # alle Märkte desselben Events zusammen (Buckets teilen sich das Limit)
     max_total_inventory_usd: 1500
@@ -934,15 +946,26 @@ scenarios:
     prefilter: 80
     list_orders: [volume, liquidity, volume24hr, startDate]
     min_daily_rate: 5
+    rewards_active: true         # nur ein laufendes Reward-Programm (Gamma clobRewards, siehe mm_robust)
+    min_event_volume_24h: 10000
     skip_categories: [Sport, Krypto]
     min_days_to_end: 30
     stop_hours_before_end: 24
-    min_mid: 0.15
-    max_mid: 0.85
+    min_mid: 0.10
+    max_mid: 0.90
     min_liquidity: 1000
-    quote_frac: 0.85             # weit weg: 85 % des Reward-Abstands (1,0 läge außerhalb und zählt nicht)
-    min_quote_frac: 0.85         # Pause/Paar/Treppe dürfen nicht näher heran
+    quote_frac: 0.85             # in der Mitte (30–70 ct) weit weg: 85 % des Reward-Abstands
+    min_quote_frac: 0.85         # Verkaufsgebot und die symmetrische Zone bleiben so weit weg
     quote_usd: 15
+    skew:                        # dieselbe Schräge wie mm_robust, nur vorsichtiger: Favorit etwas näher,
+                                 # Außenseiter so weit weg wie es noch zählt, und klein. 0 bei long_usd = Seite aus.
+      band_lo: 0.30
+      band_hi: 0.70
+      min_mid: 0.10
+      max_mid: 0.90
+      fav_frac: 0.50             # näher als 0,85, weiter weg als bei mm_robust
+      long_frac: 0.95
+      long_usd: 5
     max_inventory_usd: 40
     max_total_inventory_usd: 300
     pause:                       # wie mm_ruhig: Sprung der Mitte → eine Weile nicht bieten

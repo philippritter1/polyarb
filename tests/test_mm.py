@@ -790,3 +790,159 @@ def test_min_share_pulls_quotes_and_sells_inventory_only_when_set(tmp_path):
     assert mk.bid_yes is None and mk.bid_no is None and mk.qty_yes == 0
     assert crowded.scan.get("Reward-Anteil unter Schwelle", 0) >= 1
     assert crowded.scan.get("Bestand abgestoßen (Bid)", 0) >= 1
+
+
+SKEW = dict(band_lo=0.30, band_hi=0.70, min_mid=0.10, max_mid=0.90, fav_frac=0.25, long_frac=0.75, long_usd=15)
+
+
+def test_reward_program_window_and_event_volume_are_opt_in(tmp_path):
+    from arb.mm import volume_24h
+    ended = "2020-01-01T00:00:00Z"
+    later = "2027-06-01T00:00:00Z"
+    assert volume_24h({"events": [{"volume24hr": 12000}], "volume24hr": 100}) == 12000
+    assert volume_24h({"volume24hrClob": 8000}) == 8000
+    stale = {"clobRewards": [{"rewardsDailyRate": 40, "endDate": ended}], "rewardsMaxSpread": 4, "rewardsMinSize": 20}
+    assert rewards_of(stale)[0] == 40  # legacy: the listed rate, dates ignored
+    assert rewards_of(stale, NOW, True)[0] == 0
+    assert rewards_of({"clobRewards": [{"rewardsDailyRate": 9}], "rewardsMaxSpread": 4, "rewardsMinSize": 20},
+                      NOW, True)[0] == 9  # no dates: treated as running
+    def dated(cid, question, when, key):
+        m = _m(cid, question, 0.40, rate=40, events=[{"id": cid, "volume24hr": 50000}])
+        m["clobRewards"] = [{"rewardsDailyRate": 40, key: when}]
+        return m
+    ms = [_m("a", "Big event market", 0.40, events=[{"id": "e", "volume24hr": 20000}]),
+          _m("b", "Small event market", 0.40, events=[{"id": "s", "volume24hr": 1000}]),
+          dated("c", "Rewards already over", ended, "endDate"),
+          dated("d", "Rewards not started", later, "startDate")]
+    plain = MarketMaker("mm_rewards", _cfg(tmp_path / "plain"), Client(ms), SimClock(NOW), books=BookStore(), pool=None)
+    plain.select(NOW)
+    assert set(plain.st.markets) == {"a", "b", "c", "d"}
+    flt = MarketMaker("mm_rewards", _cfg(tmp_path / "flt", rewards_active=True, min_event_volume_24h=10000),
+                      Client(ms), SimClock(NOW), books=BookStore(), pool=None)
+    flt.select(NOW)
+    assert list(flt.st.markets) == ["a"]
+    assert flt.scan["Ereignis-Volumen 24h zu klein"] == 1 and flt.scan["Reward-Programm nicht aktiv"] == 2
+    row = flt.store.db.execute(
+        "SELECT daily_rate, max_spread_ct, min_size, volume_24h, programs FROM mm_reward_params").fetchone()
+    assert row[0] == 50 and row[1] == 4 and row[2] == 20 and row[3] == 20000 and "ohne Datum" in row[4]
+
+
+def test_skew_leans_to_the_favourite_and_quotes_the_middle_symmetrically(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, skew=dict(SKEW), min_mid=0.10, max_mid=0.90),
+                     Client([_m("a", "Will the favourite win?", 0.80), _m("b", "Will it be close?", 0.50)]),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.78, 0.82)
+    _book(store, "b", 0.48, 0.52)
+    mm.step()
+    fav, midm = mm.st.markets["a"], mm.st.markets["b"]
+    assert fav.bid_yes["price"] == 0.79 and fav.bid_no["price"] == 0.17  # closer / further than half the 4 ct band
+    assert fav.bid_no["price"] * fav.bid_no["size"] <= 15 + 1e-6
+    assert fav.bid_yes["size"] >= 20 and midm.bid_yes["price"] == midm.bid_no["price"] == 0.48
+    y, n = mm.planned_quotes(0.80, 0.04, 20)
+    mm.sc["skew"] = dict(SKEW, long_usd=0)
+    y_off, n_off = mm.planned_quotes(0.80, 0.04, 20)
+    assert y_off and n_off is None and y and n
+    book = OrderBook("Y", [Level(0.78, 100)], [Level(0.82, 100)])
+    other = OrderBook("N", [Level(0.18, 100)], [Level(0.22, 100)])
+    assert reward_share(book, other, y_off, None, 0.80, 0.04, 20) < reward_share(book, other, y, n, 0.80, 0.04, 20)
+    _book(store, "b", 0.94, 0.96)  # live mid above 0.90: both bids pulled
+    mm.clock.sleep(2)
+    mm._last["select"] = mm.clock.now()
+    mm.step()
+    assert mm.st.markets["b"].bid_yes is None and mm.st.markets["b"].bid_no is None
+    assert mm.scan["Mitte zu extrem (Gebot)"] >= 1
+
+
+def test_fill_records_quote_age_band_and_markouts(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path), Client([_m("a", "Will the Fed cut rates?", 0.50)], res={"aY": 0}),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    store.trades.append(("aY", 0.47, 30, NOW + 5))
+    mm.clock.sleep(10)
+    mm.step()
+    age, dist, band, price = mm.store.db.execute("SELECT age_s, dist, band, price FROM mm_markout").fetchone()
+    assert band == "mitte" and abs(dist - 0.02) < 1e-9 and 9 <= age <= 11 and price == 0.48
+    _book(store, "a", 0.40, 0.44)
+    mm.clock.sleep(3600)
+    mm.update_markouts(mm.clock.now(), store.books(["aY", "aN"]))
+    m1, m5, m60 = mm.store.db.execute("SELECT m1, m5, m60 FROM mm_markout").fetchone()
+    assert m1 == m5 == m60 == round((0.42 - 0.48) * 30, 4)
+    mm.st.markets["a"].end_ts = mm.clock.now() - 1
+    mm.settle(mm.clock.now())
+    assert mm.store.db.execute("SELECT m_res FROM mm_markout").fetchone()[0] == round((0 - 0.48) * 30, 4)
+    import dashboard
+    mm.store.commit()
+    db = str(tmp_path / "scenario-mm_rewards.sqlite")
+    rows = dashboard.markout_rows(db)
+    assert rows[0][9] == 2.0 and rows[0][14] == age and rows[0][15] == "Mitte" and rows[0][16] == m1
+    ages = dashboard.markout_age(db)
+    hit = [r for r in ages if r[0] == "< 30 s" and r[1] == "Mitte"]
+    assert hit and hit[0][2] == 1 and abs(hit[0][6] - (m60 / (0.48 * 30))) < 1e-3
+    page = tmp_path / "dash" / "index.html"
+    dashboard.build(db, str(page), 1000, kind="mm", title="MM")
+    text = page.read_text(encoding="utf-8")
+    assert "Gebotsalter und Favorit" in text and "< 30 s" in text
+    assert "Gebotsalter s" in (page.parent / "fills.csv").read_text(encoding="utf-8")
+    assert (page.parent / "gebotsalter.csv").exists()
+
+
+def test_quote_refresh_options_do_nothing_unless_set(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path / "off", reprice_ticks=5),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    ts, px = mm.st.markets["a"].bid_yes["placed_ts"], mm.st.markets["a"].bid_yes["price"]
+    mm.clock.sleep(120)
+    mm._last["select"] = mm.clock.now()
+    _book(store, "a", 0.49, 0.53)  # one tick: inside reprice_ticks 5, and no age limit
+    mm.step()
+    assert mm.st.markets["a"].bid_yes["placed_ts"] == ts and mm.st.markets["a"].bid_yes["price"] == px
+    assert "mid" not in mm.st.markets["a"].bid_yes
+
+    aged = BookStore()
+    mm2 = MarketMaker("mm_rewards", _cfg(tmp_path / "age", max_quote_age_s=30, reprice_ticks=5),
+                      Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=aged, pool=None)
+    _book(aged, "a", 0.48, 0.52)
+    mm2.step()
+    ts = mm2.st.markets["a"].bid_yes["placed_ts"]
+    mm2.clock.sleep(10)
+    mm2._last["select"] = mm2.clock.now()
+    mm2.step()
+    assert mm2.st.markets["a"].bid_yes["placed_ts"] == ts
+    mm2.clock.sleep(40)
+    mm2._last["select"] = mm2.clock.now()
+    mm2.step()
+    assert mm2.st.markets["a"].bid_yes["placed_ts"] > ts
+    assert mm2.scan.get("Gebote wegen Alter erneuert", 0) >= 1
+
+    moved = BookStore()
+    mm3 = MarketMaker("mm_rewards", _cfg(tmp_path / "rq", requote_ticks=1, reprice_ticks=5),
+                      Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=moved, pool=None)
+    _book(moved, "a", 0.48, 0.52)
+    mm3.step()
+    ts = mm3.st.markets["a"].bid_yes["placed_ts"]
+    assert mm3.st.markets["a"].bid_yes.get("mid") == 0.5
+    mm3.clock.sleep(5)
+    mm3._last["select"] = mm3.clock.now()
+    _book(moved, "a", 0.49, 0.53)
+    mm3.step()
+    assert mm3.st.markets["a"].bid_yes["placed_ts"] > ts and mm3.st.markets["a"].bid_yes["price"] == 0.49
+
+
+def test_running_scenarios_do_not_pick_up_the_new_filters():
+    import yaml
+    sc = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
+    for name in ("mm_robust", "mm_konservativ"):
+        s = sc[name]
+        assert s["enabled"] is False and s["rewards_active"] is True and s["min_event_volume_24h"] >= 10000
+        assert s["min_mid"] <= 0.10 and s["max_mid"] >= 0.90
+        assert s["skew"]["long_usd"] > 0 and s["skew"]["fav_frac"] < s["quote_frac"]
+        assert "max_quote_age_s" not in s and "requote_ticks" not in s
+    for name, s in sc.items():
+        if name in ("mm_robust", "mm_konservativ"):
+            continue
+        assert "skew" not in s and "rewards_active" not in s and "min_event_volume_24h" not in s

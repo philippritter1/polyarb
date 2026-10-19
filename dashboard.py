@@ -287,27 +287,141 @@ MM_DAILY_HEADER = ["Tag", "Reward-Pool ausgewählt $/Tag", "Pool unserer Gebote 
 
 MARKOUT_HEADER = ["Zeit (UTC)", "Stunde (UTC)", "Markt", "Kategorie", "Seite", "Preis", "Menge", "Betrag $",
                   "Mitte beim Fill", "Abstand zur Mitte (ct)", "Tage bis Ende", "Kursbewegung 5 Min $",
-                  "Kursbewegung 60 Min $", "Kursbewegung 60 Min je Anteil (ct)"]
+                  "Kursbewegung 60 Min $", "Kursbewegung 60 Min je Anteil (ct)", "Gebotsalter s",
+                  "Seite (Favorit/Außenseiter/Mitte)", "Kursbewegung 1 Min $", "Kursbewegung bis Auflösung $"]
+
+AGE_HEADER = ["Gruppe", "Seite", "Fills", "gefüllt $", "1 Min je 1 $", "5 Min je 1 $", "60 Min je 1 $",
+              "Auflösung je 1 $"]
+
+
+def _band_label(band, price) -> str:
+    names = {"favorit": "Favorit", "ausenseiter": "Außenseiter", "mitte": "Mitte"}
+    if band in names:
+        return names[band]
+    if price is None:
+        return ""
+    if price >= 0.70:
+        return "Favorit"
+    if price <= 0.30:
+        return "Außenseiter"
+    return "Mitte"
 
 
 def markout_rows(db_path: str) -> list:
-    """One row per fill of a market-making scenario: what it was and how the price moved 5 / 60 min later."""
+    """One row per fill of a market-making scenario: what it was and how the price moved afterwards."""
     try:
         db = sqlite3.connect(db_path)
         cols = {r[1] for r in db.execute("PRAGMA table_info(mm_markout)")}
         if not cols:
             return []
-        ext = all(c in cols for c in ("title", "cat", "mid", "days_left", "usd"))
-        q = ("SELECT ts, title, cat, side, price, qty, usd, mid, days_left, m5, m60 FROM mm_markout ORDER BY ts" if ext else
-             "SELECT ts, NULL, NULL, side, price, qty, price * qty, NULL, NULL, m5, m60 FROM mm_markout ORDER BY ts")
+        def c(name, fallback):
+            return name if name in cols else fallback
+        ext = all(x in cols for x in ("title", "cat", "mid", "days_left", "usd"))
+        title, cat, usd, mid, days = ("title", "cat", "usd", "mid", "days_left") if ext else (
+            "NULL", "NULL", "price * qty", "NULL", "NULL")
+        q = (f"SELECT ts, {title}, {cat}, side, price, qty, {usd}, {mid}, {days}, "
+             f"{c('m5', 'NULL')}, {c('m60', 'NULL')}, {c('age_s', 'NULL')}, {c('band', 'NULL')}, "
+             f"{c('m1', 'NULL')}, {c('m_res', 'NULL')} FROM mm_markout ORDER BY ts")
         out = []
-        for ts, title, cat, side, price, qty, usd, mid, days, m5, m60 in db.execute(q):
+        for ts, title, cat, side, price, qty, usd, mid, days, m5, m60, age, band, m1, mres in db.execute(q):
             t = _time.gmtime(ts)
             out.append([_time.strftime("%Y-%m-%d %H:%M", t), t.tm_hour, title or "", cat or "", "JA" if side == "yes" else "NEIN",
                         price, qty, usd, mid, None if mid is None else round((mid - price) * 100, 2), days, m5, m60,
-                        None if m60 is None or not qty else round(m60 / qty * 100, 2)])
+                        None if m60 is None or not qty else round(m60 / qty * 100, 2), age, _band_label(band, price),
+                        m1, mres])
         db.close()
         return out
+    except sqlite3.Error:
+        return []
+
+
+def _per_dollar(total, usd):
+    return None if not usd else round(total / usd, 4)
+
+
+def markout_age(db_path: str) -> list:
+    """Quote-age buckets against the later price move, and the same split by favourite / longshot / middle.
+    Each number after the filled dollars is the markout per 1 $ filled (0.037 = +3.7 %). Old fills have no
+    quote age; they still count in the 'alle Alter' rows, with the side taken from the fill price."""
+    try:
+        db = sqlite3.connect(db_path)
+        cols = {r[1] for r in db.execute("PRAGMA table_info(mm_markout)")}
+        if "price" not in cols:
+            db.close()
+            return []
+        def c(name, fallback):
+            return name if name in cols else fallback
+        q = (f"SELECT {c('age_s', 'NULL')}, {c('band', 'NULL')}, price, {c('usd', 'price * qty')}, "
+             f"{c('m1', 'NULL')}, {c('m5', 'NULL')}, {c('m60', 'NULL')}, {c('m_res', 'NULL')} FROM mm_markout")
+        raw = db.execute(q).fetchall()
+        db.close()
+    except sqlite3.Error:
+        return []
+    buckets = (("< 30 s", 0, 30), ("30 s – 2 min", 30, 120), ("2 – 10 min", 120, 600), ("> 10 min", 600, 1e18))
+
+    def band_of(band, price):
+        if band in ("favorit", "ausenseiter", "mitte"):
+            return band
+        if price is None:
+            return None
+        return "favorit" if price >= 0.70 else "ausenseiter" if price <= 0.30 else "mitte"
+
+    def pack(rows):
+        cells = {}
+        for age, band, price, usd, m1, m5, m60, mres in rows:
+            key = band_of(band, price)
+            if key is None or not usd:
+                continue
+            slot = cells.setdefault(key, [0, 0.0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0, 0])
+            slot[0] += 1
+            slot[1] += usd
+            for i, val in ((2, m1), (4, m5), (6, m60), (8, mres)):
+                if val is not None:
+                    slot[i] += val
+                    slot[i + 1] += usd
+        order = (("favorit", "Favorit"), ("ausenseiter", "Außenseiter"), ("mitte", "Mitte"))
+        out = []
+        for key, label in order:
+            s = cells.get(key)
+            if not s:
+                continue
+            out.append([label, s[0], round(s[1], 2), _per_dollar(s[2], s[3]), _per_dollar(s[4], s[5]),
+                        _per_dollar(s[6], s[7]), _per_dollar(s[8], s[9])])
+        if len(cells) > 1:
+            n = sum(s[0] for s in cells.values())
+            usd = sum(s[1] for s in cells.values())
+            def mix(i):
+                den = sum(s[i + 1] for s in cells.values())
+                num = sum(s[i] for s in cells.values())
+                return _per_dollar(num, den)
+            out.append(["alle Seiten", n, round(usd, 2), mix(2), mix(4), mix(6), mix(8)])
+        return out
+
+    table = []
+    for name, lo, hi in buckets:
+        hit = [r for r in raw if r[0] is not None and lo <= r[0] < hi]
+        for row in pack(hit):
+            table.append([name, *row])
+    for row in pack(raw):
+        table.append(["alle Alter", *row])
+    return table
+
+
+def reward_param_rows(db_path: str) -> list:
+    """Latest selection's reward params per market (Gamma clobRewards / rewardsMaxSpread / rewardsMinSize)."""
+    try:
+        db = sqlite3.connect(db_path)
+        if "mm_reward_params" not in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}:
+            db.close()
+            return []
+        last = db.execute("SELECT MAX(ts) FROM mm_reward_params").fetchone()[0]
+        if last is None:
+            db.close()
+            return []
+        rows = db.execute("""SELECT title, daily_rate, max_spread_ct, min_size, volume_24h, programs
+                             FROM mm_reward_params WHERE ts=? ORDER BY daily_rate DESC""", (last,)).fetchall()
+        db.close()
+        return [[t, r, s, n, v, p] for t, r, s, n, v, p in rows]
     except sqlite3.Error:
         return []
 
@@ -472,6 +586,10 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     mo = markout_rows(db_path) if kind == "mm" else []
     if mo:
         _write(Path(out).with_name("fills.csv"), _csv(MARKOUT_HEADER, mo), "utf-8-sig")
+    ages = markout_age(db_path) if kind == "mm" else []
+    if ages:
+        _write(Path(out).with_name("gebotsalter.csv"), _csv(AGE_HEADER, ages), "utf-8-sig")
+    rparams = reward_param_rows(db_path) if kind == "mm" else []
     sniper = sniper_summary(db_path) if kind == "wxsniper" else None
     if sniper:
         sdb = sqlite3.connect(db_path)
@@ -486,7 +604,7 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
             "utf-8-sig")
     data.update(source=source, kind=kind, nav=nav or [], overview=overview or [], scan=scan or {}, capacity=cap,
                 sniper=sniper,
-                metrics=metrics, rewards_cmp=rcmp, reward_share=rshare,
+                metrics=metrics, rewards_cmp=rcmp, reward_share=rshare, markout_age=ages, reward_params=rparams,
                 title=title or "Polymarket Arbitrage – Paper Trading")
     html = TEMPLATE.replace("/*__DATA__*/null", json.dumps(data, default=float))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -731,8 +849,11 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
             files.append((p["label"], "Market Making je Tag: Pool, unser Anteil, Spread, Rewards (Trend)", rel + "kennzahlen.csv",
                           folder / "kennzahlen.csv", f"{slug}/kennzahlen.csv"))
         if (folder / "fills.csv").exists():
-            files.append((p["label"], "Jeder Fill: Markt, Kategorie, Abstand, Kursbewegung 5/60 Min. danach", rel + "fills.csv",
-                          folder / "fills.csv", f"{slug}/fills.csv"))
+            files.append((p["label"], "Jeder Fill: Markt, Kategorie, Abstand, Gebotsalter, Kursbewegung 1/5/60 Min.",
+                          rel + "fills.csv", folder / "fills.csv", f"{slug}/fills.csv"))
+        if (folder / "gebotsalter.csv").exists():
+            files.append((p["label"], "Gebotsalter und Favorit/Außenseiter gegen die Kursbewegung je 1 $ gefüllt",
+                          rel + "gebotsalter.csv", folder / "gebotsalter.csv", f"{slug}/gebotsalter.csv"))
         if (folder / "scan.csv").exists():
             files.append((p["label"], "Letzter Scan: wo Märkte am Filter hängen bleiben", rel + "scan.csv",
                           folder / "scan.csv", f"{slug}/scan.csv"))
@@ -1284,6 +1405,8 @@ td.t{max-width:300px;overflow:hidden;text-overflow:ellipsis}
 <div class="kpis" id="kpis"></div>
 <div class="card" id="rwcard" style="display:none"><h2>Pilot: Rewards echt vs. geschätzt</h2><p class="note">Was Polymarket für unsere echten Gebote tatsächlich gezahlt hat (einmal täglich abgerechnet, Tag = UTC), neben unserer Schätzung für denselben Tag. Die Kernzahl des Pilots: liegt „echt / geschätzt“ deutlich unter 100 %, überschätzt die Simulation die Rewards.</p><div class="tblwrap"><table id="rwtbl"></table></div><p class="note" id="rsnote" style="display:none">Laufend, auch unter der Auszahlungsgrenze von 1 $/Tag: Polymarkets eigener Anteil am Pool unserer Märkte (alle 10 Min. abgefragt) × Tagesbudget, neben unserer Schätzung zum selben Zeitpunkt. „bisher verdient“ = was Polymarket für den Tag schon ausweist.</p><div class="tblwrap"><table id="rstbl"></table></div></div>
 <div class="card" id="mmcard" style="display:none"><h2>Market Making: Kennzahlen je Tag</h2><p class="note">Woran man merkt, dass das Reward-Geschäft nachlässt: <b>Pool</b> sinkt = Polymarket kürzt; <b>Anteil am Pool</b> sinkt bei gleichem Pool = mehr Konkurrenz; <b>Spread/Auflösung</b> ist der Handel, dauerhaft negativ = Verluste an Informierte. Rewards sind geschätzt und nicht Teil von „realisiert“. Bestand zum Bid. Stündlich gemessen, Tag = Ortszeit.</p><div class="tblwrap"><table id="mmtbl"></table></div></div>
+<div class="card" id="agecard" style="display:none"><h2>Market Making: Gebotsalter und Favorit gegen Außenseiter</h2><p class="note">Kursbewegung je 1 $ gefüllt, nachdem das Gebot so lange im Buch lag. Negativ heißt: der Kurs lief nach dem Fill gegen uns. Liegt das vor allem bei alten Geboten, sind die Quotes zu langsam. <b>Favorit</b> = gekaufte Seite ab 70 ct, <b>Außenseiter</b> = bis 30 ct, sonst <b>Mitte</b>. „alle Alter“ enthält auch Fills von vor dem Gebotsalter. Auflösung ist der Wert der Seite am Ende minus Kaufpreis.</p><div class="tblwrap"><table id="agetbl"></table></div></div>
+<div class="card" id="rwparam" style="display:none"><h2>Reward-Parameter der ausgewählten Märkte</h2><p class="note">Aus der Gamma-Liste beim letzten Auswahl-Lauf: Tagesbudget (<code>clobRewards.rewardsDailyRate</code>), maximaler Abstand (<code>rewardsMaxSpread</code>, in Cent), Mindestgröße (<code>rewardsMinSize</code>, Anteile) und der Zeitraum des Programms. Ohne Datum gilt der Satz als laufend. Geboten wird nur, wo das Tagesbudget die Schwelle erreicht.</p><div class="tblwrap"><table id="rwparamtbl"></table></div></div>
 <div class="card" id="capcard" style="display:none"><h2>Kapazität: Wie viel Geld hätte der Markt genommen?</h2><p class="note">Je Markttag: alle Gelegenheiten, die die Regel erfüllten (auch wenn das Budget- oder Tageslimit den Kauf verhindert hat), und wie viel Geld zu dem Zeitpunkt im Orderbuch lag. <b>Bis Kaufgrenze</b> = was die Strategie wirklich kaufen würde (bester Ask + max_slippage des Szenarios, meist 1 Cent). Gezählt wird je Markt das Maximum über alle Scans.</p><div class="tblwrap"><table id="captbl"></table></div></div>
 <div class="card"><h2>Equity</h2><p class="note" id="eqnote">Gesamtwert = Cash + gebundene Körbe (zu Kosten) + offene Reste (zum Bid). Startkapital als Referenzlinie.</p><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Equity (inkl. offener Positionen)</span><span><i class="sw" style="background:var(--s3)"></i><span id="eqlegl">Vermögen realisiert (Start + realisierter PnL)</span></span></div><div id="eq"></div></div>
 <div class="grid2">
@@ -1347,7 +1470,16 @@ if(D.rewards_cmp&&D.rewards_cmp.length){
 if(D.metrics&&D.metrics.length){
  $("mmtbl").innerHTML=`<tr><th>Tag</th><th class="num">Pool ausgewählt</th><th class="num">Pool unserer Gebote</th><th class="num">Rewards/Tag (geschätzt)</th><th class="num">Anteil am Pool</th><th class="num">Spread/Auflösung</th><th class="num">Rewards</th><th class="num">Rebates</th><th class="num">Bestand</th><th class="num">Märkte</th><th class="num">Ausführungen</th><th class="num">Std.</th></tr>`+
   D.metrics.map(m=>`<tr><td>${m[0]}</td><td class="num">${usd(m[1])}</td><td class="num">${usd(m[2])}</td><td class="num">${usd(m[3])}</td><td class="num">${m[4]==null?"–":fmt(m[4],2)+" %"}</td><td class="num ${m[5]>0?"pos":m[5]<0?"neg":""}">${usd(m[5])}</td><td class="num">${usd(m[6])}</td><td class="num">${usd(m[7])}</td><td class="num">${usd(m[8])}</td><td class="num">${m[9]}</td><td class="num">${m[10]}</td><td class="num">${m[11]}</td></tr>`).join("");
- $("mmcard").style.display=""}
+  $("mmcard").style.display=""}
+if(D.markout_age&&D.markout_age.length){
+ const cell=v=>v==null?"–":pct(v);
+ $("agetbl").innerHTML=`<tr><th>Gebotsalter</th><th>Seite</th><th class="num">Fills</th><th class="num">gefüllt</th><th class="num">1 Min je 1 $</th><th class="num">5 Min je 1 $</th><th class="num">60 Min je 1 $</th><th class="num">Auflösung je 1 $</th></tr>`+
+  D.markout_age.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td class="num">${r[2]}</td><td class="num">${usd(r[3])}</td><td class="num">${cell(r[4])}</td><td class="num">${cell(r[5])}</td><td class="num">${cell(r[6])}</td><td class="num">${cell(r[7])}</td></tr>`).join("");
+ $("agecard").style.display=""}
+if(D.reward_params&&D.reward_params.length){
+ $("rwparamtbl").innerHTML=`<tr><th>Markt</th><th class="num">$/Tag</th><th class="num">Abstand ct</th><th class="num">Mindestgröße</th><th class="num">Volumen 24 h</th><th>Programm</th></tr>`+
+  D.reward_params.map(r=>`<tr><td class="t">${r[0]}</td><td class="num">${usd(r[1])}</td><td class="num">${fmt(r[2],1)}</td><td class="num">${fmt(r[3],0)}</td><td class="num">${usd(r[4])}</td><td>${r[5]}</td></tr>`).join("");
+ $("rwparam").style.display=""}
 if(D.sniper){const S=D.sniper;
  $("snipnote").textContent="Jeder Bucket, den die Station schon ausgeschlossen hat, wird mit dem echten NO-Buch geloggt. Papierkauf nur zum besten Ask, und nur wenn der angezeigte JA-Preis noch über der Schwelle liegt und am Ask Größe da ist. Edge = 1 − NO-Ask. Die Kurve dieser Seite beginnt mit dem ersten Scan.";
  const tile=(l,v,d)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;

@@ -22,6 +22,9 @@ Inventory exit (config `exit:`, off unless set): a one-sided position older than
 order at the mid plus the quote distance (filled strictly by a trade ABOVE it, or a complementary trade below
 1 - price); still held after `dump_after_h`, it is sold at the best bid as a taker (fee paid). Without it the
 inventory waits for resolution – capital sits idle, possibly for weeks, and earns no rewards.
+`wind_down` stops new quotes. `unwind: active` (only together with `wind_down`, paper only) sells each held
+token into the bid, one slice per loop, at most `depth_haircut` of each level and never more than
+`max_unwind_slippage` (default 2 cents) below the current best bid.
 
 Skew (`skew:`, off unless the scenario sets it): between a mid of 0.30 and 0.70 both sides are quoted the same.
 Outside that, the favourite (the side priced at 0.70 or more) stands closer and the longshot is smaller or
@@ -45,7 +48,8 @@ from typing import Dict, List, Optional, Tuple
 from .memtrim import release_memory
 from .client import FeeResolver, _parse_json_list, _parse_ts
 from .scenarios import _iso
-from .models import Basket, ExecutionResult, FeeSpec, Fill, Leg, Opportunity, OrderBook
+from .models import Basket, ExecutionResult, FeeSpec, Fill, Leg, Level, Opportunity, OrderBook
+from .paper import ConsumedLiquidity, _ioc
 from .storage import Store
 
 log = logging.getLogger("polyarb.mm")
@@ -351,6 +355,15 @@ class MarketMaker:
         self.books, self.pool = books, pool
         self.latency = float(sc.get("latency_s", 1.0))
         self.tick = float(sc.get("tick", 0.01))
+        ex = cfg.get("execution") or {}
+        self.haircut = float(ex.get("depth_haircut", 0.5))
+        # paper fills do not reach the exchange, so a bid we just sold is not there again until it
+        # disappears from the live book or consumed_ttl_s passes (makers re-quote)
+        self._consumed = ConsumedLiquidity(float(ex.get("consumed_ttl_s", 60)))
+        self._unwind_res: Dict[str, Tuple[float, bool]] = {}
+        self._unwind_why: Dict[tuple, str] = {}
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_unwind(ts REAL, cid TEXT, title TEXT, side TEXT,
+            qty REAL, vwap REAL, bid REAL, pnl REAL, vs_bid REAL)""")
         self._last = dict(select=-1e18, sample=None, equity=-1e18, settle=-1e18, book=-1e18, metrics=self.clock.now())
         # hourly trend of the reward business (does the pool shrink? does competition eat our share?) – only
         # measured, it changes nothing in the trading; dashboard: "Kennzahlen je Tag", report: one line each
@@ -1106,6 +1119,117 @@ class MarketMaker:
         self.quoted = set()
         self.scan["wind_down"] = "keine neuen Gebote"
 
+    def _active_unwind(self) -> bool:
+        return bool(self.sc.get("wind_down")) and str(self.sc.get("unwind") or "") == "active"
+
+    def _unwind_closed(self, mk: MMMarket, now: float) -> bool:
+        """Resolved or already past the end: settlement pays the position, a sale would not."""
+        if mk.end_ts and now >= mk.end_ts - 1e-9:
+            return True
+        hit = self._unwind_res.get(mk.yes)
+        if hit and now - hit[0] < 600:
+            return hit[1]
+        try:
+            resolved = self.client.token_resolution(mk.yes) is not None
+        except Exception:  # noqa
+            resolved = False
+        self._unwind_res[mk.yes] = (now, resolved)
+        return resolved
+
+    def _unwind_slice(self, ob: Optional[OrderBook], held: float, slip: float):
+        """One taker slice: haircut of each bid level, down to best bid minus `slip`, nothing below the minimum."""
+        if ob is None or not ob.bids or ob.best_bid is None:
+            return [], None, "kein Bid"
+        mark = float(ob.best_bid)
+        floor = mark - slip
+        levels = [Level(lv.price, lv.size) for lv in ob.bids if lv.price + 1e-9 >= floor]
+        if not levels:
+            return [], mark, f"unter Slippage-Boden ({mark:.3f} − {slip:.3f})"
+        _filled, parts = _ioc(levels, floor, held, "SELL", self.haircut)
+        qty = math.floor(sum(z for _, z in parts) * 100) / 100
+        if qty + 1e-9 < float(ob.min_order_size):
+            return [], mark, f"unter Mindestgröße ({qty:.2f} < {ob.min_order_size})"
+        kept, left = [], qty
+        for price, size in parts:
+            take = min(size, left)
+            if take > 1e-9:
+                kept.append((price, take))
+            left -= take
+            if left <= 1e-9:
+                break
+        return kept, mark, ""
+
+    def _book_unwind(self, mk: MMMarket, side: str, parts: list, mark: float, now: float) -> None:
+        qty = sum(z for _, z in parts)
+        notional = sum(p * z for p, z in parts)
+        fee = sum(mk.fee_rate * (p * (1 - p)) ** mk.fee_exp * z for p, z in parts)
+        vwap = notional / qty
+        held = mk.qty_yes if side == "yes" else mk.qty_no
+        cost = (mk.cost_yes if side == "yes" else mk.cost_no) * qty / held
+        proceeds = notional - fee
+        pnl = proceeds - cost
+        vs = proceeds - mark * qty
+        if side == "yes":
+            mk.qty_yes -= qty
+            mk.cost_yes -= cost
+        else:
+            mk.qty_no -= qty
+            mk.cost_no -= cost
+        self.st.cash += proceeds
+        self.st.realized += pnl
+        self.st.exit_pnl += pnl
+        self.st.exit_usd += proceeds
+        self.store.settlement(now, f"{self.name}:{mk.cid}", "unwind", qty, proceeds, pnl)
+        self.store.db.execute("INSERT INTO mm_unwind VALUES(?,?,?,?,?,?,?,?,?)",
+                              (now, mk.cid, (mk.title or "")[:160], side, qty, vwap, mark, pnl, vs))
+        label = "JA" if side == "yes" else "NEIN"
+        log.info("%s: Unwind %s %.2f @ %.3f (Bid %.3f, vs Bid %+.2f, realisiert %+.2f) %s",
+                 self.name, label, qty, vwap, mark, vs, pnl, (mk.title or "")[:80])
+
+    def unwind(self, now: float, books: Dict[str, OrderBook]) -> None:
+        """Sell held tokens into the bid. No new quotes. Resolved markets are left for settle()."""
+        if self.gw is not None and self.gw.live:
+            self.scan["Unwind"] = "nur Papier"
+            return
+        slip = float(self.sc.get("max_unwind_slippage", 0.02))
+        books = self._consumed.apply(books, now)
+        reasons = []
+        n_closed = 0
+        for mk in self.st.markets.values():
+            mk.bid_yes = mk.bid_no = mk.ask = None
+            if self._unwind_closed(mk, now):
+                n_closed += 1
+                continue
+            for side, qty in (("yes", mk.qty_yes), ("no", mk.qty_no)):
+                if qty <= 1e-9:
+                    continue
+                tok = mk.yes if side == "yes" else mk.no
+                parts, _mark, why = self._unwind_slice(books.get(tok), qty, slip)
+                if not parts:
+                    reasons.append(f"{(mk.title or mk.cid)[:60]} {side}: {why}")
+                    key = (mk.cid, side)
+                    if self._unwind_why.get(key) != why:
+                        self._unwind_why[key] = why
+                        log.info("%s: Unwind bleibt %s %.2f (%s) %s", self.name,
+                                 "JA" if side == "yes" else "NEIN", qty, why, (mk.title or "")[:80])
+                    continue
+                self._unwind_why.pop((mk.cid, side), None)
+                self._book_unwind(mk, side, parts, _mark, now)
+                if self.haircut > 0:  # the haircut is the share we get; the rest of the level is taken by others
+                    self._consumed.add([(tok, "bids", p, z / self.haircut) for p, z in parts], now)
+        row = self.store.db.execute(
+            "SELECT COALESCE(SUM(qty),0), COALESCE(SUM(pnl),0), COALESCE(SUM(vs_bid),0), COUNT(*) FROM mm_unwind"
+        ).fetchone()
+        self.scan["Unwind verkauft Stk"] = round(row[0], 2)
+        self.scan["Unwind realisiert $"] = round(row[1], 2)
+        self.scan["Unwind vs Bid $"] = round(row[2], 2)
+        self.scan["Unwind Verkäufe"] = row[3]
+        self.scan["Unwind geblieben"] = len(reasons)
+        self.scan["Unwind Auflösung"] = n_closed
+        if reasons:
+            self.scan["Unwind Grund"] = reasons[0] if len(reasons) == 1 else f"{len(reasons)} Reste, z. B. {reasons[0]}"
+        self.scan["wind_down"] = "Abbau in den Bid"
+
     # ------------------------------------------------------------------ quoting
     def quote(self, now: float, books: Dict[str, OrderBook]) -> None:
         if self.sc.get("wind_down"):
@@ -1452,6 +1576,9 @@ class MarketMaker:
                 meta[mk.yes] = meta[mk.no] = info
             self.booklog.record(now, books, meta, getattr(self.books, "last", None))
         live = self.gw is not None and self.gw.live
+        if self._active_unwind():  # drop resting bids before the fill pass, so wind-down does not buy again
+            for mk in self.st.markets.values():
+                mk.bid_yes = mk.bid_no = mk.ask = None
         if live:
             self.books.trades.clear()  # real orders: what was really filled counts, not the simulation's guess
         else:
@@ -1459,7 +1586,10 @@ class MarketMaker:
         self.sample_rewards(now, books)
         self.update_markouts(now, books)
         self.quote(now, books)
-        self.manage_inventory(now, books)
+        if self._active_unwind():
+            self.unwind(now, books)
+        else:
+            self.manage_inventory(now, books)
         if self.gw is not None:
             self.sync_orders(now)  # in live mode this also fetches the account's fills ...
             if self.gw.live:

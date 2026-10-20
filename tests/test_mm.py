@@ -1188,3 +1188,23 @@ def test_running_scenarios_do_not_pick_up_the_new_filters():
             continue
         assert "skew" not in s and "rewards_active" not in s and "min_event_volume_24h" not in s
         assert "max_quote_age_s" not in s and "requote_ticks" not in s
+
+
+def test_jump_confirm_counts_only_jumps_that_stay(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, pause=dict(ticks=3, window_s=300, pause_s=60),
+                                        learn=dict(max_jumps=2, block_h=24, jump_confirm_s=300)),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    # flicker: up 4 ticks and straight back, twice – no jump counts
+    for b, a in [(0.48, 0.52), (0.52, 0.56), (0.48, 0.52), (0.48, 0.52), (0.52, 0.56), (0.48, 0.52), (0.48, 0.52)]:
+        _book(store, "a", b, a)
+        mm.step()
+        mm.clock.sleep(120)
+    assert not mm.blocked("a", mm.clock.now()) and mm.scan.get("Sprünge nur Flackern", 0) >= 1
+    assert not mm._ledger.get("a") or not mm._ledger["a"]["jumps"]
+    # a real move that stays: counted after 5 minutes (twice -> blocked)
+    for b, a in [(0.52, 0.56), (0.52, 0.56), (0.52, 0.56), (0.56, 0.60), (0.56, 0.60), (0.56, 0.60), (0.56, 0.60)]:
+        _book(store, "a", b, a)
+        mm.step()
+        mm.clock.sleep(120)
+    assert mm.blocked("a", mm.clock.now()) and "Kurssprünge" in mm._ledger["a"]["why"]

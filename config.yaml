@@ -646,6 +646,68 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_schutz_neu2:
+    enabled: true
+    title: Market Making (Schutz + neue Märkte 2)
+    strategy: mm                 # 20.10. Nutzer: wie mm_schutz_neu, nur zählt ein Kurssprung fürs Selbstlernen erst,
+    # wenn die Mitte 5 Min. später noch ≥ 3 Ticks verschoben ist (learn.jump_confirm_s). mm_schutz_neu sperrte >100
+    # Märkte wegen Flackern in dünnen neuen Büchern (übrig 3 Märkte, 0,14 $/Tag). Ursprünglich 16.10. (Datenauswertung): wie mm_schutz, aber Auswahl wie mm_sofort – nur Märkte
+    # < 3 Tage alt (Sim: ~10x Rewards je $ gegenüber breiter Auswahl) – plus Nachkauf-Sperre: nach einem Fill 60 Min.
+    # kein neues Gebot auf dieser Seite (Kursbewegung 60 Min. nach Fill ≈ 2x 5 Min., der Kurs läuft weiter gegen uns).
+    # Ursprünglich mm_schutz (nach Recherche): wie mm_ruhig (Treppe + Pause), dazu alles gegen schlechte
+    # Fills: Finanz/Sport-Saison/Kursmärkte raus, weiter weg von der Mitte (0,7 statt 0,5 des Reward-Abstands),
+    # Microprice (Buch-Ungleichgewicht), Gegenseite näher bei Bestand (risikolose Paare) und Selbstlernen (learn):
+    # Märkte, deren Fills mehr kosten als sie an Rewards bringen, oder die oft springen, werden gesperrt.
+    # Frage: wird Rewards − Kursbewegung nach Fill positiv (alle anderen MM-Szenarien: negativ)?
+    exit:
+      after_h: 0
+      decay_h: 6
+      dump_after_h: 96
+    reward_asks: true
+    pause:
+      ticks: 3
+      window_s: 300
+      pause_s: 600
+    learn:
+      min_fills: 2               # erst nach 2 Fills (Kursbewegung 60 Min. danach) urteilen
+      min_loss_usd: 0            # Rewards + Kursbewegung < 0 → gesperrt
+      max_jumps: 3               # oder 3 Pausen (Sprünge ≥ 3 Ticks) binnen 24 h
+      block_h: 72                # 3 Tage, bei jeder Wiederholung doppelt so lang
+      jump_confirm_s: 300        # 20.10.: Sprung zählt nur, wenn die Mitte 5 Min. später noch verschoben ist
+    fair: micro
+    pair_frac: 0.25
+    rank: share
+    list_orders: [volume, liquidity, volume24hr, startDate]   # 16.10. Nutzer: mehr Märkte durchsuchen – Gamma liefert je
+                                 # Liste max. 2.000, darum 4 Sortierungen zusammengeführt (mit den Filtern blieben ~1–3)
+    prefilter: 120
+    min_liquidity: 0
+    max_age_days: 3
+    fill_cooldown_s: 3600
+    capital_usd: 2500
+    max_markets: 20
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto, Finanz]
+    skip_re:                     # 16.10. Nutzer: Sport-Saison- und Kursmärkte meiden (dort kamen die echten Verluste)
+      - '\b(nhl|nba|nfl|mlb|wnba|mls|ncaa|ufc|nascar|f1|formula 1|premier league|la liga|bundesliga|serie a|ligue 1)\b'
+      - '\b(champions league|europa league|stanley cup|super bowl|world series|world cup|playoffs?|mvp|grand prix)\b'
+      - '\b(pga|atp|wta|heisman|ballon d.or|rookie of the year|conference finals?|regular season|championship)\b'
+      - '\b(golf|ryder cup|masters|us open|olympics?|medals?|tour de france|cricket|rugby|boxing|ufc|darts|snooker|wimbledon|roland garros|team europe|team usa|relegat\w*|top scorer|golden boot|cy young|world series|nba finals|super bowl)\b'   # 16.10.: Ryder Cup rutschte durch
+      - '\b\d+\+ ?(points|wins|goals|touchdowns|games)\b|\brecord \d+'
+      - '\b(panthers|maple leafs|bruins|rangers|oilers|canucks|flames|avalanche|lightning|capitals|penguins|blackhawks)\b'
+      - '\b(lakers|celtics|warriors|knicks|bucks|nuggets|76ers|mavericks|cavaliers|thunder|timberwolves|clippers)\b'
+      - '\b(chiefs|eagles|cowboys|49ers|packers|ravens|bills|steelers|patriots|lions|bengals|dolphins|yankees|dodgers)\b'
+      - '\b(hit|above|below|between|reach|close[sd]?|dip|high|low)\b[^?]*\$\d'   # Kurs-/Preisschwellen
+      - '\b(etf|index|s&p|nasdaq|dow|spy|qqq|stock|shares?)\b'
+    min_days_to_end: 14
+    stop_hours_before_end: 24
+    min_mid: 0.15
+    max_mid: 0.85
+    quote_frac: 0.7
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_stop:
     enabled: true
     title: Market Making (Stop-Loss)

@@ -398,6 +398,7 @@ class MarketMaker:
                                          for r in self.store.db.execute("SELECT * FROM mm_ledger")}
         self._mids: Dict[str, list] = {}    # pause: recent (ts, mid) per market
         self._paused: Dict[str, float] = {}  # pause: market -> no bids until
+        self._jump_check: Dict[str, list] = {}  # learn.jump_confirm_s: market -> [check at, mid before, mids since]
         self._cool: Dict[tuple, float] = {}  # fill_cooldown_s: (market, side) -> no new bid on that side until
         self._dumps: list = []      # live: fill-and-kill sells of the exit, sent after the next gateway sync
         self._mismatch: dict = {}   # live: account differences seen at the last read (corrected if they persist)
@@ -620,7 +621,7 @@ class MarketMaker:
             n, tot, top = pools.get(b, (0, 0.0, 0.0))
             st[f"Reward-Töpfe {b}"] = f"{n} Märkte, {tot:.0f} $/Tag, Ø {tot / n if n else 0:.0f}, max {top:.0f}"
         for k in ("Stop-Loss ausgelöst", "Pausen (schnelle Kursbewegung)", "gelernt: Märkte gesperrt", "echte Fills",
-                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt",
+                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Sprünge nur Flackern", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt",
                   "Ereignis-Grenze (Gebot)", "Gebote wegen Alter erneuert", "Gebote nach Kursbewegung erneuert"):
             if k in self.scan:  # running counters: keep them across the half-hourly selection (until 17.10. reset)
                 st[k] = self.scan[k]
@@ -1278,10 +1279,26 @@ class MarketMaker:
                 hist.append((now, mid))
                 self._mids[mk.cid] = hist
                 ms = [x[1] for x in hist]
-                if max(ms) - min(ms) >= float(pz.get("ticks", 3)) * self.tick - 1e-9:
+                jt = float(pz.get("ticks", 3)) * self.tick - 1e-9
+                confirm = float((sc.get("learn") or {}).get("jump_confirm_s", 0) or 0)
+                jc = self._jump_check.get(mk.cid)
+                if jc:
+                    jc[2].append(mid)
+                if jc and now >= jc[0]:  # jump_confirm_s: a jump counts for learn only if the mid STAYED away –
+                    del self._jump_check[mk.cid]  # the median mid over the window, so one flicker back and forth is not it
+                    seen = sorted(jc[2])
+                    if abs(seen[len(seen) // 2] - jc[1]) >= jt:
+                        self._ledger_of(mk.cid)["jumps"].append(now)
+                        self._learn_check(mk.cid, now)
+                    else:
+                        self.scan["Sprünge nur Flackern"] = self.scan.get("Sprünge nur Flackern", 0) + 1
+                if max(ms) - min(ms) >= jt:
                     if now >= self._paused.get(mk.cid, 0):
                         self.scan["Pausen (schnelle Kursbewegung)"] = self.scan.get("Pausen (schnelle Kursbewegung)", 0) + 1
-                        if sc.get("learn"):
+                        if sc.get("learn") and confirm > 0:
+                            if mk.cid not in self._jump_check:
+                                self._jump_check[mk.cid] = [now + confirm, hist[0][1], []]
+                        elif sc.get("learn"):
                             self._ledger_of(mk.cid)["jumps"].append(now)
                             self._learn_check(mk.cid, now)
                     self._paused[mk.cid] = now + float(pz.get("pause_s", 600))

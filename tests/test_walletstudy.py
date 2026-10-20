@@ -44,6 +44,9 @@ def fake_get(url, params):
     if url.endswith("/profit"):
         return [dict(proxyWallet=TRADER, amount=1234, name="pro"), dict(proxyWallet=OWN, amount=5)]
     if url == f"{DATA}/closed-positions":
+        assert params["sortBy"] == "TIMESTAMP" and params["limit"] == 50
+        if params["offset"]:
+            return []
         return [dict(realizedPnl=10, avgPrice=0.93, title="Will X happen?", conditionId="w1", endDate=NOW + 86400 * 1),
                 dict(realizedPnl=-3, avgPrice=0.15, title="Will Bitcoin hit 100k?", conditionId="w2")]
     raise AssertionError(url)

@@ -180,7 +180,13 @@ def leaderboard(api: Api) -> List[dict]:
 
 
 def trader_profile(api: Api, w: str, now: float) -> dict:
-    closed = api.list(f"{DATA}/closed-positions", {"user": w, "limit": 500})
+    closed = []  # 20.10.: the endpoint returns at most 50 per page and sorts by profit by default – the first page
+    for off in range(0, 500, 50):  # alone gave a 100 % win rate; newest first, paged, is a fair sample
+        page = api.list(f"{DATA}/closed-positions", {"user": w, "limit": 50, "offset": off,
+                                                     "sortBy": "TIMESTAMP", "sortDirection": "DESC"})
+        closed += page
+        if len(page) < 50:
+            break
     pos = closed or api.list(f"{DATA}/positions", {"user": w, "limit": 500, "sizeThreshold": 1})
     acts = api.list(f"{DATA}/activity", {"user": w, "limit": 500, "type": "TRADE"})
     first_buy: Dict[str, float] = {}

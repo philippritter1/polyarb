@@ -225,6 +225,7 @@ def calibration_card(rows: List[dict], live: Optional[dict]) -> str:
 REAL_REWARD_FACTOR = 0.6  # echte Rewards ≈ 60 % der Schätzung (Generalprobe 14.–16.10.)
 STAGE1_THRESHOLD = 0.25   # Plan 18.10.: Stufe 2 nur, wenn echte Rewards je 1 $ gefüllt > ~25 %
 STAGE1_CAPITAL = 150.0    # Stufe 1: 100–150 $ echt
+STAGE1_MIN_FILLED = 1000.0  # 20.10.: unter 1.000 $ gefüllt (≈ 20–40 Fills) ist ein „ja“ Zufall – erst „zu wenig Daten“
 
 
 def _real_trade_rate(live: Optional[dict]) -> float:
@@ -253,10 +254,12 @@ def decision_rows(rows: List[dict], live: Optional[dict] = None) -> List[dict]:
         ok_h = len(hs) == 2 and all(h is not None and h > STAGE1_THRESHOLD for h in hs)
         verdict = "ja" if ok_h and net > 0 else "knapp" if rew > STAGE1_THRESHOLD or (net > 0 and any(
             h is not None and h > STAGE1_THRESHOLD for h in hs)) else "nein"
+        if verdict != "nein" and filled < STAGE1_MIN_FILLED:
+            verdict = "zu wenig Daten"
         out.append(dict(key=r["key"], label=r["label"], filled=filled, rew=rew, h1=hs[0] if hs else None,
                         h2=hs[1] if len(hs) > 1 else None, sim_trade=n["trading"] / filled, net=net,
                         per_day150=per_day, verdict=verdict, days=n["days"]))
-    order = {"ja": 0, "knapp": 1, "nein": 2}
+    order = {"ja": 0, "knapp": 1, "zu wenig Daten": 2, "nein": 3}
     out.sort(key=lambda d: (order[d["verdict"]], -d["net"]))
     return out
 
@@ -283,6 +286,10 @@ def decision_card(rows: List[dict], live: Optional[dict]) -> str:
     if best["verdict"] == "ja":
         head = (f"Kandidat für Stufe 1: <b>{html.escape(best['label'])}</b> – Rewards×0,6 je 1 $ gefüllt in beiden "
                 f"Hälften über {_de(STAGE1_THRESHOLD * 100, 0)} %, netto {_de(best['net'] * 100, 1, sign=True)} % je 1 $ gefüllt.")
+    elif best["verdict"] == "zu wenig Daten":
+        head = (f"Noch kein Urteil: <b>{html.escape(best['label'])}</b> sieht gut aus, hat aber erst "
+                f"{_de(best['filled'], 0)} $ gefüllt (nötig ≥ {_de(STAGE1_MIN_FILLED, 0)} $) – ein paar Fills entscheiden "
+                "hier noch alles.")
     else:
         head = (f"Kein Szenario besteht beide Hälften – Stufe 1 nur als Messung (Rewards echt je 1 $ gefüllt), nicht "
                 f"als Gewinnerwartung. Am nächsten: <b>{html.escape(best['label'])}</b> ({best['verdict']}).")

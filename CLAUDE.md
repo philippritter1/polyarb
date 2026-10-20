@@ -60,6 +60,10 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
   Rewards sind eine Obergrenze (nur 3 Level je Seite im Mitschnitt). Urteil erst ab ~6 Blöcken (3 Tage Mitschnitt).
 - Cockpit-Karte „Entscheidungshilfe Stufe 1“ (19.10.): je Szenario Rewards × 0,6 je 1 $ gefüllt, Zeitraum in zwei Hälften
   geteilt; „ja“ nur, wenn beide Hälften > 25 % und netto (mit echten Handelskosten der Generalprobe) > 0.
+  Erste Läufe (19./20.10., 377 Märkte, 3 Blöcke): **alle 32 Regeln negativ**, beste (Abstand 0,9 · Pause · ≥ 14 Tage)
+  −74 $, walk-forward außerhalb der Stichprobe −46 $ (Vergleich 0,7 · Pause −138 $); Rewards×0,6 klein gegen den Handel
+  (z. B. Abstand 0,5 · ≥ 14 T: +62 $ Rewards, Kurs 60 Min. −70 $, Verkauf zum Bid −213 $). Laufzeit ~17 s, 284 MB.
+  Entscheidungskarte: „ja“ erst ab 1.000 $ gefüllt (`STAGE1_MIN_FILLED`), darunter „zu wenig Daten“ (20.10.).
 - `arb/cockpit.py` – Reiter „Cockpit“ (`/cockpit/`, ab 15.10.): Echtgeld-Kacheln der Generalprobe (Kontowert, echte
   Rewards heute/gestern, Polymarket-Anteil vs. Schätzung) und alle aktiven MM-Szenarien seit 11.10.: Rewards vs. Handel
   (Balken), Rendite-Verlauf (Kleinbilder), Kennzahlen (netto/Tag, Handel je 1 $ Rewards, Bestand, Kurs nach Fill).

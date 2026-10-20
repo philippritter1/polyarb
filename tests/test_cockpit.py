@@ -67,6 +67,10 @@ def test_decision_needs_both_halves_over_the_threshold(tmp_path):
     rows = [dict(key="a", label="A", n=n)]
     d = decision_rows(rows)[0]
     assert d["h1"] < 0.25 < d["h2"] and d["verdict"] != "ja"   # one good half is not enough
-    assert "Kein Szenario besteht beide Hälften" in decision_card(rows, None)
+    assert "Kein Szenario besteht beide Hälften" in decision_card(rows, None) or d["verdict"] == "zu wenig Daten"
     n["halves"][0]["rewards"] = 100
+    assert decision_rows(rows)[0]["verdict"] == "zu wenig Daten"  # 20.10.: 200 $ filled is no basis for a "ja"
+    assert "Noch kein Urteil" in decision_card(rows, None)
+    n["filled"] = 1200.0
+    n["rewards"] = 600.0
     assert decision_rows(rows)[0]["verdict"] == "ja"

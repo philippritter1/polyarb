@@ -1014,6 +1014,8 @@ scenarios:
   mm_robust_quotealter:
     <<: *mm_robust
     title: Market Making (robust, Gebotsalter)
+    enabled: false               # 20.10.: archiviert – Zahlen identisch mit mm_robust (Erneuern ändert in der Sim nichts), RAM für mm_schutz_neu2
+    archive: true
     # Testgruppe gegen mm_robust: ruhende Gebote nach 30 s neu, und schon bei 1 Tick Kursbewegung.
     # Papier, kein live:-Block. Auswertung: ob frische Gebote die schlechten Fills der Kontrollgruppe vermeiden.
     max_quote_age_s: 30

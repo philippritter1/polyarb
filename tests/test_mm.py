@@ -927,7 +927,7 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert {k_: v for k_, v in n2.items() if k_ not in ("enabled", "title", "min_event_volume_24h")} == \
         {k_: v for k_, v in n.items() if k_ not in ("enabled", "archive", "title", "min_event_volume_24h")}
     q = sc["mm_robust_quotealter"]
-    assert q["enabled"] is True and "live" not in q and q["strategy"] == "mm"
+    assert q["enabled"] is False and q["archive"] is True and "live" not in q and q["strategy"] == "mm"
     assert q["max_quote_age_s"] == 30 and q["requote_ticks"] == 1
     assert q["skew"]["fav_frac"] == r["skew"]["fav_frac"] >= 0.5
     assert "max_quote_age_s" not in r and "requote_ticks" not in r
@@ -1177,7 +1177,7 @@ def test_running_scenarios_do_not_pick_up_the_new_filters():
     sc = cfg["scenarios"]
     for name in ("mm_robust", "mm_konservativ", "mm_robust_quotealter"):
         s = sc[name]
-        assert (s["enabled"] is True or name == "mm_konservativ") and "live" not in s
+        assert (s["enabled"] is True or name in ("mm_konservativ", "mm_robust_quotealter")) and "live" not in s
         assert s["rewards_active"] is True and s["min_event_volume_24h"] >= 10000
         assert s["min_mid"] <= 0.10 and s["max_mid"] >= 0.90
         assert s["skew"]["long_usd"] > 0 and s["skew"]["fav_frac"] >= 0.5

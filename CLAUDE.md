@@ -103,7 +103,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (19.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_stop, mm_robust, mm_robust_quotealter, mm_neu_vorsichtig2, wetter_sniper, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
+Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, wetter_sniper, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -202,6 +202,11 @@ Aktive Kandidaten im Live-Test:
   neuen Märkten (Schwelle ~25 %, echte Handelskosten −24 %). Stufe 1: Echt-Test 3–5 Tage, 100–150 $, nur neue Märkte,
   Tageslimit 5 $ (nach Auswertung 19.10., Nutzer entscheidet). Stufe 2 nur bei > 25 %: 1.000 $, Tageslimit ~30 $,
   ≤ 25 $ je Gebot, ~20 Märkte, Stopp + Überprüfung bei −10 % in der ersten Woche.
+- `mm_schutz_neu2` (ab 20.10., Nutzer): wie `mm_schutz_neu`, nur `learn.jump_confirm_s: 300` – ein Kurssprung zählt fürs
+  Selbstlernen erst, wenn die Mitte (Median über 5 Min.) noch ≥ 3 Ticks vom Wert vor dem Sprung entfernt ist; Scan „Sprünge
+  nur Flackern“. Anlass: mm_schutz_neu/mm_stop sperrten > 100 Märkte wegen Flackern dünner neuer Bücher (3 Märkte übrig,
+  0,14 $/Tag erwartet). Die Pause selbst (10 Min. keine Gebote) bleibt unverändert. `mm_robust_quotealter` archiviert
+  (Zahlen identisch mit mm_robust).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

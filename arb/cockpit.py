@@ -74,6 +74,12 @@ def _halves(db: sqlite3.Connection, t0: float, t1: float) -> List[dict]:
     def eq(t):
         r = db.execute("SELECT equity FROM equity WHERE ts <= ? ORDER BY ts DESC LIMIT 1", (t,)).fetchone()
         return r[0] if r else None
+    try:  # fills are only recorded since 15.10. (mm_markout): rewards before that have no fills to divide by
+        first_fill = db.execute("SELECT MIN(ts) FROM mm_markout").fetchone()[0]
+    except sqlite3.OperationalError:
+        first_fill = None
+    if first_fill and first_fill > t0:
+        t0 = min(first_fill - 1, t1)  # the first fill itself belongs to the first half
     mid = (t0 + t1) / 2
     out = []
     for a, b in ((t0, mid), (mid, t1)):

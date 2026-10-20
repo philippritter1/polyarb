@@ -299,6 +299,8 @@ def book_stats(b: dict, since: float) -> dict:
                    WHERE ts > ? AND kind IN ('position', 'basket')""", (since,))
         # missing on books that have not been rewritten yet; q() turns that error into []
         parts = q("SELECT trade_cum, rewards_cum, rebates_cum FROM equity WHERE trade_cum IS NOT NULL ORDER BY ts DESC LIMIT 1")
+        unw = q("""SELECT COUNT(*), COALESCE(SUM(qty),0), COALESCE(SUM(pnl),0), COALESCE(SUM(vs_bid),0)
+                   FROM mm_unwind WHERE ts > ?""", (since,))
     finally:
         DB = keep
     if not now:
@@ -306,7 +308,8 @@ def book_stats(b: dict, since: float) -> dict:
     real = now[0][1] or 0.0
     return dict(b, ok=True, real=real, delta=real - ((then[0][0] or 0.0) if then else 0.0), equity=now[0][0],
                 n=res[0][0] if res else 0, won=(res[0][1] or 0) if res else 0,
-                parts=parts[0] if parts else None)
+                parts=parts[0] if parts else None,
+                unwind=unw[0] if unw and unw[0][0] else None)
 
 
 def mm_trend(b: dict, now: float = None):
@@ -380,6 +383,9 @@ def overview(hours: float, title: str):
         if x.get("parts") and x["parts"][0] is not None:
             tr, rw, rb = x["parts"]
             split = f" · Handel {usd(tr or 0)} · Rewards ~{usd(rw or 0)} · Rebates {usd(rb or 0)}"
+        unw = x.get("unwind")
+        if unw and unw[0]:
+            split += f" · Abbau {unw[1]:.2f} Stk. realisiert {usd(unw[2])} (vs Bid {usd(unw[3])})"
         lines.append(f"{arrow} {x['label']}: {usd(x['real'])} ({x['real'] / x['start'] * 100:+.2f} %)"
                      f" | {hours:g}h {usd(x['delta'])}{res}{split}")
     lines += [f"• {x['label']}: noch keine Daten" for x in stats if not x["ok"]]

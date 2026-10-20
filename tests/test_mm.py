@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arb.client import FeeResolver
 from arb.engine import SimClock
-from arb.mm import MarketMaker, q_min, reward_share, rewards_of, score
+from arb.mm import MMMarket, MarketMaker, q_min, reward_share, rewards_of, score
 from arb.models import Level, OrderBook
 from arb.stream import BookStore
 
@@ -81,10 +81,115 @@ def test_aggressive_mm_scenarios_wind_down_and_the_others_do_not():
     }
     for name, bit in titles.items():
         s = sc[name]
-        assert s["wind_down"] is True and s["enabled"] is True and bit in s["title"] and "live" not in s
+        assert s["wind_down"] is True and s["unwind"] == "active" and s["enabled"] is True
+        assert bit in s["title"] and "live" not in s
     for name in ("mm_rewards", "mm_robust", "mm_robust_quotealter", "mm_konservativ", "mm_neu_vorsichtig",
                  "mm_probe", "mm_breit", "mm_schutz", "mm_schutz_neu", "mm_stop"):
-        assert not sc[name].get("wind_down")
+        assert not sc[name].get("wind_down") and sc[name].get("unwind") != "active"
+
+
+def _held(cid="a", qty=80, cost=40, end=None):
+    return MMMarket(cid=cid, title="Will the Fed cut rates?", yes=f"{cid}Y", no=f"{cid}N",
+                    end_ts=NOW + 30 * 86400 if end is None else end, daily_rate=50, max_spread=0.04,
+                    min_size=20, category="", qty_yes=qty, cost_yes=cost)
+
+
+def test_active_unwind_quotes_nothing_and_sells_one_haircut_slice(tmp_path, caplog):
+    import logging
+    store = BookStore()
+    cfg = _cfg(tmp_path, wind_down=True, unwind="active", exit={"after_h": 0, "dump_after_h": 1})
+    cfg["execution"] = {"depth_haircut": 0.5}
+    mm = MarketMaker("mm_rewards", cfg, Client([_m("a", "Will the Fed cut rates?", 0.50)]),
+                     SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.50, 0.54, size=100)
+    store.change("aY", 0.47, 200, "BUY", NOW)  # 3 ct under the touch: outside the 2 ct floor
+    mm.step()
+    assert mm.st.markets == {}  # wind-down selects nothing, so there is no new quote
+    mm.st.markets["a"] = _held()
+    mm._last["select"] = -1e18
+    mm.clock.sleep(2)
+    with caplog.at_level(logging.INFO, logger="polyarb.mm"):
+        mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes is None and mk.bid_no is None and mk.ask is None
+    assert mk.qty_yes == 30  # 100 * 0.5 at 0.50, not the 0.47 level
+    qty, vwap, bid, pnl, vs = mm.store.db.execute(
+        "SELECT qty, vwap, bid, pnl, vs_bid FROM mm_unwind").fetchone()
+    assert qty == 50 and vwap == 0.50 and bid == 0.50 and abs(vs) < 1e-9 and abs(pnl) < 1e-9
+    assert any("Unwind JA 50.00 @ 0.500" in r.message and "vs Bid" in r.message for r in caplog.records)
+    # the book is read again: the next slice follows the new bid, it does not keep walking the old one
+    store.snapshot("aY", [{"price": 0.40, "size": 100}], [{"price": 0.44, "size": 100}], NOW + 3)
+    mm._last["select"] = -1e18
+    mm.clock.sleep(2)
+    mm.step()
+    assert mk.qty_yes == 0
+    bids = [r[0] for r in mm.store.db.execute("SELECT bid FROM mm_unwind ORDER BY ts")]
+    assert bids == [0.50, 0.40]
+
+
+def test_unwind_does_not_sell_the_same_bid_twice(tmp_path):
+    store = BookStore()
+    cfg = _cfg(tmp_path, wind_down=True, unwind="active")
+    cfg["execution"] = {"depth_haircut": 0.5, "consumed_ttl_s": 60}
+    mm = MarketMaker("mm_rewards", cfg, Client([]), SimClock(NOW), books=store, pool=None)
+    store.snapshot("zY", [{"price": 0.45, "size": 100}], [{"price": 0.50, "size": 100}], NOW)
+    mm.st.markets["z"] = _held("z", qty=80, cost=36)
+    mm.unwind(NOW, store.books(["zY"]))
+    assert mm.st.markets["z"].qty_yes == 30  # 100 * haircut 0.5
+    mm.unwind(NOW, store.books(["zY"]))
+    assert mm.st.markets["z"].qty_yes == 30  # that bid is already consumed
+    mm.unwind(NOW + 61, store.books(["zY"]))
+    assert mm.st.markets["z"].qty_yes == 0  # makers re-quoted after consumed_ttl_s
+
+
+def test_unwind_respects_min_size_slippage_and_skips_resolved_markets(tmp_path):
+    store = BookStore()
+    cfg = _cfg(tmp_path, wind_down=True, unwind="active", max_unwind_slippage=0.02)
+    cfg["execution"] = {"depth_haircut": 0.5}
+    mm = MarketMaker("mm_rewards", cfg, Client([]), SimClock(NOW), books=store, pool=None)
+    # 10 + 10 shares visible, half of each is inside the 2 ct band; 0.47 is not
+    store.snapshot("aY", [{"price": 0.50, "size": 10}, {"price": 0.48, "size": 10}, {"price": 0.47, "size": 100}],
+                   [{"price": 0.55, "size": 10}], NOW)
+    mm.st.markets["a"] = _held(qty=100, cost=50)
+    mm.unwind(NOW, store.books(["aY", "aN"]))
+    mk = mm.st.markets["a"]
+    assert mk.qty_yes == 90
+    vwap, vs = mm.store.db.execute("SELECT vwap, vs_bid FROM mm_unwind").fetchone()
+    assert abs(vwap - 0.49) < 1e-9 and abs(vs - (5 * 0.50 + 5 * 0.48 - 10 * 0.50)) < 1e-9
+    # too little size after the haircut: stay, and say why
+    store.snapshot("bY", [{"price": 0.50, "size": 8}], [{"price": 0.55, "size": 8}], NOW)
+    mm.st.markets["b"] = _held("b", qty=40, cost=20)
+    mm.unwind(NOW, {"bY": store.books(["bY"])["bY"]})
+    assert mm.st.markets["b"].qty_yes == 40
+    assert "unter Mindestgröße" in mm._unwind_why[("b", "yes")]
+    # no bid
+    store.snapshot("cY", [], [{"price": 0.55, "size": 50}], NOW)
+    mm.st.markets["c"] = _held("c", qty=20, cost=10)
+    mm.unwind(NOW, {"cY": store.books(["cY"])["cY"]})
+    assert mm.st.markets["c"].qty_yes == 20 and mm._unwind_why[("c", "yes")] == "kein Bid"
+    # already closed, and already resolved: neither is sold
+    mm.st.markets["d"] = _held("d", qty=12, cost=6, end=NOW - 10)
+    mm.client.res["eY"] = 1.0
+    mm.st.markets["e"] = _held("e", qty=12, cost=6)
+    store.snapshot("dY", [{"price": 0.40, "size": 100}], [{"price": 0.45, "size": 100}], NOW)
+    store.snapshot("eY", [{"price": 0.40, "size": 100}], [{"price": 0.45, "size": 100}], NOW)
+    mm.unwind(NOW, store.books(["dY", "eY"]))
+    assert mm.st.markets["d"].qty_yes == 12 and mm.st.markets["e"].qty_yes == 12
+    assert mm.scan["Unwind Auflösung"] == 2
+    mm.client.res["dY"] = 1.0
+    mm.settle(NOW)
+    assert "d" not in mm.st.markets and "e" in mm.st.markets  # e has not reached its end
+
+
+def test_unwind_without_the_flag_still_quotes(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, unwind="active"),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.48, 0.52)
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes and mk.bid_no and mk.qty_yes == 0
+    assert mm.store.db.execute("SELECT COUNT(*) FROM mm_unwind").fetchone()[0] == 0
 
 
 def test_reward_scoring():

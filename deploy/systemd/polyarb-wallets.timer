@@ -1,0 +1,8 @@
+[Unit]
+Description=Polyarb Wallet-Studie täglich (und einmal 25 Min. nach dem ersten Start)
+[Timer]
+OnActiveSec=25min
+OnCalendar=*-*-* 04:20:00
+Persistent=true
+[Install]
+WantedBy=timers.target

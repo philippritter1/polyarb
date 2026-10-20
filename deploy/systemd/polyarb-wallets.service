@@ -1,0 +1,15 @@
+[Unit]
+Description=Polyarb Wallet-Studie: was machen die Wallets, die auf Polymarket verdienen (nur lesend)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=polyarb
+# batch job: below the trading in CPU and memory, killed first when RAM runs out
+Nice=19
+OOMScoreAdjust=500
+MemoryMax=300M
+WorkingDirectory=/opt/polyarb
+EnvironmentFile=/etc/polyarb.env
+ExecStart=/opt/polyarb/.venv/bin/python -m arb.walletstudy
+TimeoutStartSec=1h

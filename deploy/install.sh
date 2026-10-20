@@ -60,8 +60,8 @@ fi
 systemctl daemon-reload
 systemctl enable polyarb-admin.service
 systemctl restart polyarb-admin.service
-systemctl enable polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-replay.timer
-systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-replay.timer
+systemctl enable polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-replay.timer polyarb-wallets.timer
+systemctl start polyarb-dash.timer polyarb-watch.timer polyarb-report.timer polyarb-update.timer polyarb-study.timer polyarb-kalshi.timer polyarb-replay.timer polyarb-wallets.timer
 # 14.10.: the arbitrage bot and the weather-observation study can be switched off in config.yaml (services:)
 svc() { .venv/bin/python -c "from arb.config import load_config; print('1' if (load_config('config.yaml').get('services') or {}).get('$1', True) else '0')"; }
 BOT=$(svc arbitrage_bot); WXOBS=$(svc wxobs_study)

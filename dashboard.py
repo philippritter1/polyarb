@@ -889,6 +889,13 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
         if src.exists():
             shutil.copyfile(src, exp / name)
             files.append(("Replay-Labor", label, name, exp / name, f"replay/{name[len('replay-'):]}"))
+    for name, label in (("wallet-maker.csv", "Market Maker in unseren Reward-Märkten: Rewards, Handel, Positionen"),
+                        ("wallet-trader.csv", "Gewinner der Rangliste: Trefferquote, Einstiegspreis, Zeitpunkt, Kategorien"),
+                        ("wallet-diagnose.csv", "Abgefragte Endpunkte, Fehler und Felder")):
+        src = Path(study_db).parent / name  # written by arb/walletstudy.py (polyarb-wallets.timer)
+        if src.exists():
+            shutil.copyfile(src, exp / name)
+            files.append(("Wallet-Studie", label, name, exp / name, f"wallets/{name[len('wallet-'):]}"))
     stage("polyarb-export.zip")
     _zip(exp / "polyarb-export.zip", files)
     stage("polyarb-kompakt.zip")

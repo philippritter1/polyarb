@@ -64,6 +64,14 @@ Dashboard: `$POLYARB_URL` (https://2-29-62-225.sslip.io), Basic-Auth wird vom Ag
   −74 $, walk-forward außerhalb der Stichprobe −46 $ (Vergleich 0,7 · Pause −138 $); Rewards×0,6 klein gegen den Handel
   (z. B. Abstand 0,5 · ≥ 14 T: +62 $ Rewards, Kurs 60 Min. −70 $, Verkauf zum Bid −213 $). Laufzeit ~17 s, 284 MB.
   Entscheidungskarte: „ja“ erst ab 1.000 $ gefüllt (`STAGE1_MIN_FILLED`), darunter „zu wenig Daten“ (20.10.).
+- `arb/walletstudy.py` (ab 20.10.) – Wallet-Studie, nur lesend über die öffentliche data-api: (1) Market Maker = Wallets,
+  die in vielen unserer Reward-Märkte (`mm_reward_params`) handeln (`/trades?market=`, beidseitig?); je Wallet Rewards
+  (`/activity type=REWARD`), Handel $/Tag, Rewards je 1 $ Handel, MERGE/REDEEM, Positionen (Wert, cashPnl, Kategorien,
+  Tage bis Ende). (2) Trader = Gewinn-Rangliste (`/v1/leaderboard`, sonst lb-api `/profit`): Trefferquote, Einstiegspreis
+  (≥ 0,90 / ≤ 0,20), Stunden vor Ende beim ersten Kauf, Gewinn je Kategorie (`/closed-positions`, sonst `/positions`).
+  Eigene Wallet ausgenommen. `polyarb-wallets.timer` (04:20 + 25 Min. nach Start, Nice 19, max. 300 MB), schreibt
+  `data/wallet-maker.csv`, `wallet-trader.csv`, `wallet-diagnose.csv` (Endpunkte/Felder/Fehler – API nicht voll
+  dokumentiert, erste Läufe prüfen!); Export-Gruppe „Wallet-Studie“.
 - `arb/cockpit.py` – Reiter „Cockpit“ (`/cockpit/`, ab 15.10.): Echtgeld-Kacheln der Generalprobe (Kontowert, echte
   Rewards heute/gestern, Polymarket-Anteil vs. Schätzung) und alle aktiven MM-Szenarien seit 11.10.: Rewards vs. Handel
   (Balken), Rendite-Verlauf (Kleinbilder), Kennzahlen (netto/Tag, Handel je 1 $ Rewards, Bestand, Kurs nach Fill).

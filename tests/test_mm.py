@@ -1208,3 +1208,17 @@ def test_jump_confirm_counts_only_jumps_that_stay(tmp_path):
         mm.step()
         mm.clock.sleep(120)
     assert mm.blocked("a", mm.clock.now()) and "Kurssprünge" in mm._ledger["a"]["why"]
+
+
+def test_pull_ticks_keeps_the_bid_out_of_the_way(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, quote_frac=0.5, pull_ticks=1, pull_if_best=True),
+                     Client([_m("a", "Will the Fed cut rates?", 0.50)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.49, 0.51)  # others bid 0.49; ours at 0.50 − 0.02 = 0.48, behind them
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes and mk.bid_yes["price"] == 0.48
+    _book(store, "a", 0.46, 0.52)  # the others step back: ours (0.49 − 0.02 = 0.47) would be the best bid → pulled
+    mm.clock.sleep(10)
+    mm.step()
+    assert mk.bid_yes is None and mk.bid_no is None and mm.scan["Gebote gezogen (Fill-Gefahr)"] >= 2

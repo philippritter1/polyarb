@@ -621,7 +621,7 @@ class MarketMaker:
             n, tot, top = pools.get(b, (0, 0.0, 0.0))
             st[f"Reward-Töpfe {b}"] = f"{n} Märkte, {tot:.0f} $/Tag, Ø {tot / n if n else 0:.0f}, max {top:.0f}"
         for k in ("Stop-Loss ausgelöst", "Pausen (schnelle Kursbewegung)", "gelernt: Märkte gesperrt", "echte Fills",
-                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Sprünge nur Flackern", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt",
+                  "Fills ohne Cash (überbucht)", "Gebote ohne Cash (echt)", "Sprünge nur Flackern", "Gebote gezogen (Fill-Gefahr)", "Bestand abgestoßen (Bid)", "echte Fills ohne Markt",
                   "Ereignis-Grenze (Gebot)", "Gebote wegen Alter erneuert", "Gebote nach Kursbewegung erneuert"):
             if k in self.scan:  # running counters: keep them across the half-hourly selection (until 17.10. reset)
                 st[k] = self.scan[k]
@@ -1343,6 +1343,21 @@ class MarketMaker:
             want_yes = min(want_yes, by.best_ask - self.tick)
             if bn and bn.asks:
                 want_no = min(want_no, bn.best_ask - self.tick)
+            pt = sc.get("pull_ticks")
+            if pt is not None:  # mm_farmer (21.10.): stay out of the way of fills – no bid when the ask is within
+                # pull_ticks of it, or (pull_if_best) when it would be the best bid in the book (first to be hit)
+                for which, book in (("yes", by), ("no", bn)):
+                    want = want_yes if which == "yes" else want_no
+                    if not book or not book.asks or want < self.tick:
+                        continue
+                    near = book.best_ask - want <= float(pt) * self.tick + 1e-9
+                    top = bool(sc.get("pull_if_best")) and (not book.bids or want >= book.best_bid - 1e-9)
+                    if near or top:
+                        self.scan["Gebote gezogen (Fill-Gefahr)"] = self.scan.get("Gebote gezogen (Fill-Gefahr)", 0) + 1
+                        if which == "yes":
+                            want_yes = 0.0
+                        else:
+                            want_no = 0.0
             net = (mk.qty_yes - mk.qty_no) * (mid if mk.qty_yes >= mk.qty_no else 1 - mid)
             ev_key = mk.event or f"m:{mk.cid}"
             base_ev = ev_used.get(ev_key, 0.0) if cap_ev is not None else 0.0

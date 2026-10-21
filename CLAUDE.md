@@ -111,7 +111,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, wetter_sniper, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
+Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, wetter_sniper, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -215,6 +215,15 @@ Aktive Kandidaten im Live-Test:
   nur Flackern“. Anlass: mm_schutz_neu/mm_stop sperrten > 100 Märkte wegen Flackern dünner neuer Bücher (3 Märkte übrig,
   0,14 $/Tag erwartet). Die Pause selbst (10 Min. keine Gebote) bleibt unverändert. `mm_robust_quotealter` archiviert
   (Zahlen identisch mit mm_robust).
+- **Wallet-Studie, erste Läufe 20./21.10.:** die 30 aktivsten Wallets in unseren Reward-Märkten verdienen 100–2.800 $
+  Rewards/Tag, meist 0,2–3 % ihres Handels; die besten Farmer (pootytherewardfarmer 15,6 %, pppnn 20 %, Dr.PNL 7 %)
+  werden kaum gefüllt. Fast alle haben offene Positionen im Minus (−200 bis −31.000 $), legen Paare oft zusammen
+  (MERGE 50–160x), bieten in 40–120 Märkten, beidseitig, Politik/Sonstiges/Tech, 2–10 Wochen Restlaufzeit. Trader-Rangliste
+  (Monat): ~2/3 Profi-Sportwetter (Volumen 10–100 Mio. $, Einstieg ~0,50), Politik-Gewinner kaufen Wochen vorher.
+- `mm_farmer` (ab 21.10., Nutzer): nachgebaut nach den Farmern – Basis mm_schutz, 60 Märkte, `quote_frac: 0.9`, 20 $ je
+  Gebot (`max_min_size_usd: 20`), Kultur/Klickzahlen raus, Sprung-Lernen mit Bestätigung, neu `pull_ticks: 1` (Ask auf
+  1 Tick am Gebot → Gebot weg) + `pull_if_best: true` (nie das beste Gebot im Buch sein); Scan „Gebote gezogen
+  (Fill-Gefahr)“ (zählt je Schritt). Merge für die echte Wallet (Relayer) fehlt noch – Voraussetzung für echt.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

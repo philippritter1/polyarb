@@ -111,7 +111,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, wetter_sniper, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
+Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, wetter_sniper, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -224,6 +224,17 @@ Aktive Kandidaten im Live-Test:
   Gebot (`max_min_size_usd: 20`), Kultur/Klickzahlen raus, Sprung-Lernen mit Bestätigung, neu `pull_ticks: 1` (Ask auf
   1 Tick am Gebot → Gebot weg) + `pull_if_best: true` (nie das beste Gebot im Buch sein); Scan „Gebote gezogen
   (Fill-Gefahr)“ (zählt je Schritt). Merge für die echte Wallet (Relayer) fehlt noch – Voraussetzung für echt.
+- **Stand 24.10.:** wetter_sniper 46 Gewinne / 1 Verlust, realisiert −17 $: der Verlust war „Istanbul Höchstwert 13 °C oder
+  weniger“ (NO zu 0,954, Station schon 15 °C), aufgelöst mit JA – laut Marktbeschreibung geht ein Tag ohne NOAA-Daten an das
+  **niedrigste Bucket**. sharp_fussball2 erste Käufe 24.10. (Liaoning JA + Zhejiang NEIN, dasselbe Spiel, beide verloren −50 $;
+  Verknüpfung richtig, aber zwei Wetten auf ein Ergebnis).
+- `wetter_sniper2` (ab 24.10., Nutzer, Papier): wie wetter_sniper plus Optionen in arb/wxsniper.py (Standard aus):
+  `skip_lowest` (kein NO aufs niedrigste Bucket), `max_gap_h: 2` (Lücke ohne Messung am Markttag → kein Kauf, Scan
+  „Datenlücke“), `won_yes_margin: 2` (JA auf „X oder höher“ ab X+1 bzw. Tief „X oder weniger“ ab X−1, Scan „gewonnen“),
+  `late_hour: 17` + `late_margin: 2` (abends NO auf Höchstwert-Buckets ≥ 2 Grad über dem Hoch, wenn die Open-Meteo-Vorhersage
+  für den Rest des Tages nicht darüber liegt, „spät ausgeschlossen“), `final_margin: 2` (nach Tagesende NO ≥ 2 Grad jenseits
+  des Endwerts, „Tag vorbei“), `lazy_books`, schnellerer Takt (3 min, Station alle 2 min, `obs_hours: 40`).
+  METAR von aviationweather.gov sind dieselben NOAA-Messungen, die die Auflösungsseite (weather.gov timeseries) zeigt.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

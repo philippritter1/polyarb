@@ -614,10 +614,12 @@ class LiveObs:
     """Current station readings for live trading: METAR from aviationweather.gov (free, no key),
     station time zone from its coordinates. Cached: one request per station every `ttl_s`."""
 
-    def __init__(self, get_json: Callable[[str, dict], object], ttl_s: float = 600):
-        self.get_json, self.ttl = get_json, ttl_s
+    def __init__(self, get_json: Callable[[str, dict], object], ttl_s: float = 600, hours: int = 30):
+        self.get_json, self.ttl, self.hours = get_json, ttl_s, hours
         self._tz: Dict[str, Optional[str]] = {}
+        self._ll: Dict[str, Tuple[float, float]] = {}
         self._obs: Dict[str, Tuple[float, List[Tuple[float, float]]]] = {}
+        self._fc: Dict[str, Tuple[float, List[Tuple[float, float]]]] = {}
 
     def _json(self, url: str, params: dict):
         try:
@@ -632,6 +634,7 @@ class LiveObs:
             info = info[0] if isinstance(info, list) and info else info if isinstance(info, dict) else {}
             tz = None
             if info.get("lat") is not None and info.get("lon") is not None:
+                self._ll[station] = (float(info["lat"]), float(info["lon"]))
                 tz = (self._json(TZ_URL, {"latitude": info["lat"], "longitude": info["lon"], "timezone": "auto",
                                           "forecast_days": 1, "daily": "temperature_2m_max"}) or {}).get("timezone")
             self._tz[station] = tz if tz and tz != "GMT" else None
@@ -642,7 +645,7 @@ class LiveObs:
         hit = self._obs.get(station)
         if hit and now - hit[0] < self.ttl:
             return hit[1]
-        data = self._json(METAR_URL, {"ids": station, "format": "json", "hours": 30})
+        data = self._json(METAR_URL, {"ids": station, "format": "json", "hours": self.hours})
         out = []
         for o in data if isinstance(data, list) else []:
             t = o.get("obsTime")
@@ -653,6 +656,42 @@ class LiveObs:
         out.sort()
         self._obs[station] = (now, out)
         return out
+
+    def forecast(self, station: str, now: float, ttl_s: float = 3600) -> List[Tuple[float, float]]:
+        """(ts, °F) of the Open-Meteo hourly forecast at the station, today and tomorrow. Empty when unknown."""
+        hit = self._fc.get(station)
+        if hit and now - hit[0] < ttl_s:
+            return hit[1]
+        ll = self._ll.get(station)
+        if ll is None:
+            self.tz(station)
+            ll = self._ll.get(station)
+        out: List[Tuple[float, float]] = []
+        if ll:
+            d = self._json(TZ_URL, {"latitude": ll[0], "longitude": ll[1], "hourly": "temperature_2m",
+                                    "timezone": "UTC", "forecast_days": 2}) or {}
+            h = d.get("hourly") or {} if isinstance(d, dict) else {}
+            for t, c in zip(h.get("time") or [], h.get("temperature_2m") or []):
+                ts = _parse_iso(str(t) + ("" if "+" in str(t) or str(t).endswith("Z") else "+00:00"))
+                if ts and isinstance(c, (int, float)):
+                    out.append((ts, c * 9 / 5 + 32))
+        self._fc[station] = (now, out)
+        return out
+
+    def max_gap_h(self, station: str, tz: str, day: date, now: float, delay_s: float = 900) -> float:
+        """Longest stretch without a published reading on the market's local day, in hours: from local
+        midnight (or the day's end, if over) through every reading up to now. inf without readings.
+        A long gap is where "no data" resolutions and missed highs come from."""
+        from zoneinfo import ZoneInfo
+        z = ZoneInfo(tz)
+        start = datetime(day.year, day.month, day.day, tzinfo=z).timestamp()
+        end = (datetime(day.year, day.month, day.day, tzinfo=z) + timedelta(days=1)).timestamp()
+        upto = min(now - delay_s, end)
+        ts = [t for t, _ in self.readings(station, now) if start <= t < end and t <= now - delay_s]
+        if not ts:
+            return math.inf
+        pts = [start] + ts + [max(upto, ts[-1])]
+        return max(b - a for a, b in zip(pts, pts[1:])) / 3600
 
     def gap(self, question: str, description: str, now: float, delay_s: float = 900) -> str:
         """Where today's running max (min) of the market's station stands relative to its bucket.

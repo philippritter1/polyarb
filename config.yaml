@@ -1283,6 +1283,32 @@ scenarios:
     max_day_usd: 200
     max_new_per_step: 8
     max_open_positions: 40
+  wetter_sniper2:
+    enabled: true                # 24.10. Philipp: Ausbau von wetter_sniper (Papier, kein live:-Block). wetter_sniper bleibt.
+    title: Wetter-Sniper 2
+    strategy: wxsniper           # wie wetter_sniper, dazu (arb/wxsniper.py, alles optional):
+    capital_usd: 2500
+    tag_slug: weather
+    max_events: 400
+    min_margin: 1
+    min_yes: 0.03
+    skip_lowest: true            # kein NO auf das niedrigste Bucket: ohne Daten löst der Markt dorthin auf (Istanbul 20.10., -25 $)
+    max_gap_h: 2                 # kein Kauf, wenn der Markttag eine Lücke > 2 h ohne Messung hat
+    won_yes_margin: 2            # JA auf „X oder höher“ ab X+1 (Tief: „X oder weniger“ ab X-1) – schon gewonnen
+    late_hour: 17                # ab 17 Uhr Ortszeit: NO auf Höchstwert-Buckets ≥ 2 Grad über dem Tageshoch,
+    late_margin: 2               #   wenn die Vorhersage (Open-Meteo) für den Rest des Tages nicht über dem Hoch liegt
+    final_margin: 2              # nach Tagesende: NO auf Buckets ≥ 2 Grad jenseits des Endwerts
+    lazy_books: true             # Orderbuch nur holen, wenn die Gegenseite noch ≥ 3 ct zeigt (schnellerer Takt)
+    obs_hours: 40                # METAR-Fenster lang genug für den ganzen Markttag nach Tagesende
+    obs_delay_min: 3             # was abgerufen ist, ist veröffentlicht; 3 min Puffer
+    obs_ttl_s: 120               # Station alle 2 min neu lesen (wetter_sniper: 10 min)
+    interval_min: 3
+    max_slippage: 0
+    max_position_usd: 25
+    max_event_usd: 75
+    max_day_usd: 200
+    max_new_per_step: 8
+    max_open_positions: 60
   sharp_fussball:
     enabled: true
     wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus

@@ -1222,3 +1222,26 @@ def test_pull_ticks_keeps_the_bid_out_of_the_way(tmp_path):
     mm.clock.sleep(10)
     mm.step()
     assert mk.bid_yes is None and mk.bid_no is None and mm.scan["Gebote gezogen (Fill-Gefahr)"] >= 2
+
+
+def test_fav_only_bids_only_the_favourite_unless_it_closes_a_pair(tmp_path):
+    store = BookStore()
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, quote_frac=0.5, fav_only=True),
+                     Client([_m("a", "Will the Fed cut rates?", 0.40)]), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.39, 0.41)  # YES 0.40 is the cheaper token: only NO (0.60) gets a bid
+    mm.step()
+    mk = mm.st.markets["a"]
+    assert mk.bid_yes is None and mk.bid_no and mm.scan["Außenseiter-Gebot weggelassen"] >= 1
+    mk.qty_no, mk.cost_no = 20.0, 11.6  # holding the favourite: the cheap side may complete the pair
+    mm.clock.sleep(10)
+    mm.step()
+    assert mk.bid_yes is not None
+
+
+def test_config_has_mm_favorit_like_mm_schutz():
+    from arb.config import load_config
+    sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
+    f, s = sc["mm_favorit"], sc["mm_schutz"]
+    assert f["fav_only"] is True and "live" not in f
+    assert {k: v for k, v in f.items() if k not in ("fav_only", "title")} == \
+        {k: v for k, v in s.items() if k != "title"}

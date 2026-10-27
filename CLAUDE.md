@@ -111,7 +111,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, wetter_sniper, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
+Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, mm_favorit, wetter_sniper, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -235,6 +235,15 @@ Aktive Kandidaten im Live-Test:
   für den Rest des Tages nicht darüber liegt, „spät ausgeschlossen“), `final_margin: 2` (nach Tagesende NO ≥ 2 Grad jenseits
   des Endwerts, „Tag vorbei“), `lazy_books`, schnellerer Takt (3 min, Station alle 2 min, `obs_hours: 40`).
   METAR von aviationweather.gov sind dieselben NOAA-Messungen, die die Auflösungsseite (weather.gov timeseries) zeigt.
+- **Fill-Auswertung 27.10.** (alle MM ab 19.10., 968 Fills / 558 eindeutig, 288 Märkte, Kursbewegung 60 Min. je 1 $ gefüllt):
+  billigeres Token (Mitte < 0,5) JA −6,6 % / NEIN −7,7 %, Favorit −2,1 % / −0,6 % – in beiden Hälften und ohne die 10
+  schlechtesten Märkte gleich; Fills mit Kurssprung ≥ 5 % binnen 1 s (Durchräumer) −11 bis −15 %; Gebotsalter 2–10 Min. −6 %;
+  10 Märkte = 2/3 des Verlusts (Nachrichtenmärkte: Ausgangssperre Frankreich, Hormus, Anthropic-IPO). SPECI-Fund Wetter:
+  Polymarket zählt nur reguläre METAR (SF 73 °F nur in SPECI, aufgelöst 70–71). Stand 27.10. (Equity 60 % seit 20.10.):
+  mm_schutz +76 $, schutz_neu +14, farmer +13, schutz_neu2 +8, Rest negativ; Replay beste Regel +124 $ / OOS −8 $.
+- `mm_favorit` (ab 27.10., Nutzer): wie `mm_schutz`, plus `fav_only: true` (arb/mm.py) – kein Gebot auf das billigere Token,
+  außer es schließt ein Paar mit gehaltenem Favoriten; Scan „Außenseiter-Gebot weggelassen“. Einseitig zählt für Rewards 1/3
+  (Verkaufsgebote auf Bestand zählen als Gegenseite, reward_asks). Replay-Labor dazu 12 Regeln „· nur Favorit“ (44 statt 32).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

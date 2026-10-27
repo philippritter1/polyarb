@@ -46,17 +46,22 @@ class Rule:
     lo: float             # quote only while lo ≤ mid ≤ hi
     hi: float
     min_dte: float        # days to the market's end at least this
+    fav: bool = False     # bid only on the favourite's token (mid ≥ 0.5): the cheaper token lost ~7 % per $ filled
+                          # 60 min after the fill in the scenarios (19.–27.10.), the favourite's ~1 %
 
     @property
     def name(self) -> str:
         return (f"Abstand {self.frac:g}" + (" · Pause" if self.pause else "")
                 + (f" · Mitte {self.lo:g}–{self.hi:g}" if (self.lo, self.hi) != (0.05, 0.95) else "")
-                + (f" · ≥{self.min_dte:g} Tage" if self.min_dte else ""))
+                + (f" · ≥{self.min_dte:g} Tage" if self.min_dte else "") + (" · nur Favorit" if self.fav else ""))
 
 
 def default_rules() -> List[Rule]:
-    return [Rule(f, p, lo, hi, d) for f in (0.25, 0.5, 0.7, 0.9) for p in (False, True)
+    grid = [Rule(f, p, lo, hi, d) for f in (0.25, 0.5, 0.7, 0.9) for p in (False, True)
             for lo, hi in ((0.05, 0.95), (0.2, 0.8)) for d in (0.0, 14.0)]
+    # 27.10.: one-sided on the favourite – fewer rewards (q_min counts one side a third), fewer bad fills?
+    return grid + [Rule(f, True, lo, hi, d, fav=True) for f in (0.5, 0.7, 0.9)
+                   for lo, hi in ((0.05, 0.95), (0.2, 0.8)) for d in (0.0, 14.0)]
 
 
 BASELINE = Rule(0.7, True, 0.05, 0.95, 0.0)  # closest to mm_schutz_neu
@@ -185,6 +190,9 @@ def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params:
                 sn = max(min_size, size_usd / pn) if pn else 0.0
                 cache[r.frac] = (py, pn, sy, sn)
             py, pn, sy, sn = cache[r.frac]
+            if r.fav:  # the cheaper token's bid goes: YES below 0.5, NO above
+                py = py if mid >= 0.5 - 1e-9 else None
+                pn = pn if mid <= 0.5 + 1e-9 else None
             if py and t < cool[ri][0]:
                 py = None
             if pn and t < cool[ri][1]:

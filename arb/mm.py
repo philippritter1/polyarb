@@ -1358,6 +1358,14 @@ class MarketMaker:
                             want_yes = 0.0
                         else:
                             want_no = 0.0
+            if sc.get("fav_only"):  # mm_favorit (27.10.): no bid on the cheaper token (fills there lost ~7 % per $
+                # 60 min later, the favourite's ~1 %) – unless it completes a pair with the favourite we already hold
+                if mid < 0.5 - 1e-9 and want_yes > 0 and not mk.qty_no > mk.qty_yes + 1e-9:
+                    want_yes = 0.0
+                    self.scan["Außenseiter-Gebot weggelassen"] = self.scan.get("Außenseiter-Gebot weggelassen", 0) + 1
+                if mid > 0.5 + 1e-9 and want_no > 0 and not mk.qty_yes > mk.qty_no + 1e-9:
+                    want_no = 0.0
+                    self.scan["Außenseiter-Gebot weggelassen"] = self.scan.get("Außenseiter-Gebot weggelassen", 0) + 1
             net = (mk.qty_yes - mk.qty_no) * (mid if mk.qty_yes >= mk.qty_no else 1 - mid)
             ev_key = mk.event or f"m:{mk.cid}"
             base_ev = ev_used.get(ev_key, 0.0) if cap_ev is not None else 0.0

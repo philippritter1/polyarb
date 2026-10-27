@@ -7,14 +7,14 @@ from arb.booklog import SCHEMA, pack_levels
 T0 = 1_760_000_400  # a block boundary for 1 h blocks
 
 
-def _booklog(path, minutes=240, crash_at=100, after=0.48):
+def _booklog(path, minutes=240, crash_at=100, after=0.48, base=0.50):
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
     db.execute("INSERT INTO mkt VALUES('c1', 'e', 'Politik', ?, 'Wird X?', 'Y', 'N')", (T0 + 30 * 86400,))
     db.execute("INSERT INTO mkt VALUES('c2', 'e', 'Politik', NULL, 'ohne Rewards', 'Y2', 'N2')")
     for i in range(minutes):
         ts = T0 + 60 * i
-        mid = 0.50 if i <= crash_at else after  # bad news right after the fill
+        mid = base if i <= crash_at else after  # bad news right after the fill
         bid, ask = round(mid - 0.01, 2), round(mid + 0.01, 2)
         if i == crash_at:
             ask = 0.47  # sellers hit down to 0.47: fills every bid at or above it
@@ -64,6 +64,17 @@ def test_pause_after_a_jump_skips_quotes(tmp_path):
                                            replaylab.Rule(0.5, True, 0.05, 0.95, 0.0)], block_h=1)
     off, on = res["rules"]
     assert on["quote_h"] < off["quote_h"]
+
+
+def test_favourite_only_quotes_one_side_for_fewer_rewards(tmp_path):
+    bl, sc = str(tmp_path / "2025-10-09.sqlite"), str(tmp_path / "scenario-mm_x.sqlite")
+    _booklog(bl, base=0.60, after=0.60, crash_at=10_000)
+    _scen(sc)
+    both, fav = replaylab.Rule(0.5, True, 0.05, 0.95, 0.0), replaylab.Rule(0.5, True, 0.05, 0.95, 0.0, fav=True)
+    assert fav.name.endswith("nur Favorit") and fav in replaylab.default_rules()
+    res = replaylab.run([bl], [sc], rules=[both, fav], block_h=1)
+    b, f = res["rules"]
+    assert f["quote_h"] == b["quote_h"] and 0 < f["rewards60"] < b["rewards60"] / 2   # one side counts a third
 
 
 def test_cockpit_shows_the_replay(tmp_path):

@@ -641,6 +641,59 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_favorit2:
+    enabled: true
+    title: Market Making (nur Favorit, weit)
+    strategy: mm                 # 28.10. Nutzer: Replay-Siegerregel (27.10., 16 Blöcke): Abstand 0,9 · Pause · Mitte 20–80 % ·
+    # ≥ 14 Tage · nur Favorit +363 $ auf 16.925 $ gefüllt, 13/16 Blöcke positiv, walk-forward +198 $. Wie mm_favorit,
+    # aber quote_frac 0.9 und Mitte 0,20–0,80. Gewinn im Replay fast nur aus dem Handel (Dellen, die sich erholen), kaum Rewards.
+    fav_only: true
+    exit:
+      after_h: 0
+      decay_h: 6
+      dump_after_h: 96
+    reward_asks: true
+    pause:
+      ticks: 3
+      window_s: 300
+      pause_s: 600
+    learn:
+      min_fills: 2               # erst nach 2 Fills (Kursbewegung 60 Min. danach) urteilen
+      min_loss_usd: 0            # Rewards + Kursbewegung < 0 → gesperrt
+      max_jumps: 3               # oder 3 Pausen (Sprünge ≥ 3 Ticks) binnen 24 h
+      block_h: 72                # 3 Tage, bei jeder Wiederholung doppelt so lang
+    fair: micro
+    pair_frac: 0.25
+    rank: share
+    list_orders: [volume, liquidity, volume24hr, startDate]   # 16.10. Nutzer: mehr Märkte durchsuchen – Gamma liefert je
+                                 # Liste max. 2.000, darum 4 Sortierungen zusammengeführt (mit den Filtern blieben ~1–3)
+    prefilter: 120
+    min_liquidity: 1000
+    capital_usd: 2500
+    max_markets: 20
+    min_daily_rate: 5
+    skip_categories: [Sport, Krypto, Finanz]
+    skip_re:                     # 16.10. Nutzer: Sport-Saison- und Kursmärkte meiden (dort kamen die echten Verluste)
+      - '\b(nhl|nba|nfl|mlb|wnba|mls|ncaa|ufc|nascar|f1|formula 1|premier league|la liga|bundesliga|serie a|ligue 1)\b'
+      - '\b(champions league|europa league|stanley cup|super bowl|world series|world cup|playoffs?|mvp|grand prix)\b'
+      - '\b(pga|atp|wta|heisman|ballon d.or|rookie of the year|conference finals?|regular season|championship)\b'
+      - '\b(golf|ryder cup|masters|us open|olympics?|medals?|tour de france|cricket|rugby|boxing|ufc|darts|snooker|wimbledon|roland garros|team europe|team usa|relegat\w*|top scorer|golden boot|cy young|world series|nba finals|super bowl)\b'   # 16.10.: Ryder Cup rutschte durch
+      - '\b\d+\+ ?(points|wins|goals|touchdowns|games)\b|\brecord \d+'
+      - '\b(panthers|maple leafs|bruins|rangers|oilers|canucks|flames|avalanche|lightning|capitals|penguins|blackhawks)\b'
+      - '\b(lakers|celtics|warriors|knicks|bucks|nuggets|76ers|mavericks|cavaliers|thunder|timberwolves|clippers)\b'
+      - '\b(chiefs|eagles|cowboys|49ers|packers|ravens|bills|steelers|patriots|lions|bengals|dolphins|yankees|dodgers)\b'
+      - '\b(hit|above|below|between|reach|close[sd]?|dip|high|low)\b[^?]*\$\d'   # Kurs-/Preisschwellen
+      - '\b(etf|index|s&p|nasdaq|dow|spy|qqq|stock|shares?)\b'
+    min_days_to_end: 14
+    stop_hours_before_end: 24
+    min_mid: 0.2
+    max_mid: 0.8
+    quote_frac: 0.9
+    quote_usd: 50
+    max_inventory_usd: 150
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_farmer:
     enabled: true
     title: Market Making (Reward-Farmer)

@@ -60,7 +60,7 @@ def default_rules() -> List[Rule]:
     grid = [Rule(f, p, lo, hi, d) for f in (0.25, 0.5, 0.7, 0.9) for p in (False, True)
             for lo, hi in ((0.05, 0.95), (0.2, 0.8)) for d in (0.0, 14.0)]
     # 27.10.: one-sided on the favourite – fewer rewards (q_min counts one side a third), fewer bad fills?
-    return grid + [Rule(f, True, lo, hi, d, fav=True) for f in (0.5, 0.7, 0.9)
+    return grid + [Rule(f, True, lo, hi, d, fav=True) for f in (0.5, 0.7, 0.8, 0.9)  # 0.8: 28.10. Nutzer
                    for lo, hi in ((0.05, 0.95), (0.2, 0.8)) for d in (0.0, 14.0)]
 
 

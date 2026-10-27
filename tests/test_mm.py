@@ -1245,3 +1245,12 @@ def test_config_has_mm_favorit_like_mm_schutz():
     assert f["fav_only"] is True and "live" not in f
     assert {k: v for k, v in f.items() if k not in ("fav_only", "title")} == \
         {k: v for k, v in s.items() if k != "title"}
+
+
+def test_config_mm_favorit2_is_mm_favorit_further_out():
+    from arb.config import load_config
+    sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
+    f, g = sc["mm_favorit"], sc["mm_favorit2"]
+    assert g["quote_frac"] == 0.9 and g["min_mid"] == 0.2 and g["max_mid"] == 0.8 and g["fav_only"] is True
+    diff = {k for k in set(f) | set(g) if f.get(k) != g.get(k)}
+    assert diff == {"title", "quote_frac", "min_mid", "max_mid"} and "live" not in g

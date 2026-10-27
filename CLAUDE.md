@@ -111,7 +111,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, mm_favorit, wetter_sniper, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
+Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, mm_favorit, mm_favorit2, wetter_sniper, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -244,6 +244,12 @@ Aktive Kandidaten im Live-Test:
 - `mm_favorit` (ab 27.10., Nutzer): wie `mm_schutz`, plus `fav_only: true` (arb/mm.py) – kein Gebot auf das billigere Token,
   außer es schließt ein Paar mit gehaltenem Favoriten; Scan „Außenseiter-Gebot weggelassen“. Einseitig zählt für Rewards 1/3
   (Verkaufsgebote auf Bestand zählen als Gegenseite, reward_asks). Replay-Labor dazu 12 Regeln „· nur Favorit“ (44 statt 32).
+- **Replay 27.10. 14:50 (16 Blöcke):** „nur Favorit“ bei jedem Abstand besser als beidseitig; beste 0,9 · Pause · Mitte 20–80 % ·
+  ≥ 14 T · nur Favorit +363 $ auf 16.925 $ (13/16 Blöcke positiv), **walk-forward erstmals positiv +198 $** (11/15), Vergleich
+  0,7 · Pause −413 $. Gewinn fast nur aus dem Handel (Rewards×0,6 nur 31 $); näher an der Mitte: 0,7 +192 $, 0,5 −152 $.
+  Vorbehalte: Replay ohne Warteschlange, keine Gebühr beim Verkauf zum Bid, Idee aus demselben Zeitraum.
+- `mm_favorit2` (ab 28.10., Nutzer): mm_favorit mit der Replay-Siegerregel (`quote_frac: 0.9`, Mitte 0,20–0,80). Replay-Labor
+  zusätzlich Abstand 0,8 für „nur Favorit“ (48 Regeln).
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

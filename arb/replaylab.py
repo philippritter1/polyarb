@@ -10,6 +10,14 @@ Two-sided bids around the mid, as the mm scenarios quote, one market at a time f
   60 min later minus our price ("m60 Bid", as if sold to the bid – the pessimistic exit). After a fill the side
   rests `cooldown_s`, like `fill_cooldown_s` in mm_schutz_neu.
 
+Two more ways to count the same fills (28./29.10., the replay said +2 % per $ filled at 0.9, the scenarios ≈ 0):
+- "Halten": the scenarios do not sell to the bid after 60 min. They put a sell order on the inventory right away at
+  own mid + the quote distance and step it down every hour to the mid over 6 h (exit after_h 0, decay_h 6); after
+  96 h the rest goes to the bid. Filled when the side's bid reaches it or a new trade prints above it. Still open at
+  the end of the data: valued at the last bid.
+- "streng": only fills where the ask went strictly below our bid or a trade printed below it – a touch at our
+  price leaves us behind the queue that was there first.
+
 Walk-forward: the window is cut into blocks of `block_h` hours. For each block from the second on, the rule with
 the best result on all earlier blocks is picked and its result in the block counts as out-of-sample. If the
 picked rules do much worse out-of-sample than in-sample, the grid only finds noise.
@@ -120,7 +128,12 @@ def _floor(p: float) -> float:
 
 
 def _new_acc() -> dict:
-    return dict(quote_min=0.0, rewards=0.0, fills=0, filled=0.0, m5=0.0, m60=0.0, m60bid=0.0)
+    return dict(quote_min=0.0, rewards=0.0, fills=0, filled=0.0, m5=0.0, m60=0.0, m60bid=0.0,
+                hold=0.0, sfills=0, sfilled=0.0, shold=0.0)
+
+
+HOLD_DECAY_H = 6
+HOLD_DUMP_H = 96
 
 
 def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params: Tuple[float, float, float],
@@ -145,6 +158,41 @@ def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params:
         if which == "mid":
             return yes_mid[u] if side == "yes" else no_mid[u]
         return yes[u][0] if side == "yes" else no_bid[u]
+
+    def side_at(u: int, side: str) -> tuple:
+        """(bid, mid, last trade) of one side at a snapshot."""
+        if side == "yes":
+            return yes[u][0], yes_mid[u], yes[u][3]
+        n = no.get(u)
+        return no_bid[u], no_mid[u], (n[3] if n else None)
+
+    held: Dict[tuple, float] = {}
+
+    def hold_exit(side: str, t0: float, px: float, d: float) -> float:
+        """Exit price of the scenarios' sell order for a fill at t0 (see the module docstring), cached per fill."""
+        key = (side, t0, round(px, 4), round(d, 4))
+        if key in held:
+            return held[key]
+        k = bisect.bisect_left(ts_list, t0)
+        ask = None
+        last_bid, prev_last, res = px, None, None
+        for u in ts_list[k:]:
+            bid, m, last = side_at(u, side)
+            if ask is not None and ((bid is not None and bid >= ask - 1e-9)
+                                    or (last is not None and last != prev_last and last > ask + 1e-9)):
+                res = ask
+                break
+            if bid is not None:
+                last_bid = bid
+            prev_last = last
+            age = u - t0
+            if age >= HOLD_DUMP_H * 3600:
+                res = last_bid
+                break
+            done = min(1.0, math.floor(age / 3600) / HOLD_DECAY_H)
+            ask = math.ceil((m + d * (1 - done)) / TICK - 1e-9) * TICK
+        held[key] = res if res is not None else last_bid
+        return held[key]
 
     out: Dict[Tuple[int, int], dict] = {}
     cool = [[0.0, 0.0] for _ in rules]
@@ -223,6 +271,13 @@ def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params:
                 acc["m5"] += ((m5 if m5 is not None else m60) - px) * sz
                 acc["m60"] += (m60 - px) * sz
                 acc["m60bid"] += ((b60 if b60 is not None else m60) - px) * sz
+                hold = (hold_exit(side, t2, px, max(TICK, v * r.frac)) - px) * sz
+                acc["hold"] += hold
+                if (nxt[1] is not None and nxt[1] < px - 1e-9) or (
+                        nxt[3] is not None and nxt[3] < px - 1e-9 and (cur is None or nxt[3] != cur[3])):
+                    acc["sfills"] += 1
+                    acc["sfilled"] += px * sz
+                    acc["shold"] += hold
                 cool[ri][0 if side == "yes" else 1] = t2 + cooldown_s
     return out
 
@@ -230,6 +285,16 @@ def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params:
 def net(acc: dict) -> float:
     """Rewards at 60 % plus the pessimistic exit (sold to the bid an hour later)."""
     return REAL_REWARD_FACTOR * acc["rewards"] + acc["m60bid"]
+
+
+def net_hold(acc: dict) -> float:
+    """Rewards at 60 % plus the scenarios' exit (sell order stepping down to the mid)."""
+    return REAL_REWARD_FACTOR * acc["rewards"] + acc["hold"]
+
+
+def net_strict(acc: dict) -> float:
+    """As net_hold, but only the fills that traded through our bid."""
+    return REAL_REWARD_FACTOR * acc["rewards"] + acc["shold"]
 
 
 def _sum(accs: Iterable[dict]) -> dict:
@@ -240,7 +305,7 @@ def _sum(accs: Iterable[dict]) -> dict:
     return tot
 
 
-def walk_forward(by_rule_block: Dict[Tuple[int, int], dict], n_rules: int, baseline: int) -> List[dict]:
+def walk_forward(by_rule_block: Dict[Tuple[int, int], dict], n_rules: int, baseline: int, net=net) -> List[dict]:
     blocks = sorted({b for _, b in by_rule_block})
     rows = []
     for k in range(1, len(blocks)):
@@ -278,8 +343,13 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
         rule_rows.append(dict(rule=r.name, idx=ri, net=net(tot), rewards60=REAL_REWARD_FACTOR * tot["rewards"],
                               m60=tot["m60"], m60bid=tot["m60bid"], m5=tot["m5"], fills=tot["fills"], filled=tot["filled"],
                               quote_h=tot["quote_min"] / 60, blocks=len(accs),
-                              blocks_pos=sum(1 for a in accs if net(a) > 0)))
+                              blocks_pos=sum(1 for a in accs if net(a) > 0),
+                              net_hold=net_hold(tot), hold=tot["hold"], hold_pos=sum(1 for a in accs if net_hold(a) > 0),
+                              net_strict=net_strict(tot), sfills=tot["sfills"], sfilled=tot["sfilled"],
+                              strict_pos=sum(1 for a in accs if net_strict(a) > 0)))
     wf = walk_forward(total, len(rules), base)
+    wf_hold = walk_forward(total, len(rules), base, net_hold)
+    wf_strict = walk_forward(total, len(rules), base, net_strict)
     best = max(rule_rows, key=lambda d: d["net"]) if rule_rows else None
     cats = [dict(rule=rules[ri].name, category=c, net=net(a), rewards60=REAL_REWARD_FACTOR * a["rewards"],
                  m60bid=a["m60bid"], fills=a["fills"], filled=a["filled"])
@@ -288,6 +358,8 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
                 blocks=len(blocks), first=blocks[0] if blocks else None, rules=rule_rows, walk_forward=wf,
                 wf_test=sum(w["test_net"] for w in wf), wf_train_best=sum(w["train_net"] for w in wf),
                 wf_base=sum(w["base_net"] for w in wf), baseline=rules[base].name, categories=cats,
+                walk_forward_hold=wf_hold, wf_hold=sum(w["test_net"] for w in wf_hold),
+                walk_forward_strict=wf_strict, wf_strict=sum(w["test_net"] for w in wf_strict),
                 rule_names=[r.name for r in rules])
 
 
@@ -304,11 +376,15 @@ def write_csvs(res: dict, out_dir: str) -> List[str]:
         w = csv.writer(f, delimiter=";")
         w.writerow(["Regel", "netto $ (Rewards×0,6 + Verkauf zum Bid nach 60 Min.)", "Rewards×0,6 $", "Kurs 60 Min. $",
                     "Bid 60 Min. $", "Kurs 5 Min. $", "Fills", "gefüllt $", "netto je 1 $ gefüllt", "Gebots-Stunden",
-                    "Blöcke", "Blöcke positiv"])
+                    "Blöcke", "Blöcke positiv", "netto Halten $ (Verkaufsgebot wie Szenario)", "Halten Handel $",
+                    "Blöcke positiv Halten", "netto streng + Halten $", "Fills streng", "gefüllt streng $",
+                    "Blöcke positiv streng"])
         for r in sorted(res["rules"], key=lambda d: -d["net"]):
             w.writerow([r["rule"], _de(r["net"]), _de(r["rewards60"]), _de(r["m60"]), _de(r["m60bid"]), _de(r["m5"]),
                         r["fills"], _de(r["filled"]), _de(r["net"] / r["filled"], 4) if r["filled"] else "",
-                        _de(r["quote_h"], 1), r["blocks"], r["blocks_pos"]])
+                        _de(r["quote_h"], 1), r["blocks"], r["blocks_pos"], _de(r.get("net_hold")), _de(r.get("hold")),
+                        r.get("hold_pos", ""), _de(r.get("net_strict")), r.get("sfills", ""), _de(r.get("sfilled")),
+                        r.get("strict_pos", "")])
     paths.append(p)
     p = os.path.join(out_dir, "replay-walkforward.csv")
     with open(p, "w", newline="", encoding="utf-8-sig") as f:
@@ -319,6 +395,16 @@ def write_csvs(res: dict, out_dir: str) -> List[str]:
             w.writerow([time.strftime("%Y-%m-%d %H:%M", time.gmtime(r["block"])), res["rule_names"][r["rule"]],
                         _de(r["train_net"]), _de(r["test_net"]), _de(r["test_rewards"]), _de(r["test_m60bid"]),
                         _de(r["test_filled"]), _de(r["base_net"])])
+    paths.append(p)
+    p = os.path.join(out_dir, "replay-walkforward-halten.csv")
+    with open(p, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Zählweise", "Block (UTC)", "gewählte Regel (beste bis dahin)", "netto davor je Block $",
+                    "netto im Block $", f"Vergleich {res['baseline']} $"])
+        for label, key in (("Halten", "walk_forward_hold"), ("streng + Halten", "walk_forward_strict")):
+            for r in res.get(key) or []:
+                w.writerow([label, time.strftime("%Y-%m-%d %H:%M", time.gmtime(r["block"])),
+                            res["rule_names"][r["rule"]], _de(r["train_net"]), _de(r["test_net"]), _de(r["base_net"])])
     paths.append(p)
     p = os.path.join(out_dir, "replay-kategorien.csv")
     with open(p, "w", newline="", encoding="utf-8-sig") as f:
@@ -350,7 +436,8 @@ def main(argv: Optional[Sequence[str]] = None) -> dict:
         json.dump(res, f)
     os.replace(tmp, os.path.join(data_dir, "replaylab.json"))
     print(f"{res['markets']} Märkte, {res['blocks']} Blöcke à {args.block_h:g} h; walk-forward netto "
-          f"{res['wf_test']:+.2f} $ (davor je Block {res['wf_train_best']:+.2f} $, Vergleich {res['wf_base']:+.2f} $)")
+          f"{res['wf_test']:+.2f} $ (davor je Block {res['wf_train_best']:+.2f} $, Vergleich {res['wf_base']:+.2f} $); "
+          f"Halten {res['wf_hold']:+.2f} $, streng + Halten {res['wf_strict']:+.2f} $")
     return res
 
 

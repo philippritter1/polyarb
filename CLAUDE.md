@@ -250,6 +250,12 @@ Aktive Kandidaten im Live-Test:
   Vorbehalte: Replay ohne Warteschlange, keine Gebühr beim Verkauf zum Bid, Idee aus demselben Zeitraum.
 - `mm_favorit2` (ab 28.10., Nutzer): mm_favorit mit der Replay-Siegerregel (`quote_frac: 0.9`, Mitte 0,20–0,80). Replay-Labor
   zusätzlich Abstand 0,8 für „nur Favorit“ (48 Regeln).
+- **Replay 29.10.:** 0,9 beidseitig +908 $ (11/16), nur Favorit +451 $ (13/16), walk-forward +792 $ (12/15) – aber Szenarien
+  mit 0,9 (mm_favorit2, mm_farmer) ≈ 0. Darum (29.10., Nutzer) zählt das Replay dieselben Fills zusätzlich als **„Halten“**
+  (Verkaufsgebot wie die Szenarien: Mitte + Abstand, stündlich in 6 Stufen zur Mitte, nach 96 h zum Bid; gefüllt, wenn der
+  Bid es erreicht oder ein Handel darüber druckt; Datenende = letzter Bid) und **„streng“** (nur Fills, bei denen der Ask
+  unter unser Gebot fiel oder ein Handel darunter druckte – Warteschlange). Spalten in replay-regeln.csv, eigener
+  Walk-forward in replay-walkforward-halten.csv.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

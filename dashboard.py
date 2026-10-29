@@ -884,6 +884,7 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
                exp / "kalshi-diagnose.csv", "kalshi/diagnose.csv")]
     for name, label in (("replay-regeln.csv", "MM-Regeln auf dem Orderbuch-Mitschnitt: Rewards×0,6, Kurs nach Fill, netto"),
                         ("replay-walkforward.csv", "Walk-forward: beste Regel bis dahin gegen den nächsten 12-h-Block"),
+                        ("replay-walkforward-halten.csv", "Walk-forward mit Halten (Verkaufsgebot wie Szenario) und streng (nur durchgehandelte Fills)"),
                         ("replay-kategorien.csv", "Beste Regel und Vergleich je Kategorie")):
         src = Path(study_db).parent / name  # written by arb/replaylab.py (polyarb-replay.timer)
         if src.exists():

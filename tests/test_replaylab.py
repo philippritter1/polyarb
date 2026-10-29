@@ -7,7 +7,7 @@ from arb.booklog import SCHEMA, pack_levels
 T0 = 1_760_000_400  # a block boundary for 1 h blocks
 
 
-def _booklog(path, minutes=240, crash_at=100, after=0.48, base=0.50):
+def _booklog(path, minutes=240, crash_at=100, after=0.48, base=0.50, trades=None):
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
     db.execute("INSERT INTO mkt VALUES('c1', 'e', 'Politik', ?, 'Wird X?', 'Y', 'N')", (T0 + 30 * 86400,))
@@ -19,7 +19,7 @@ def _booklog(path, minutes=240, crash_at=100, after=0.48, base=0.50):
         if i == crash_at:
             ask = 0.47  # sellers hit down to 0.47: fills every bid at or above it
         db.execute("INSERT INTO snap VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                   (ts, "Y", "c1", bid, ask, 100, 100, mid, None,
+                   (ts, "Y", "c1", bid, ask, 100, 100, mid, (trades or {}).get(i),
                     pack_levels([L(price=bid, size=100)], 3), pack_levels([L(price=ask, size=100)], 3)))
         db.execute("INSERT INTO snap VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                    (ts, "N", "c1", round(1 - ask, 2), round(1 - bid, 2), 100, 100, round(1 - mid, 2), None,
@@ -53,7 +53,20 @@ def test_replay_scores_rewards_fills_and_walk_forward(tmp_path):
     assert far["fills"] == 0 and far["net"] > 0                       # 0.46 bid was never reached
     assert rows[replaylab.Rule(0.25, False, 0.05, 0.95, 14.0).name]["quote_h"] > 0   # 30 days left
     paths = replaylab.write_csvs(res, str(tmp_path / "out"))
-    assert len(paths) == 3 and "Abstand" in open(paths[0], encoding="utf-8-sig").read()
+    assert len(paths) == 4 and "Abstand" in open(paths[0], encoding="utf-8-sig").read()
+    # held instead of sold an hour later: nobody buys at our sell order, so it is valued at the last bid (0.47)
+    assert near["hold"] < 0 and near["sfills"] >= 1 and abs(near["net_hold"] - near["rewards60"] - near["hold"]) < 1e-9
+    assert "Halten" in open(paths[2], encoding="utf-8-sig").read()
+
+
+def test_hold_exit_sells_to_a_trade_above_the_sell_order(tmp_path):
+    bl, sc = str(tmp_path / "2025-10-09.sqlite"), str(tmp_path / "scenario-mm_x.sqlite")
+    _booklog(bl, after=0.50, trades={130: 0.53})  # crash fills us at 0.49, later someone buys at 0.53
+    _scen(sc)
+    r = replaylab.Rule(0.25, False, 0.05, 0.95, 0.0)
+    row = replaylab.run([bl], [sc], rules=[r], block_h=1)["rules"][0]
+    # sell order at mid 0.50 + 1 tick = 0.51: bought at 0.49 (and 0.48 on NO via the same crash), sold at 0.51
+    assert row["fills"] >= 1 and row["hold"] > 0 and row["hold"] > row["m60bid"]
 
 
 def test_pause_after_a_jump_skips_quotes(tmp_path):

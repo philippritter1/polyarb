@@ -310,6 +310,7 @@ scenarios:
     max_open_positions: 200      # Positionen + offene Limits
   mm_rewards:
     enabled: true
+    wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
     title: Market Making (Rewards)
     strategy: mm                 # arb/mm.py: beidseitig quotieren statt auf eine Seite wetten (06.10.)
     # Verdient Spread (JA-Gebot + NEIN-Gebot = 1 $ beim Zusammenlegen), Liquidity Rewards (geschätzt aus den
@@ -694,6 +695,54 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_dellen:
+    enabled: true
+    title: Market Making (Dellen, breit)
+    strategy: mm                 # 30.10. Nutzer: Replay (Halten wie Szenario, nur durchgehandelte Fills) +1.800 $ auf ~45.000 $
+    # gefüllt bei Abstand 0,9 · Pause · ≥ 14 T über ~1.700 Reward-Märkte, walk-forward +1.750 $ – Gewinn aus Dellen, die sich
+    # erholen (Kauf weit unter der Mitte, Verkaufsgebot zur Mitte), kaum aus Rewards. Die Szenarien mit 0,9 wählen 20–60 Märkte
+    # nach Reward und liegen ≈ 0. Hier wie im Replay: breit (100 Märkte nach 24h-Volumen statt nach Reward), kleine Gebote,
+    # beidseitig, kein Selbstlernen/Microprice/Paar-Logik, nach Fill 60 Min. Ruhe auf der Seite. Frage: hält der Replay-Gewinn?
+    exit:
+      after_h: 0
+      decay_h: 6
+      dump_after_h: 96
+    reward_asks: true
+    pause:
+      ticks: 3
+      window_s: 300
+      pause_s: 600
+    fill_cooldown_s: 3600
+    rank: volume                 # neu: nach 24h-Volumen (Ereignis) statt nach Reward
+    list_orders: [volume, liquidity, volume24hr, startDate]
+    min_liquidity: 1000
+    capital_usd: 2500
+    max_markets: 100
+    min_daily_rate: 1
+    max_min_size_usd: 30         # Reward-Mindestgröße höchstens ~30 $ (sonst würde ein Gebot groß)
+    skip_categories: [Sport, Krypto, Finanz]
+    skip_re:                     # 16.10. Nutzer: Sport-Saison- und Kursmärkte meiden (dort kamen die echten Verluste)
+      - '\b(nhl|nba|nfl|mlb|wnba|mls|ncaa|ufc|nascar|f1|formula 1|premier league|la liga|bundesliga|serie a|ligue 1)\b'
+      - '\b(champions league|europa league|stanley cup|super bowl|world series|world cup|playoffs?|mvp|grand prix)\b'
+      - '\b(pga|atp|wta|heisman|ballon d.or|rookie of the year|conference finals?|regular season|championship)\b'
+      - '\b(golf|ryder cup|masters|us open|olympics?|medals?|tour de france|cricket|rugby|boxing|ufc|darts|snooker|wimbledon|roland garros|team europe|team usa|relegat\w*|top scorer|golden boot|cy young|world series|nba finals|super bowl)\b'   # 16.10.: Ryder Cup rutschte durch
+      - '\b\d+\+ ?(points|wins|goals|touchdowns|games)\b|\brecord \d+'
+      - '\b(panthers|maple leafs|bruins|rangers|oilers|canucks|flames|avalanche|lightning|capitals|penguins|blackhawks)\b'
+      - '\b(lakers|celtics|warriors|knicks|bucks|nuggets|76ers|mavericks|cavaliers|thunder|timberwolves|clippers)\b'
+      - '\b(chiefs|eagles|cowboys|49ers|packers|ravens|bills|steelers|patriots|lions|bengals|dolphins|yankees|dodgers)\b'
+      - '\b(hit|above|below|between|reach|close[sd]?|dip|high|low)\b[^?]*\$\d'   # Kurs-/Preisschwellen
+      - '\b(etf|index|s&p|nasdaq|dow|spy|qqq|stock|shares?)\b'
+    min_days_to_end: 14
+    stop_hours_before_end: 24
+    min_mid: 0.2
+    max_mid: 0.8
+    quote_frac: 0.9
+    quote_usd: 15
+    overcommit: 2                # 100 Märkte × 2 Seiten > Cash; Überbuchen geht echt (Test 15.10.)
+    max_inventory_usd: 60
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_farmer:
     enabled: true
     title: Market Making (Reward-Farmer)
@@ -883,6 +932,7 @@ scenarios:
     step_s: 2
   mm_stop:
     enabled: true
+    wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
     title: Market Making (Stop-Loss)
     strategy: mm                 # 16.10. Nutzer: wie mm_schutz_neu plus Stop-Loss – fällt die Mitte der gehaltenen Seite
     # 3 Ticks unter den Einstand, sofort zum Bid verkaufen (Taker-Gebühr), statt auf die Treppe zu warten. Anlass: offener
@@ -1111,6 +1161,7 @@ scenarios:
       deposits_usd: 87.0         # eingezahlt insgesamt (14.10. 11,00 + 15.10. 76,00) – bei jeder Ein-/Auszahlung anpassen
   mm_robust: &mm_robust
     enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block, das Order-Modul wird nicht erzeugt.
+    wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
                                  # Der Server startet polyarb-scenario@mm_robust beim nächsten update.
                                  # Auswertung ab dem eigenen Start, eigene Datenbank.
     title: Market Making (robust)
@@ -1306,6 +1357,7 @@ scenarios:
     step_s: 2
   mm_neu_vorsichtig2:
     enabled: true                # 19.10. Nutzer: wie mm_neu_vorsichtig, aber 24h-Volumen ab 1.000 $ statt 10.000 $
+    wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
     title: Market Making (neu, vorsichtig 2)
     strategy: mm                 # 18.10.: nur die ersten Tage eines Markts (dort lag der Reward in der Simulation),
     # feste kleine Deckel, kein Überbuchen, Abstand 0,5. Raus, wenn der geschätzte Anteil am Reward-Pool unter

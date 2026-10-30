@@ -111,7 +111,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (20.10.): mm_rewards, mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_stop, mm_robust, mm_neu_vorsichtig2, mm_farmer, mm_favorit, mm_favorit2, wetter_sniper, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
+Aktiv (30.10.): mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_farmer, mm_favorit, mm_favorit2, mm_dellen, wetter_sniper, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_rewards, mm_robust, mm_neu_vorsichtig2, mm_stop (30.10.), mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -256,6 +256,15 @@ Aktive Kandidaten im Live-Test:
   Bid es erreicht oder ein Handel darüber druckt; Datenende = letzter Bid) und **„streng“** (nur Fills, bei denen der Ask
   unter unser Gebot fiel oder ein Handel darunter druckte – Warteschlange). Spalten in replay-regeln.csv, eigener
   Walk-forward in replay-walkforward-halten.csv.
+- **Replay 30.10. 02:50 (Halten/streng):** Halten wie Szenario macht 0,9 besser, nicht schlechter: 0,9 · Pause · ≥ 14 T
+  bisher +771 $, Halten +1.774 $, streng + Halten +1.871 $ (48k $ gefüllt); walk-forward Halten +1.721 $ (10/14). Gewinn aus
+  Dellen, die sich erholen (Rewards nur 90–190 $). Szenarien mit 0,9 trotzdem ≈ 0 → Verdacht Marktauswahl (Szenarien: 20–60
+  Märkte nach Reward; Replay: alle ~1.700 Märkte, die je ein Szenario wählte). Replay-Dienst jetzt 12–14 Min., MemoryMax 550M.
+- 30.10. Nutzer: `mm_rewards`, `mm_robust`, `mm_neu_vorsichtig2`, `mm_stop` mit `wind_down: true` (ohne aktives Abstoßen).
+  Neu `mm_dellen`: breit wie das Replay – 100 Märkte nach 24h-Volumen (`rank: volume`, neu in arb/mm.py), Abstand 0,9,
+  beidseitig, 15 $ je Gebot (Mindestgröße ≤ 30 $), overcommit 2, Pause, ≥ 14 T, Mitte 0,2–0,8, fill_cooldown 60 Min.,
+  Verkaufsgebot-Treppe; kein learn/micro/pair_frac. Replay schreibt `replay-szenariomaerkte.csv`: je Szenario die
+  Fokus-Regeln auf dessen Märkten („bespielt“) vs. allen übrigen – zeigt, ob die Auswahl der Grund ist.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

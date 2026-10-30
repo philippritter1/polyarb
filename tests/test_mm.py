@@ -83,9 +83,10 @@ def test_aggressive_mm_scenarios_wind_down_and_the_others_do_not():
         s = sc[name]
         assert s["wind_down"] is True and s["unwind"] == "active" and s["enabled"] is True
         assert bit in s["title"] and "live" not in s
-    for name in ("mm_rewards", "mm_robust", "mm_robust_quotealter", "mm_konservativ", "mm_neu_vorsichtig",
-                 "mm_probe", "mm_breit", "mm_schutz", "mm_schutz_neu", "mm_stop"):
+    for name in ("mm_konservativ", "mm_neu_vorsichtig", "mm_probe", "mm_breit", "mm_schutz", "mm_schutz_neu"):
         assert not sc[name].get("wind_down") and sc[name].get("unwind") != "active"
+    for name in ("mm_rewards", "mm_robust", "mm_neu_vorsichtig2", "mm_stop"):  # 30.10. owner: wind down quietly
+        assert sc[name]["wind_down"] is True and sc[name].get("unwind") != "active"
 
 
 def _held(cid="a", qty=80, cost=40, end=None):
@@ -924,7 +925,7 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert n["exit"]["stop_ticks"] >= 3 and "skew" not in n
     n2 = sc["mm_neu_vorsichtig2"]  # the same, but 24-h volume from 1,000 $
     assert n2["enabled"] is True and "live" not in n2 and n2["min_event_volume_24h"] == 1000
-    assert {k_: v for k_, v in n2.items() if k_ not in ("enabled", "title", "min_event_volume_24h")} == \
+    assert {k_: v for k_, v in n2.items() if k_ not in ("enabled", "title", "min_event_volume_24h", "wind_down")} == \
         {k_: v for k_, v in n.items() if k_ not in ("enabled", "archive", "title", "min_event_volume_24h")}
     q = sc["mm_robust_quotealter"]
     assert q["enabled"] is False and q["archive"] is True and "live" not in q and q["strategy"] == "mm"
@@ -1254,3 +1255,25 @@ def test_config_mm_favorit2_is_mm_favorit_further_out():
     assert g["quote_frac"] == 0.9 and g["min_mid"] == 0.2 and g["max_mid"] == 0.8 and g["fav_only"] is True
     diff = {k for k in set(f) | set(g) if f.get(k) != g.get(k)}
     assert diff == {"title", "quote_frac", "min_mid", "max_mid"} and "live" not in g
+
+
+def test_rank_volume_picks_the_most_traded_markets(tmp_path):
+    store = BookStore()
+    ms = [_m("a", "Will the Fed cut rates?", 0.50, rate=200, volume24hr=100),
+          _m("b", "Will it rain in Paris?", 0.50, rate=20, volume24hr=90_000)]
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, rank="volume", max_markets=1, min_daily_rate=1),
+                     Client(ms), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.49, 0.51)
+    _book(store, "b", 0.49, 0.51)
+    mm.step()
+    assert list(mm.st.markets) == ["b"]   # by reward it would have been "a"
+
+
+def test_config_mm_dellen_and_the_four_winding_down():
+    from arb.config import load_config
+    sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
+    d = sc["mm_dellen"]
+    assert d["enabled"] and d["rank"] == "volume" and d["quote_frac"] == 0.9 and d["max_markets"] == 100
+    assert "learn" not in d and "fair" not in d and "live" not in d and d["fill_cooldown_s"] == 3600
+    for n in ("mm_rewards", "mm_robust", "mm_neu_vorsichtig2", "mm_stop"):
+        assert sc[n]["wind_down"] is True

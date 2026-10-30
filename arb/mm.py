@@ -565,6 +565,8 @@ class MarketMaker:
                 continue
             cands.append((rate, m, v, size, end, toks))
         cands.sort(key=lambda x: -x[0])
+        if sc.get("rank") == "volume":  # mm_dellen (30.10.): the most traded markets, not the richest pools
+            cands.sort(key=lambda x: -volume_24h(x[1]))
         if sc.get("rank") == "share" and cands:
             cands = self._rank_by_share(cands[:int(sc.get("prefilter", 60))], st)
         want = int(sc.get("max_markets", 15))

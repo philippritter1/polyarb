@@ -53,7 +53,11 @@ def test_replay_scores_rewards_fills_and_walk_forward(tmp_path):
     assert far["fills"] == 0 and far["net"] > 0                       # 0.46 bid was never reached
     assert rows[replaylab.Rule(0.25, False, 0.05, 0.95, 14.0).name]["quote_h"] > 0   # 30 days left
     paths = replaylab.write_csvs(res, str(tmp_path / "out"))
-    assert len(paths) == 4 and "Abstand" in open(paths[0], encoding="utf-8-sig").read()
+    assert len(paths) == 5 and "Abstand" in open(paths[0], encoding="utf-8-sig").read()
+    split = {(r["rule"], r["part"]): r for r in res["split"] if r["scenario"] == "mm_x"}
+    inside = split[(replaylab.BASELINE.name, "bespielt")]
+    assert inside["markets"] == 1 and split[(replaylab.BASELINE.name, "übrige")]["markets"] == 0
+    assert "bespielt" in open(paths[3], encoding="utf-8-sig").read()
     # held instead of sold an hour later: nobody buys at our sell order, so it is valued at the last bid (0.47)
     assert near["hold"] < 0 and near["sfills"] >= 1 and abs(near["net_hold"] - near["rewards60"] - near["hold"]) < 1e-9
     assert "Halten" in open(paths[2], encoding="utf-8-sig").read()

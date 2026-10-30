@@ -6,7 +6,7 @@ User=polyarb
 # batch job: below the trading in CPU and memory, killed first when RAM runs out
 Nice=19
 OOMScoreAdjust=500
-MemoryMax=400M
+MemoryMax=550M
 WorkingDirectory=/opt/polyarb
 EnvironmentFile=/etc/polyarb.env
 ExecStart=/opt/polyarb/.venv/bin/python -m arb.replaylab

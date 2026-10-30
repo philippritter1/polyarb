@@ -93,6 +93,49 @@ def reward_params(db_paths: Iterable[str]) -> Dict[str, Tuple[float, float, floa
     return {c: v[1:] for c, v in out.items() if v[1] > 0 and v[2] > 0}
 
 
+def scenario_markets(db_paths: Iterable[str]) -> Dict[str, set]:
+    """Scenario name -> the markets it selected at some point (mm_reward_params has one row per selection)."""
+    out: Dict[str, set] = {}
+    for path in db_paths:
+        name = os.path.basename(path)[len("scenario-"):].rsplit(".", 1)[0]
+        try:
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            cids = {r[0] for r in db.execute("SELECT DISTINCT cid FROM mm_reward_params") if r[0]}
+            db.close()
+        except sqlite3.Error:
+            continue
+        if cids:
+            out[name] = cids
+    return out
+
+
+SPLIT_KEYS = ("rewards", "m60bid", "hold", "shold", "filled", "sfilled", "fills")
+
+
+def split_rows(per_market: Dict[str, Dict[int, tuple]], groups: Dict[str, set], rules: Sequence[Rule],
+               focus: Sequence[int]) -> List[dict]:
+    """Per scenario and focus rule: the replay on the markets that scenario selected vs. on all the others.
+    30.10.: the replay won at 0.9 over ~1.700 markets, the scenarios at 0.9 (20–60 markets picked by reward) did not."""
+    rows = []
+    for name in sorted(groups):
+        for ri in focus:
+            for label, inside in (("bespielt", True), ("übrige", False)):
+                tot = dict.fromkeys(SPLIT_KEYS, 0.0)
+                n = 0
+                for cid, by_rule in per_market.items():
+                    if (cid in groups[name]) != inside or ri not in by_rule:
+                        continue
+                    n += 1
+                    for k, v in zip(SPLIT_KEYS, by_rule[ri]):
+                        tot[k] += v
+                rows.append(dict(scenario=name, rule=rules[ri].name, part=label, markets=n,
+                                 net=REAL_REWARD_FACTOR * tot["rewards"] + tot["m60bid"],
+                                 net_hold=REAL_REWARD_FACTOR * tot["rewards"] + tot["hold"],
+                                 net_strict=REAL_REWARD_FACTOR * tot["rewards"] + tot["shold"],
+                                 filled=tot["filled"], sfilled=tot["sfilled"], fills=int(tot["fills"])))
+    return rows
+
+
 def markets(paths: Sequence[str]) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     for path in paths:
@@ -327,9 +370,16 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
     mkts = {c: m for c, m in markets(booklog_paths).items() if c in params}
     total: Dict[Tuple[int, int], dict] = {}
     by_cat: Dict[Tuple[int, str], dict] = {}
+    per_market: Dict[str, Dict[int, tuple]] = {}
     for cid, mk in mkts.items():
         res = replay_market(mk, series(booklog_paths, mk["yes"]), series(booklog_paths, mk["no"]), params[cid],
                             rules, block_s, size_usd)
+        mine: Dict[int, list] = {}
+        for (ri, _b), acc in res.items():
+            cur = mine.setdefault(ri, [0.0] * len(SPLIT_KEYS))
+            for i, k in enumerate(SPLIT_KEYS):
+                cur[i] += acc[k]
+        per_market[cid] = {ri: tuple(v) for ri, v in mine.items()}
         for key, acc in res.items():
             total[key] = _sum([total.get(key) or _new_acc(), acc])
             ck = (key[0], mk["category"] or "?")
@@ -351,6 +401,17 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
     wf_hold = walk_forward(total, len(rules), base, net_hold)
     wf_strict = walk_forward(total, len(rules), base, net_strict)
     best = max(rule_rows, key=lambda d: d["net"]) if rule_rows else None
+    best_hold = max(rule_rows, key=lambda d: d["net_hold"]) if rule_rows else None
+    focus = []
+    for r in (best, best_hold):
+        if r and r["idx"] not in focus:
+            focus.append(r["idx"])
+    if base not in focus:
+        focus.append(base)
+    fav = Rule(0.9, True, 0.2, 0.8, 14.0, fav=True)  # mm_favorit2
+    if fav in rules and rules.index(fav) not in focus:
+        focus.append(rules.index(fav))
+    split = split_rows(per_market, scenario_markets(scenario_dbs), rules, focus)
     cats = [dict(rule=rules[ri].name, category=c, net=net(a), rewards60=REAL_REWARD_FACTOR * a["rewards"],
                  m60bid=a["m60bid"], fills=a["fills"], filled=a["filled"])
             for (ri, c), a in sorted(by_cat.items()) if best and ri in (best["idx"], base)]
@@ -358,7 +419,7 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
                 blocks=len(blocks), first=blocks[0] if blocks else None, rules=rule_rows, walk_forward=wf,
                 wf_test=sum(w["test_net"] for w in wf), wf_train_best=sum(w["train_net"] for w in wf),
                 wf_base=sum(w["base_net"] for w in wf), baseline=rules[base].name, categories=cats,
-                walk_forward_hold=wf_hold, wf_hold=sum(w["test_net"] for w in wf_hold),
+                split=split, walk_forward_hold=wf_hold, wf_hold=sum(w["test_net"] for w in wf_hold),
                 walk_forward_strict=wf_strict, wf_strict=sum(w["test_net"] for w in wf_strict),
                 rule_names=[r.name for r in rules])
 
@@ -405,6 +466,16 @@ def write_csvs(res: dict, out_dir: str) -> List[str]:
             for r in res.get(key) or []:
                 w.writerow([label, time.strftime("%Y-%m-%d %H:%M", time.gmtime(r["block"])),
                             res["rule_names"][r["rule"]], _de(r["train_net"]), _de(r["test_net"]), _de(r["base_net"])])
+    paths.append(p)
+    p = os.path.join(out_dir, "replay-szenariomaerkte.csv")
+    with open(p, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Szenario", "Regel", "Märkte", "Anzahl Märkte", "netto $ (Bid 60 Min.)", "netto Halten $",
+                    "netto streng + Halten $", "Fills", "gefüllt $", "gefüllt streng $", "Halten je 1 $ gefüllt"])
+        for r in res.get("split") or []:
+            w.writerow([r["scenario"], r["rule"], r["part"], r["markets"], _de(r["net"]), _de(r["net_hold"]),
+                        _de(r["net_strict"]), r["fills"], _de(r["filled"]), _de(r["sfilled"]),
+                        _de(r["net_hold"] / r["filled"], 4) if r["filled"] else ""])
     paths.append(p)
     p = os.path.join(out_dir, "replay-kategorien.csv")
     with open(p, "w", newline="", encoding="utf-8-sig") as f:

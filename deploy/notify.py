@@ -2,7 +2,7 @@
 
   python deploy/notify.py start     # "Bot läuft" + Dashboard-Link
   python deploy/notify.py watch     # alle 5 min: Alarm bei Stillstand, Kill-Switch, API-Problemen
-  python deploy/notify.py report 4  # alle 4 h: alle Strategien, realisierter Gewinn/Verlust gesamt und seit dem letzten Bericht
+  python deploy/notify.py report 4  # alle 4 h: aktive Szenarien, Equity bei 60 % Rewards gesamt, seit 4 h und 24 h
   python deploy/notify.py daily     # dasselbe über 24 h
 
 Einzelne Trade- und Auszahlungsnachrichten sind seit 01.10. aus (NOTIFY_TRADES=1 / NOTIFY_PAYOUTS=1 schalten sie wieder ein).
@@ -47,7 +47,7 @@ def books() -> list:
     for name, sc in (cfg.get("scenarios") or {}).items():
         if sc and sc.get("enabled"):
             out.append(dict(label=sc.get("title", name), db=str(data.parent / f"scenario-{name}.sqlite"),
-                            start=float(sc.get("capital_usd", 2500))))
+                            start=float(sc.get("capital_usd", 2500)), wind_down=bool(sc.get("wind_down"))))
     return out
 
 
@@ -364,8 +364,59 @@ def live_line(b: dict):
     return " · ".join(parts)
 
 
+def value_at(db: str, ts: float = None):
+    """Equity counting 60 % of the estimated rewards (inventory at the bid) at or before ts – the number the
+    dashboard and cockpit judge by. None without data."""
+    global DB
+    DB, keep = db, DB
+    try:
+        where, args = ("WHERE ts <= ?", (ts,)) if ts else ("", ())
+        row = q(f"SELECT equity, rewards_cum FROM equity {where} ORDER BY ts DESC LIMIT 1", args)
+        if not row:  # books written before the reward columns
+            row = [(r[0], None) for r in q(f"SELECT equity FROM equity {where} ORDER BY ts DESC LIMIT 1", args)]
+    finally:
+        DB = keep
+    if not row or row[0][0] is None:
+        return None
+    return float(row[0][0]) - 0.4 * float(row[0][1] or 0)
+
+
+def _short(label: str) -> str:
+    return "MM " + label[len("Market Making ("):-1] if label.startswith("Market Making (") and label.endswith(")") \
+        else label
+
+
 def overview(hours: float, title: str):
-    """One message for all strategies: realized result in total and over the last `hours`."""
+    """Short (31.10., owner): only the scenarios still running, one line each – equity at 60 % rewards against the
+    start, over `hours` and over 24 h. Winding-down books are one summary line."""
+    now = time.time()
+    rows, winding = [], []
+    for b in books():
+        cur = value_at(b["db"])
+        if cur is None:
+            continue
+        x = dict(b, total=cur - b["start"], d_h=cur - (value_at(b["db"], now - hours * 3600) or b["start"]),
+                 d_24=cur - (value_at(b["db"], now - 86400) or b["start"]))
+        (winding if b.get("wind_down") else rows).append(x)
+    if not rows and not winding:
+        push(f"{title}: noch keine Daten", "Kein Buch hat bisher Daten geschrieben.", "high", "warning")
+        return
+    lines = [f"Equity bei 60 % Rewards (Bestand zum Bid) – gesamt | {hours:g}h | 24h"]
+    for x in sorted(rows, key=lambda x: -x["total"]):
+        arrow = "▲" if x["total"] > 0 else "▼" if x["total"] < 0 else "•"
+        lines.append(f"{arrow} {_short(x['label'])}: {usd(x['total'])} | {usd(x['d_h'])} | {usd(x['d_24'])}")
+    if winding:
+        lines.append(f"Auslaufend ({len(winding)}): {usd(sum(x['total'] for x in winding))} gesamt, "
+                     f"{usd(sum(x['d_24'] for x in winding))} in 24h")
+    real = [t for t in (live_line(x) for x in rows + winding) if t]
+    if real:
+        lines += [""] + real
+    push(title, "\n".join(lines), tags="bar_chart", click=URL)
+
+
+def overview_long(hours: float, title: str):
+    """The full report until 31.10. (all books, realized result, trade/rewards split, pool trend) – kept for
+    `python deploy/notify.py report-lang`."""
     since = time.time() - hours * 3600
     stats = [book_stats(b, since) for b in books()]
     live = [x for x in stats if x["ok"]]
@@ -398,9 +449,15 @@ def overview(hours: float, title: str):
     push(title, "\n".join(lines), tags="bar_chart", click=URL)
 
 
+def cmd_report_long():
+    h = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0
+    overview_long(h, f"Polyarb {h:g}h-Bericht (lang)")
+
+
 def cmd_msg():
     push("Polyarb", " ".join(sys.argv[2:]) or "(leer)", tags="gear")
 
 
 if __name__ == "__main__":
-    {"start": cmd_start, "watch": cmd_watch, "daily": cmd_daily, "report": cmd_report, "msg": cmd_msg}[sys.argv[1] if len(sys.argv) > 1 else "daily"]()
+    {"start": cmd_start, "watch": cmd_watch, "daily": cmd_daily, "report": cmd_report,
+     "report-lang": cmd_report_long, "msg": cmd_msg}[sys.argv[1] if len(sys.argv) > 1 else "daily"]()

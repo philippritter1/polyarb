@@ -412,11 +412,14 @@ def test_notifications_follow_the_configured_scenario(tmp_path):
     rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "4"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
     assert pnl > 0 and "Polyarb 4h-Bericht" in rep  # the simulated trades lie outside the last 4 h ...
-    assert f"Gesamt realisiert ${pnl:,.2f} ({pnl / 500 * 100:+.2f} % auf $500.00)" in rep
-    assert f"▲ {label}: ${pnl:,.2f} (+{pnl / 500 * 100:.2f} %) | 4h $0.00" in rep
+    # short report (31.10.): equity at 60 % rewards against the start | over 4 h | over 24 h
+    assert f": ${pnl:,.2f} | $0.00 | $0.00" in rep and "Gesamt realisiert" not in rep
     rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "100000"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
-    assert f"| 100000h ${pnl:,.2f} · 1✓ 0✗" in rep  # ... but inside a long window
+    assert f": ${pnl:,.2f} | ${pnl:,.2f} | $0.00" in rep  # ... but inside a long window
+    rep = subprocess.run([sys.executable, "deploy/notify.py", "report-lang", "100000"], cwd=root, env=env,
+                         capture_output=True, text=True).stdout
+    assert f"| 100000h ${pnl:,.2f} · 1✓ 0✗" in rep  # the old long report is still there on demand
 
 
 def test_sport_band_filters_on_volume_at_purchase(tmp_path):

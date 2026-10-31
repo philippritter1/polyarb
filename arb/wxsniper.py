@@ -30,6 +30,7 @@ from datetime import date, datetime, timezone
 from typing import List
 
 from .client import _parse_json_list, _parse_ts, _delay
+from .memtrim import release_memory
 from .scenarios import Signal, Strategy
 from .weather import MONTHS, parse_bucket, parse_title
 from .wxobs import LiveObs, parse_question, station_from, to_unit
@@ -121,6 +122,8 @@ class WxSniperStrategy(Strategy):
                 st[rule] = st.get(rule, 0) + 1
                 snaps.append(self._snap(ev, m, q, ruled, now, min_yes, out, buy_yes=buy_yes, rule=rule))
         self.snaps = snaps
+        del events
+        release_memory()  # the event listing (~400 events with all buckets) is no longer needed (31.10., RAM)
         st["kaufbar"] = sum(1 for s in snaps if s["buyable"])
         st["Signale"] = len(out)
         return out

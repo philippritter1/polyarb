@@ -936,7 +936,7 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
         s = sc[name]
         assert s["max_min_size_usd"] == s["quote_usd"] and "live" not in s
     w = sc["wetter_sniper"]
-    assert w["enabled"] is True and w["strategy"] == "wxsniper" and "live" not in w
+    assert w["enabled"] is False and w["archive"] is True and w["strategy"] == "wxsniper" and "live" not in w  # 31.10. archived
     assert w["min_margin"] >= 1 and w["min_yes"] >= 0.03 and w["max_slippage"] == 0
 
 
@@ -1277,3 +1277,12 @@ def test_config_mm_dellen_and_the_four_winding_down():
     assert "learn" not in d and "fair" not in d and "live" not in d and d["fill_cooldown_s"] == 3600
     for n in ("mm_rewards", "mm_robust", "mm_neu_vorsichtig2", "mm_stop"):
         assert sc[n]["wind_down"] is True
+
+
+def test_config_mm_dellen_fav_is_mm_dellen_with_fav_only():
+    from arb.config import load_config
+    sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
+    d, f = sc["mm_dellen"], sc["mm_dellen_fav"]
+    assert f["enabled"] and f["fav_only"] is True and "live" not in f
+    assert {k for k in set(d) | set(f) if d.get(k) != f.get(k)} == {"title", "fav_only"}
+    assert sc["wetter_sniper"]["enabled"] is False and sc["wetter_sniper"]["archive"] is True

@@ -743,6 +743,52 @@ scenarios:
     max_total_inventory_usd: 1500
     latency_s: 1
     step_s: 2
+  mm_dellen_fav:
+    enabled: true
+    title: Market Making (Dellen, nur Favorit)
+    strategy: mm                 # 31.10. Nutzer: wie mm_dellen, aber nur Gebote auf den Favoriten (fav_only) – die billige Seite
+    # verlor in allen Szenario-Fills −6,6 bis −7,7 % je 1 $ (Favorit −0,6 bis −2,1 %). Direkter Vergleich mit mm_dellen.
+    fav_only: true
+    exit:
+      after_h: 0
+      decay_h: 6
+      dump_after_h: 96
+    reward_asks: true
+    pause:
+      ticks: 3
+      window_s: 300
+      pause_s: 600
+    fill_cooldown_s: 3600
+    rank: volume                 # neu: nach 24h-Volumen (Ereignis) statt nach Reward
+    list_orders: [volume, liquidity, volume24hr, startDate]
+    min_liquidity: 1000
+    capital_usd: 2500
+    max_markets: 100
+    min_daily_rate: 1
+    max_min_size_usd: 30         # Reward-Mindestgröße höchstens ~30 $ (sonst würde ein Gebot groß)
+    skip_categories: [Sport, Krypto, Finanz]
+    skip_re:                     # 16.10. Nutzer: Sport-Saison- und Kursmärkte meiden (dort kamen die echten Verluste)
+      - '\b(nhl|nba|nfl|mlb|wnba|mls|ncaa|ufc|nascar|f1|formula 1|premier league|la liga|bundesliga|serie a|ligue 1)\b'
+      - '\b(champions league|europa league|stanley cup|super bowl|world series|world cup|playoffs?|mvp|grand prix)\b'
+      - '\b(pga|atp|wta|heisman|ballon d.or|rookie of the year|conference finals?|regular season|championship)\b'
+      - '\b(golf|ryder cup|masters|us open|olympics?|medals?|tour de france|cricket|rugby|boxing|ufc|darts|snooker|wimbledon|roland garros|team europe|team usa|relegat\w*|top scorer|golden boot|cy young|world series|nba finals|super bowl)\b'   # 16.10.: Ryder Cup rutschte durch
+      - '\b\d+\+ ?(points|wins|goals|touchdowns|games)\b|\brecord \d+'
+      - '\b(panthers|maple leafs|bruins|rangers|oilers|canucks|flames|avalanche|lightning|capitals|penguins|blackhawks)\b'
+      - '\b(lakers|celtics|warriors|knicks|bucks|nuggets|76ers|mavericks|cavaliers|thunder|timberwolves|clippers)\b'
+      - '\b(chiefs|eagles|cowboys|49ers|packers|ravens|bills|steelers|patriots|lions|bengals|dolphins|yankees|dodgers)\b'
+      - '\b(hit|above|below|between|reach|close[sd]?|dip|high|low)\b[^?]*\$\d'   # Kurs-/Preisschwellen
+      - '\b(etf|index|s&p|nasdaq|dow|spy|qqq|stock|shares?)\b'
+    min_days_to_end: 14
+    stop_hours_before_end: 24
+    min_mid: 0.2
+    max_mid: 0.8
+    quote_frac: 0.9
+    quote_usd: 15
+    overcommit: 2                # 100 Märkte × 2 Seiten > Cash; Überbuchen geht echt (Test 15.10.)
+    max_inventory_usd: 60
+    max_total_inventory_usd: 1500
+    latency_s: 1
+    step_s: 2
   mm_farmer:
     enabled: true
     title: Market Making (Reward-Farmer)
@@ -1420,7 +1466,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   wetter_sniper:
-    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block, die Szenario-Engine schickt keine Orders.
+    enabled: false               # 31.10. Nutzer: archiviert (RAM ~100 MB) – abgelöst durch wetter_sniper2, offen 0 $, Endstand −60 $
+    archive: true                # (19.10. Philipp: Papier an. Kein live:-Block, die Szenario-Engine schickt keine Orders.)
     title: Wetter-Sniper
     strategy: wxsniper           # arb/wxsniper.py (18.10.): Temperatur-Bucket, den die Station schon um mindestens
     # min_margin Grad ausgeschlossen hat. Jeder solche Fall wird mit dem echten NO-Ask, der Tiefe dort, dem angezeigten

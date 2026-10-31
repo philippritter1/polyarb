@@ -81,7 +81,7 @@ def test_aggressive_mm_scenarios_wind_down_and_the_others_do_not():
     }
     for name, bit in titles.items():
         s = sc[name]
-        assert s["wind_down"] is True and s["unwind"] == "active" and s["enabled"] is True
+        assert s["wind_down"] is True and s["unwind"] == "active" and s["enabled"] is False and s["archive"]  # 31.10.
         assert bit in s["title"] and "live" not in s
     for name in ("mm_konservativ", "mm_neu_vorsichtig", "mm_probe", "mm_breit", "mm_schutz", "mm_schutz_neu"):
         assert not sc[name].get("wind_down") and sc[name].get("unwind") != "active"
@@ -904,14 +904,14 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     import yaml
     sc = yaml.safe_load(open(Path(__file__).resolve().parents[1] / "config.yaml", encoding="utf-8"))["scenarios"]
     r = sc["mm_robust"]
-    assert r["enabled"] is True and r["strategy"] == "mm" and "live" not in r
+    assert r["enabled"] is False and r["archive"] is True and r["strategy"] == "mm" and "live" not in r  # 31.10.
     assert r["min_days_to_end"] >= 14 and r["min_quote_frac"] >= 0.5 and r["quote_frac"] >= r["min_quote_frac"]
     assert r["max_event_usd"] > 0 and "Kultur" in r["skip_categories"] and r["skip_tags"] and r["skip_re"]
     assert sc["mm_sofort"]["min_days_to_end"] == 3 and "max_event_usd" not in sc["mm_sofort"]
-    assert sc["mm_sofort"]["enabled"] is True and "min_share" not in (sc["mm_sofort"].get("exit") or {})
-    assert sc["mm_nah"]["quote_frac"] == 0.25 and "min_quote_frac" not in sc["mm_nah"] and sc["mm_nah"]["enabled"] is True
-    assert sc["mm_treppe"]["enabled"] is True and sc["mm_ueberbucht"]["enabled"] is True
-    assert sc["mm_ruhig"]["enabled"] is True and sc["mm_stop"]["enabled"] is True and sc["mm_rewards"]["enabled"] is True
+    assert sc["mm_sofort"]["archive"] is True and "min_share" not in (sc["mm_sofort"].get("exit") or {})
+    assert sc["mm_nah"]["quote_frac"] == 0.25 and "min_quote_frac" not in sc["mm_nah"] and sc["mm_nah"]["archive"] is True
+    for n in ("mm_treppe", "mm_ueberbucht", "mm_ruhig", "mm_stop", "mm_rewards"):  # 31.10. owner: all archived
+        assert sc[n]["enabled"] is False and sc[n]["archive"] is True
     assert "Kultur" not in sc["mm_rewards"]["skip_categories"]
     k, n = sc["mm_konservativ"], sc["mm_neu_vorsichtig"]
     # 19.10. owner: mm_konservativ (0,03 $/day expected) and mm_neu_vorsichtig (10k volume filter: 5 markets) archived
@@ -924,8 +924,8 @@ def test_mm_robust_is_a_separate_scenario_and_leaves_the_others_alone():
     assert "Kultur" in n["skip_categories"] and n["skip_re"] and n["pause"]["ticks"] >= 3
     assert n["exit"]["stop_ticks"] >= 3 and "skew" not in n
     n2 = sc["mm_neu_vorsichtig2"]  # the same, but 24-h volume from 1,000 $
-    assert n2["enabled"] is True and "live" not in n2 and n2["min_event_volume_24h"] == 1000
-    assert {k_: v for k_, v in n2.items() if k_ not in ("enabled", "title", "min_event_volume_24h", "wind_down")} == \
+    assert n2["archive"] is True and "live" not in n2 and n2["min_event_volume_24h"] == 1000
+    assert {k_: v for k_, v in n2.items() if k_ not in ("enabled", "archive", "title", "min_event_volume_24h", "wind_down")} == \
         {k_: v for k_, v in n.items() if k_ not in ("enabled", "archive", "title", "min_event_volume_24h")}
     q = sc["mm_robust_quotealter"]
     assert q["enabled"] is False and q["archive"] is True and "live" not in q and q["strategy"] == "mm"
@@ -1178,7 +1178,7 @@ def test_running_scenarios_do_not_pick_up_the_new_filters():
     sc = cfg["scenarios"]
     for name in ("mm_robust", "mm_konservativ", "mm_robust_quotealter"):
         s = sc[name]
-        assert (s["enabled"] is True or name in ("mm_konservativ", "mm_robust_quotealter")) and "live" not in s
+        assert "live" not in s  # all three archived by 31.10.
         assert s["rewards_active"] is True and s["min_event_volume_24h"] >= 10000
         assert s["min_mid"] <= 0.10 and s["max_mid"] >= 0.90
         assert s["skew"]["long_usd"] > 0 and s["skew"]["fav_frac"] >= 0.5

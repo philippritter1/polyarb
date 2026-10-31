@@ -86,7 +86,7 @@ services:                      # 14.10.: abgeschaltet (Nutzer-Entscheidung) – 
   wxobs_study: false           # polyarb-wxobs.timer: Wetter-Messwert-Studie (Wetter-Strategien beendet)
 
 notify:
-  scenario: mm_rewards         # Alarme (Stillstand, Kill-Switch) für dieses Szenario; der 4-h-Bericht umfasst alle
+  scenario: mm_schutz          # 31.10.: mm_rewards archiviert – Alarme (Stillstand, Kill-Switch) für dieses Szenario; der 4-h-Bericht umfasst alle
 
 api:
   gamma_url: https://gamma-api.polymarket.com
@@ -309,7 +309,8 @@ scenarios:
     max_new_per_step: 10
     max_open_positions: 200      # Positionen + offene Limits
   mm_rewards:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
     title: Market Making (Rewards)
     strategy: mm                 # arb/mm.py: beidseitig quotieren statt auf eine Seite wetten (06.10.)
@@ -437,7 +438,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_sofort:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
     unwind: active               # 20.10.: Bestand aktiv in den Bid (Papier, Haircut, max. 2 ct unter dem Bid je Runde).
     title: Market Making (sofort verkaufen)
@@ -468,7 +470,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_treppe:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
     unwind: active               # 20.10.: Bestand aktiv in den Bid (Papier, Haircut, max. 2 ct unter dem Bid je Runde).
     title: Market Making (Abbau-Treppe)
@@ -500,7 +503,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_ruhig:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
     unwind: active               # 20.10.: Bestand aktiv in den Bid (Papier, Haircut, max. 2 ct unter dem Bid je Runde).
     title: Market Making (Pause bei Sprüngen)
@@ -977,7 +981,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_stop:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
     title: Market Making (Stop-Loss)
     strategy: mm                 # 16.10. Nutzer: wie mm_schutz_neu plus Stop-Loss – fällt die Mitte der gehaltenen Seite
@@ -1041,7 +1046,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_nah:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
     unwind: active               # 20.10.: Bestand aktiv in den Bid (Papier, Haircut, max. 2 ct unter dem Bid je Runde).
     title: Market Making (nah an der Mitte)
@@ -1071,7 +1077,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_ueberbucht:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 19.10.: auslaufen. Verlust 13–18 ct je 1 $ gefüllt, Hauptteil in Märkten ≤7 Tage.
     unwind: active               # 20.10.: Bestand aktiv in den Bid (Papier, Haircut, max. 2 ct unter dem Bid je Runde).
     title: Market Making (überbucht)
@@ -1206,7 +1213,8 @@ scenarios:
       day_reset: "2026-10-16 Nutzer"  # 16.10. Nutzer: Tagesbasis neu (Text ändern = neuer Tagesstart beim aktuellen Konto)
       deposits_usd: 87.0         # eingezahlt insgesamt (14.10. 11,00 + 15.10. 76,00) – bei jeder Ein-/Auszahlung anpassen
   mm_robust: &mm_robust
-    enabled: true                # 19.10. Philipp: Papier an. Kein live:-Block, das Order-Modul wird nicht erzeugt.
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
                                  # Der Server startet polyarb-scenario@mm_robust beim nächsten update.
                                  # Auswertung ab dem eigenen Start, eigene Datenbank.
@@ -1402,7 +1410,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_neu_vorsichtig2:
-    enabled: true                # 19.10. Nutzer: wie mm_neu_vorsichtig, aber 24h-Volumen ab 1.000 $ statt 10.000 $
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 30.10. Nutzer: klar negativ seit 20.10. – läuft aus (RAM für mm_dellen)
     title: Market Making (neu, vorsichtig 2)
     strategy: mm                 # 18.10.: nur die ersten Tage eines Markts (dort lag der Reward in der Simulation),
@@ -1490,7 +1499,8 @@ scenarios:
     max_new_per_step: 8
     max_open_positions: 40
   wetter_sniper2:
-    enabled: true                # 24.10. Philipp: Ausbau von wetter_sniper (Papier, kein live:-Block). wetter_sniper bleibt.
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     title: Wetter-Sniper 2
     strategy: wxsniper           # wie wetter_sniper, dazu (arb/wxsniper.py, alles optional):
     capital_usd: 2500
@@ -1516,7 +1526,8 @@ scenarios:
     max_new_per_step: 8
     max_open_positions: 60
   sharp_fussball:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     wind_down: true              # 14.10.: beendet – keine neuen Käufe, offene Positionen laufen aus
     title: Fußball vs. Pinnacle
     strategy: sharp              # arb/sharp.py (06.10.): Pinnacle-Quoten (The Odds API) als fairer Preis
@@ -1545,7 +1556,8 @@ scenarios:
     max_new_per_step: 10
     max_open_positions: 100
   sharp_fussball2:
-    enabled: true
+    enabled: false               # 31.10. Nutzer: archiviert (lief aus / bringt kaum etwas, RAM)
+    archive: true
     title: Fußball vs. Pinnacle 2
     strategy: sharp              # 17.10. Nutzer: Neuauflage nach Studien-Auswertung (13.816 Märkte Feb–Okt, Polymarket
     # 1 h vorher vs. Buchmacher-Schlusskurs): Abweichung ≥ 5 Punkte +6 ct/Anteil, ≥ 8 Punkte +9 (JA) bis +14 ct (NEIN),

@@ -111,7 +111,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (30.10.): mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_farmer, mm_favorit, mm_favorit2, mm_dellen, mm_dellen_fav, wetter_sniper2, sharp_fussball2; mit wind_down auslaufend: mm_rewards, mm_robust, mm_neu_vorsichtig2, mm_stop (30.10.), mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball; plus Studie/Kalshi-Studie.
+Aktiv (31.10.): mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_farmer, mm_favorit, mm_favorit2, mm_dellen, mm_dellen_fav; plus Studie/Kalshi-Studie/Replay/Wallet-Studie. Archiviert 31.10. (Nutzer, RAM + bringt kaum etwas): mm_rewards, mm_robust, mm_neu_vorsichtig2, mm_stop, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball, sharp_fussball2, wetter_sniper, wetter_sniper2 (Restbestand eingefroren). `notify: scenario` jetzt mm_schutz.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`

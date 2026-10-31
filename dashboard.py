@@ -886,6 +886,8 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
                         ("replay-walkforward.csv", "Walk-forward: beste Regel bis dahin gegen den nächsten 12-h-Block"),
                         ("replay-walkforward-halten.csv", "Walk-forward mit Halten (Verkaufsgebot wie Szenario) und streng (nur durchgehandelte Fills)"),
                         ("replay-szenariomaerkte.csv", "Replay je Szenario: in dessen Märkten vs. in allen übrigen (Marktauswahl als Ursache?)"),
+                        ("replay-fillvergleich.csv", "Fill für Fill: Replay-Fills vs. echte Szenario-Fills (gleicher Markt, Seite, ±15 Min.)"),
+                        ("replay-fillvergleich-einzeln.csv", "Fill-Vergleich, jede Replay-Fill einzeln"),
                         ("replay-kategorien.csv", "Beste Regel und Vergleich je Kategorie")):
         src = Path(study_db).parent / name  # written by arb/replaylab.py (polyarb-replay.timer)
         if src.exists():

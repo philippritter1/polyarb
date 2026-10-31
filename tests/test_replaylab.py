@@ -7,7 +7,7 @@ from arb.booklog import SCHEMA, pack_levels
 T0 = 1_760_000_400  # a block boundary for 1 h blocks
 
 
-def _booklog(path, minutes=240, crash_at=100, after=0.48, base=0.50, trades=None):
+def _booklog(path, minutes=240, crash_at=100, after=0.48, base=0.50, trades=None, crash_ask=0.47):
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
     db.execute("INSERT INTO mkt VALUES('c1', 'e', 'Politik', ?, 'Wird X?', 'Y', 'N')", (T0 + 30 * 86400,))
@@ -17,7 +17,7 @@ def _booklog(path, minutes=240, crash_at=100, after=0.48, base=0.50, trades=None
         mid = base if i <= crash_at else after  # bad news right after the fill
         bid, ask = round(mid - 0.01, 2), round(mid + 0.01, 2)
         if i == crash_at:
-            ask = 0.47  # sellers hit down to 0.47: fills every bid at or above it
+            ask = crash_ask  # sellers hit down to 0.47: fills every bid at or above it
         db.execute("INSERT INTO snap VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                    (ts, "Y", "c1", bid, ask, 100, 100, mid, (trades or {}).get(i),
                     pack_levels([L(price=bid, size=100)], 3), pack_levels([L(price=ask, size=100)], 3)))
@@ -53,7 +53,7 @@ def test_replay_scores_rewards_fills_and_walk_forward(tmp_path):
     assert far["fills"] == 0 and far["net"] > 0                       # 0.46 bid was never reached
     assert rows[replaylab.Rule(0.25, False, 0.05, 0.95, 14.0).name]["quote_h"] > 0   # 30 days left
     paths = replaylab.write_csvs(res, str(tmp_path / "out"))
-    assert len(paths) == 5 and "Abstand" in open(paths[0], encoding="utf-8-sig").read()
+    assert len(paths) == 7 and "Abstand" in open(paths[0], encoding="utf-8-sig").read()
     split = {(r["rule"], r["part"]): r for r in res["split"] if r["scenario"] == "mm_x"}
     inside = split[(replaylab.BASELINE.name, "bespielt")]
     assert inside["markets"] == 1 and split[(replaylab.BASELINE.name, "übrige")]["markets"] == 0
@@ -104,3 +104,26 @@ def test_cockpit_shows_the_replay(tmp_path):
     out = cockpit.replay_card(cockpit.replay_numbers(tmp_path))
     assert "Replay-Labor" in out and "Walk-forward über 3 Blöcke" in out and "(Vergleich)" in out
     assert cockpit.replay_card(None) == ""
+
+
+def test_fill_compare_matches_replay_fills_with_the_scenarios_own(tmp_path):
+    bl = str(tmp_path / "2025-10-09.sqlite")
+    _booklog(bl, crash_ask=0.45)                     # deep enough for the 0.9 rule (bids 0.46)
+    sc = str(tmp_path / "scenario-mm_dellen.sqlite")
+    _scen(sc)
+    db = sqlite3.connect(sc)
+    db.execute("CREATE TABLE mm_markout(ts REAL, cid TEXT, token TEXT, side TEXT, price REAL, qty REAL, m5 REAL, "
+               "m60 REAL)")
+    db.execute("DELETE FROM mm_reward_params")
+    for k in range(8):  # selected every half hour, as the scenarios re-select
+        db.execute("INSERT INTO mm_reward_params VALUES(?, 'c1', 'Wird X?', 100, 4, 20, 0, '')", (T0 + 60 + 1800 * k,))
+    db.execute("INSERT INTO mm_markout VALUES(?, 'c1', 'Y', 'yes', 0.46, 100, 0, -2)", (T0 + 60 * 101 + 120,))
+    db.execute("INSERT INTO mm_markout VALUES(?, 'c1', 'Y', 'yes', 0.49, 50, 0, -1)", (T0 + 60 * 30,))
+    db.commit()
+    db.close()
+    rule = replaylab.SCENARIO_RULES["mm_dellen"]
+    res = replaylab.run([bl], [sc], rules=[rule], block_h=1)
+    row = {r["scenario"]: r for r in res["fill_compare"]}["mm_dellen"]
+    assert row["replay_fills"] >= 1 and row["matched"] == 1          # the crash fill on YES: both got it
+    assert row["own_fills"] == 2 and row["own_only"] == 1 and row["own_only_m60"] == -1
+    assert any(d["matched"] and d["their_price"] == 0.46 for d in res["fill_compare_detail"])

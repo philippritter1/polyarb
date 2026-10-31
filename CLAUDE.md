@@ -265,6 +265,12 @@ Aktive Kandidaten im Live-Test:
   beidseitig, 15 $ je Gebot (Mindestgröße ≤ 30 $), overcommit 2, Pause, ≥ 14 T, Mitte 0,2–0,8, fill_cooldown 60 Min.,
   Verkaufsgebot-Treppe; kein learn/micro/pair_frac. Replay schreibt `replay-szenariomaerkte.csv`: je Szenario die
   Fokus-Regeln auf dessen Märkten („bespielt“) vs. allen übrigen – zeigt, ob die Auswahl der Grund ist.
+- **31.10.:** Replay je Szenario-Märkte: deren Märkte sind im Replay sogar besser (mm_favorit2 +1.219 $ bespielt vs +158 $
+  übrige, mm_farmer +784 vs +594, mm_schutz +1.328 vs +49) → Auswahl ist NICHT die Ursache, sondern die Mechanik.
+  Pilot-Entscheidung 31.10.: kein Echtgeld (Handel ohne Rewards überall negativ, Replay ≠ Szenario). Neu im Replay:
+  **Fill-Vergleich** (`replay-fillvergleich.csv` + `-einzeln.csv`): je Szenario (SCENARIO_RULES: mm_favorit2, mm_favorit,
+  mm_farmer, mm_dellen, mm_schutz → nächste Regel) die Replay-Fills, während das Szenario den Markt bespielte (Auswahl-Zeile
+  ≤ 1 h alt), gegen die echten Szenario-Fills (mm_markout, gleicher Markt + Seite ±15 Min.): beide / nur Replay / nur Szenario.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

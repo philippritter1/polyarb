@@ -109,6 +109,84 @@ def scenario_markets(db_paths: Iterable[str]) -> Dict[str, set]:
     return out
 
 
+# 31.10.: the scenario each comparison rule stands for (closest rule of the grid)
+SCENARIO_RULES = {"mm_favorit2": Rule(0.9, True, 0.2, 0.8, 14.0, fav=True),
+                  "mm_favorit": Rule(0.7, True, 0.2, 0.8, 14.0, fav=True),
+                  "mm_farmer": Rule(0.9, True, 0.2, 0.8, 14.0), "mm_dellen": Rule(0.9, True, 0.2, 0.8, 14.0),
+                  "mm_schutz": Rule(0.7, True, 0.2, 0.8, 14.0)}
+MATCH_S = 900       # a scenario fill within 15 min on the same market and side is "the same fill"
+SELECTED_S = 3600   # a market counts as quoted for an hour after each selection row
+
+
+def scenario_fills(db_paths: Iterable[str]) -> Tuple[Dict[str, Dict[str, List[float]]], Dict[str, list]]:
+    """Per scenario: cid -> selection times, and its own fills (ts, cid, side, price, qty, m60)."""
+    sel: Dict[str, Dict[str, List[float]]] = {}
+    fills: Dict[str, list] = {}
+    for path in db_paths:
+        name = os.path.basename(path)[len("scenario-"):].rsplit(".", 1)[0]
+        if name not in SCENARIO_RULES:
+            continue
+        try:
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            s: Dict[str, List[float]] = {}
+            for cid, ts in db.execute("SELECT cid, ts FROM mm_reward_params ORDER BY ts"):
+                s.setdefault(cid, []).append(float(ts))
+            f = [tuple(r) for r in db.execute("SELECT ts, cid, side, price, qty, m60 FROM mm_markout ORDER BY ts")]
+            db.close()
+        except sqlite3.Error:
+            continue
+        sel[name], fills[name] = s, f
+    return sel, fills
+
+
+def _selected(times: List[float], t: float) -> bool:
+    k = bisect.bisect_right(times, t)
+    return k > 0 and t - times[k - 1] <= SELECTED_S
+
+
+def compare_fills(log: Dict[str, list], rules: Sequence[Rule], sel: Dict[str, Dict[str, List[float]]],
+                  fills: Dict[str, list], since: float) -> Tuple[List[dict], List[dict]]:
+    """Fill by fill: the replay's fills of the scenario's rule while the scenario quoted that market, against the
+    fills the scenario really got (same market and side within MATCH_S). (summary rows, detail rows)."""
+    summary, detail = [], []
+    for name, rule in SCENARIO_RULES.items():
+        if name not in sel or rule not in rules:
+            continue
+        ri = rules.index(rule)
+        mine = [(t, cid, side, px, qty, m60) for t, cid, side, px, qty, m60 in fills[name] if t >= since]
+        used = set()
+        rep_n = rep_usd = rep_hold = both_n = both_hold = only_n = only_hold = 0.0
+        for cid, rows in log.items():
+            times = sel[name].get(cid)
+            if not times:
+                continue
+            for r_i, t, side, px, sz, hold, strict in rows:
+                if r_i != ri or t < since or not _selected(times, t):
+                    continue
+                rep_n += 1
+                rep_usd += px * sz
+                rep_hold += hold
+                hit = next((k for k, f in enumerate(mine) if k not in used and f[1] == cid and f[2] == side
+                            and abs(f[0] - t) <= MATCH_S), None)
+                if hit is None:
+                    only_n += 1
+                    only_hold += hold
+                else:
+                    used.add(hit)
+                    both_n += 1
+                    both_hold += hold
+                detail.append(dict(scenario=name, ts=t, cid=cid, side=side, price=px, usd=px * sz, hold=hold,
+                                   strict=strict, matched=hit is not None,
+                                   their_price=mine[hit][3] if hit is not None else None))
+        own_only = [f for k, f in enumerate(mine) if k not in used]
+        summary.append(dict(scenario=name, rule=rule.name, replay_fills=int(rep_n), replay_usd=rep_usd,
+                            replay_hold=rep_hold, matched=int(both_n), matched_hold=both_hold,
+                            replay_only=int(only_n), replay_only_hold=only_hold, own_fills=len(mine),
+                            own_only=len(own_only), own_only_m60=sum((f[5] or 0) for f in own_only),
+                            own_usd=sum(f[3] * f[4] for f in mine)))
+    return summary, detail
+
+
 SPLIT_KEYS = ("rewards", "m60bid", "hold", "shold", "filled", "sfilled", "fills")
 
 
@@ -181,8 +259,11 @@ HOLD_DUMP_H = 96
 
 def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params: Tuple[float, float, float],
                   rules: Sequence[Rule], block_s: int, size_usd: float = 50.0, cooldown_s: float = 3600,
-                  max_gap_s: float = 180) -> Dict[Tuple[int, int], dict]:
-    """(rule index, block start) -> accumulators for one market."""
+                  max_gap_s: float = 180, log: Optional[list] = None, log_rules: Iterable[int] = ()
+                  ) -> Dict[Tuple[int, int], dict]:
+    """(rule index, block start) -> accumulators for one market. `log` collects the single fills of `log_rules`
+    as (rule index, time, side, price, shares, hold result $, traded through) for the fill comparison."""
+    log_rules = set(log_rules)
     rate, v, min_size = params
     ts_list = sorted(t for t in yes if yes[t][2] is not None)
     if len(ts_list) < 3:
@@ -316,8 +397,11 @@ def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params:
                 acc["m60bid"] += ((b60 if b60 is not None else m60) - px) * sz
                 hold = (hold_exit(side, t2, px, max(TICK, v * r.frac)) - px) * sz
                 acc["hold"] += hold
-                if (nxt[1] is not None and nxt[1] < px - 1e-9) or (
-                        nxt[3] is not None and nxt[3] < px - 1e-9 and (cur is None or nxt[3] != cur[3])):
+                strict = (nxt[1] is not None and nxt[1] < px - 1e-9) or (
+                    nxt[3] is not None and nxt[3] < px - 1e-9 and (cur is None or nxt[3] != cur[3]))
+                if log is not None and ri in log_rules:
+                    log.append((ri, t2, side, px, sz, hold, strict))
+                if strict:
                     acc["sfills"] += 1
                     acc["sfilled"] += px * sz
                     acc["shold"] += hold
@@ -371,9 +455,15 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
     total: Dict[Tuple[int, int], dict] = {}
     by_cat: Dict[Tuple[int, str], dict] = {}
     per_market: Dict[str, Dict[int, tuple]] = {}
+    sel, own = scenario_fills(scenario_dbs)
+    log_rules = {rules.index(r) for r in SCENARIO_RULES.values() if r in rules}
+    fill_log: Dict[str, list] = {}
     for cid, mk in mkts.items():
+        log: Optional[list] = [] if any(cid in s for s in sel.values()) else None
         res = replay_market(mk, series(booklog_paths, mk["yes"]), series(booklog_paths, mk["no"]), params[cid],
-                            rules, block_s, size_usd)
+                            rules, block_s, size_usd, log=log, log_rules=log_rules)
+        if log:
+            fill_log[cid] = log
         mine: Dict[int, list] = {}
         for (ri, _b), acc in res.items():
             cur = mine.setdefault(ri, [0.0] * len(SPLIT_KEYS))
@@ -412,6 +502,7 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
     if fav in rules and rules.index(fav) not in focus:
         focus.append(rules.index(fav))
     split = split_rows(per_market, scenario_markets(scenario_dbs), rules, focus)
+    fc_sum, fc_detail = compare_fills(fill_log, rules, sel, own, blocks[0] if blocks else 0.0)
     cats = [dict(rule=rules[ri].name, category=c, net=net(a), rewards60=REAL_REWARD_FACTOR * a["rewards"],
                  m60bid=a["m60bid"], fills=a["fills"], filled=a["filled"])
             for (ri, c), a in sorted(by_cat.items()) if best and ri in (best["idx"], base)]
@@ -419,7 +510,7 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
                 blocks=len(blocks), first=blocks[0] if blocks else None, rules=rule_rows, walk_forward=wf,
                 wf_test=sum(w["test_net"] for w in wf), wf_train_best=sum(w["train_net"] for w in wf),
                 wf_base=sum(w["base_net"] for w in wf), baseline=rules[base].name, categories=cats,
-                split=split, walk_forward_hold=wf_hold, wf_hold=sum(w["test_net"] for w in wf_hold),
+                split=split, fill_compare=fc_sum, fill_compare_detail=fc_detail, walk_forward_hold=wf_hold, wf_hold=sum(w["test_net"] for w in wf_hold),
                 walk_forward_strict=wf_strict, wf_strict=sum(w["test_net"] for w in wf_strict),
                 rule_names=[r.name for r in rules])
 
@@ -476,6 +567,28 @@ def write_csvs(res: dict, out_dir: str) -> List[str]:
             w.writerow([r["scenario"], r["rule"], r["part"], r["markets"], _de(r["net"]), _de(r["net_hold"]),
                         _de(r["net_strict"]), r["fills"], _de(r["filled"]), _de(r["sfilled"]),
                         _de(r["net_hold"] / r["filled"], 4) if r["filled"] else ""])
+    paths.append(p)
+    p = os.path.join(out_dir, "replay-fillvergleich.csv")
+    with open(p, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Szenario", "Regel (Replay)", "Replay-Fills, während das Szenario den Markt bespielte",
+                    "Replay gefüllt $", "Replay Halten $", "davon auch im Szenario gefüllt", "deren Halten $",
+                    "nur im Replay", "deren Halten $", "Szenario-Fills", "Szenario gefüllt $",
+                    "nur im Szenario", "deren Kurs 60 Min. $"])
+        for r in res.get("fill_compare") or []:
+            w.writerow([r["scenario"], r["rule"], r["replay_fills"], _de(r["replay_usd"]), _de(r["replay_hold"]),
+                        r["matched"], _de(r["matched_hold"]), r["replay_only"], _de(r["replay_only_hold"]),
+                        r["own_fills"], _de(r["own_usd"]), r["own_only"], _de(r["own_only_m60"])])
+    paths.append(p)
+    p = os.path.join(out_dir, "replay-fillvergleich-einzeln.csv")
+    with open(p, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["Szenario", "Zeit (UTC)", "Markt-ID", "Seite", "Replay-Preis", "Replay $", "Replay Halten $",
+                    "durchgehandelt", "auch im Szenario gefüllt", "Szenario-Preis"])
+        for r in res.get("fill_compare_detail") or []:
+            w.writerow([r["scenario"], time.strftime("%Y-%m-%d %H:%M", time.gmtime(r["ts"])), r["cid"], r["side"],
+                        _de(r["price"], 3), _de(r["usd"]), _de(r["hold"]), "ja" if r["strict"] else "nein",
+                        "ja" if r["matched"] else "nein", _de(r["their_price"], 3)])
     paths.append(p)
     p = os.path.join(out_dir, "replay-kategorien.csv")
     with open(p, "w", newline="", encoding="utf-8-sig") as f:

@@ -111,7 +111,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (31.10.): mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_farmer, mm_favorit, mm_favorit2, mm_dellen, mm_dellen_fav; plus Studie/Kalshi-Studie/Replay/Wallet-Studie. Archiviert 31.10. (Nutzer, RAM + bringt kaum etwas): mm_rewards, mm_robust, mm_neu_vorsichtig2, mm_stop, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball, sharp_fussball2, wetter_sniper, wetter_sniper2 (Restbestand eingefroren). `notify: scenario` jetzt mm_schutz.
+Aktiv (31.10.): mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_farmer, mm_favorit, mm_favorit2, mm_favorit_stark, mm_dellen, mm_dellen_fav; plus Studie/Kalshi-Studie/Replay/Wallet-Studie. Archiviert 31.10. (Nutzer, RAM + bringt kaum etwas): mm_rewards, mm_robust, mm_neu_vorsichtig2, mm_stop, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball, sharp_fussball2, wetter_sniper, wetter_sniper2 (Restbestand eingefroren). `notify: scenario` jetzt mm_schutz.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -275,6 +275,16 @@ Aktive Kandidaten im Live-Test:
   beidseitig vorn sah; Szenario-Fills sagen: billige Seite verliert). `wetter_sniper` archiviert (RAM ~100 MB, abgelöst durch
   wetter_sniper2). wxsniper gibt die Event-Liste nach jedem Scan frei (`release_memory`). RAM je Dienst: Sniper ~100 MB,
   sharp_fussball2 ~80 MB, MM 30–40 MB, auslaufende MM ~10 MB.
+- **02.11. Fill-Vergleich:** Replay-Fills, die auch das Szenario bekam, sind auch im Replay negativ (mm_schutz 67 Fills −244 $,
+  farmer −165, dellen −145); der Replay-Gewinn steckt fast nur in Fills, die echt nie passierten (Ask berührt das Gebot im
+  60-s-Schnappschuss, niemand verkauft an uns: mm_schutz +725 $). → Replay-Fill-Gewinne sind ein Zählartefakt.
+- **03.11. Rückrechnung aller Varianten** (Equity 60 % seit 19.10.): nur mm_schutz +39 $, mm_schutz_neu2 +11, mm_breit +9 leicht
+  positiv, alle in der 2. Hälfte negativ; Rest −8 bis −883 $ (mm_rewards). Fills (1.278 eindeutig, 594 Märkte), Kurs 60 Min. je
+  1 $ nach Token-Preis: < 0,2 −9,8 %, 0,2–0,35 −7,4 %, 0,35–0,5 −5,7 %, 0,5–0,65 −4,3 %, **0,65–0,8 −0,7 %, ≥ 0,8 −0,2 %**;
+  Favorit Politik ≈ 0, Favorit Sonstiges −2,1 %; kein Merkmal positiv. Neu: `mm_favorit_stark` (= mm_favorit + `fav_min: 0.65`,
+  Mitte 0,1–0,9: nur Märkte mit klarem Favoriten, Scan „kein starker Favorit“); Messung `mm_market_rew` (Rewards + Zeit je
+  Markt, alle MM, ab 03.11.) → Export `maerkte.csv` je Szenario; Replay: Zählweise **„nur Handel“** (Fill nur, wenn ein neuer
+  Handel unter dem Gebot druckt – wie die Szenarien) mit eigenem Walk-forward, 3 Regeln „nur Favorit ≥ 0.65“.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

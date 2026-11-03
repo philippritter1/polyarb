@@ -1286,3 +1286,28 @@ def test_config_mm_dellen_fav_is_mm_dellen_with_fav_only():
     assert f["enabled"] and f["fav_only"] is True and "live" not in f
     assert {k for k in set(d) | set(f) if d.get(k) != f.get(k)} == {"title", "fav_only"}
     assert sc["wetter_sniper"]["enabled"] is False and sc["wetter_sniper"]["archive"] is True
+
+
+def test_fav_min_skips_markets_without_a_strong_favourite_and_tracks_rewards_per_market(tmp_path):
+    store = BookStore()
+    ms = [_m("a", "Will the Fed cut rates?", 0.55), _m("b", "Will it rain in Paris?", 0.25)]
+    mm = MarketMaker("mm_rewards", _cfg(tmp_path, quote_frac=0.5, fav_only=True, fav_min=0.65),
+                     Client(ms), SimClock(NOW), books=store, pool=None)
+    _book(store, "a", 0.54, 0.56)
+    _book(store, "b", 0.24, 0.26)
+    mm.step()
+    assert "a" not in mm.st.markets and mm.scan["kein starker Favorit"] >= 1   # 0.55 / 0.45: no clear favourite
+    mk = mm.st.markets["b"]
+    assert mk.bid_yes is None and mk.bid_no                                  # NO at 0.75 is the favourite
+    mm.clock.sleep(3700)
+    mm.step()
+    rows = dict((r[0], r[1]) for r in mm.store.db.execute("SELECT cid, rew FROM mm_market_rew"))
+    assert rows.get("b", 0) > 0 and "a" not in rows
+
+
+def test_config_mm_favorit_stark_is_mm_favorit_with_a_strong_favourite():
+    from arb.config import load_config
+    sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
+    f, g = sc["mm_favorit"], sc["mm_favorit_stark"]
+    assert g["enabled"] and g["fav_only"] is True and g["fav_min"] == 0.65 and "live" not in g
+    assert {k for k in set(f) | set(g) if f.get(k) != g.get(k)} == {"title", "fav_min", "min_mid", "max_mid"}

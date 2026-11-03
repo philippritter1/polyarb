@@ -396,6 +396,12 @@ class MarketMaker:
         self._ledger: Dict[str, dict] = {r[0]: dict(title=r[1], rew=r[2], mo=r[3], fills=r[4], jumps=json.loads(r[5] or "[]"),
                                                      blocked_until=r[6] or 0.0, blocks=r[7] or 0, why=r[8] or "")
                                          for r in self.store.db.execute("SELECT * FROM mm_ledger")}
+        # per market (measured only, 03.11.): estimated rewards and seconds quoted, for every mm scenario – so that a
+        # selection filter can be judged per market (rewards against the fills' cost) instead of per scenario
+        self.store.db.execute("""CREATE TABLE IF NOT EXISTS mm_market_rew(cid TEXT PRIMARY KEY, title TEXT, cat TEXT,
+            rew REAL, quoted_s REAL, ts REAL)""")
+        self._mrew: Dict[str, list] = {r[0]: [r[1] or "", r[2] or "", r[3] or 0.0, r[4] or 0.0]
+                                       for r in self.store.db.execute("SELECT cid, title, cat, rew, quoted_s FROM mm_market_rew")}
         self._mids: Dict[str, list] = {}    # pause: recent (ts, mid) per market
         self._paused: Dict[str, float] = {}  # pause: market -> no bids until
         self._jump_check: Dict[str, list] = {}  # learn.jump_confirm_s: market -> [check at, mid before, mids since]
@@ -558,6 +564,8 @@ class MarketMaker:
                 why = "Mindestgröße zu groß"  # small quotes would not qualify for rewards there
             elif not lo <= float(prices[0]) <= hi:
                 why = "Preis zu extrem"
+            elif sc.get("fav_min") and max(float(prices[0]), 1 - float(prices[0])) < float(sc["fav_min"]) - 1e-9:
+                why = "kein starker Favorit"  # mm_favorit_stark (03.11.): only markets with a clear favourite
             elif max_age and (_parse_ts(m.get("startDate") or m.get("createdAt")) or 0) < now - float(max_age) * DAY:
                 why = "älter als max_age_days"
             if why:
@@ -1360,6 +1368,10 @@ class MarketMaker:
                             want_yes = 0.0
                         else:
                             want_no = 0.0
+            if sc.get("fav_min") and max(mid, 1 - mid) < float(sc["fav_min"]) - 1e-9 \
+                    and not (mk.qty_yes > 1e-9 or mk.qty_no > 1e-9):
+                want_yes = want_no = 0.0  # mm_favorit_stark (03.11.): no clear favourite – no bid at all
+                self.scan["kein starker Favorit"] = self.scan.get("kein starker Favorit", 0) + 1
             if sc.get("fav_only"):  # mm_favorit (27.10.): no bid on the cheaper token (fills there lost ~7 % per $
                 # 60 min later, the favourite's ~1 %) – unless it completes a pair with the favourite we already hold
                 if mid < 0.5 - 1e-9 and want_yes > 0 and not mk.qty_no > mk.qty_yes + 1e-9:
@@ -1510,6 +1522,9 @@ class MarketMaker:
             if asks:
                 self.st.ask_rewards += mk.daily_rate * (full - base) * dt / DAY
             r = mk.daily_rate * share * dt / DAY
+            e = self._mrew.setdefault(mk.cid, [mk.title[:200], mk.category, 0.0, 0.0])
+            e[2] += r
+            e[3] += dt
             if self.sc.get("learn"):
                 self._ledger_of(mk.cid)["rew"] += r
             self.st.rewards += r
@@ -1531,6 +1546,10 @@ class MarketMaker:
             round(st.realized, 2), round(st.rewards, 2), round(st.rebates, 2), round(st.inventory_value(), 2),
             len(st.markets), sum(bool(m.bid_yes) + bool(m.bid_no) for m in st.markets.values()), st.fills))
         self._acc = dict(dt=0.0, rew=0.0, pool_dt=0.0)
+        if self._mrew:
+            self.store.db.executemany("INSERT OR REPLACE INTO mm_market_rew VALUES(?,?,?,?,?,?)",
+                                      [(cid, e[0], e[1], round(e[2], 6), round(e[3], 1), now)
+                                       for cid, e in self._mrew.items()])
 
     def book_rewards(self, now: float) -> None:
         if self.st.rewards_unbooked > 0:

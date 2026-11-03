@@ -168,7 +168,7 @@ def collect(db_path: str, start_capital: float) -> dict:
 STRATEGY_NAMES = {"binary_buy_all": "Binär: YES+NO kaufen", "binary_sell_all": "Binär: Split & verkaufen",
                   "negrisk_buy_all": "Multi-Outcome-Korb", "negrisk_no_buy_all": "Multi-Outcome: alle NO",
                   "ladder_buy_all": "Logische Arbitrage", "underdog_buy": "Underdog-Sport", "favorite_buy": "Favorit-Kleinmarkt", "weather_no_buy": "Wetter-NO", "fussball_dog_buy": "Fußball-Außenseiter", "wetter_no_breit_buy": "Wetter-NO breit", "wetter_no_mess_buy": "Wetter-NO + Messwerte", "wetter_no_streng_buy": "Wetter-NO streng", "finanz_dog_buy": "Finanz-Außenseiter", "mlb_spread_buy": "MLB-Spread-Außenseiter", "endgame_buy": "Endspiel-Ernte", "longshot_buy": "Longshot: NO kaufen", "weather_buy": "Wetter-Modell",
-                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_schutz_neu2_mm": "Market Making (Schutz + neue Märkte 2)", "mm_farmer_mm": "Market Making (Reward-Farmer)", "mm_favorit_mm": "Market Making (nur Favorit)", "mm_favorit2_mm": "Market Making (nur Favorit, weit)", "mm_dellen_mm": "Market Making (Dellen, breit)", "mm_dellen_fav_mm": "Market Making (Dellen, nur Favorit)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "mm_robust_mm": "Market Making (robust)", "mm_konservativ_mm": "Market Making (konservativ)", "mm_neu_vorsichtig_mm": "Market Making (neu, vorsichtig)", "mm_neu_vorsichtig2_mm": "Market Making (neu, vorsichtig 2)", "wetter_sniper": "Wetter-Sniper", "wetter_sniper2": "Wetter-Sniper 2", "wetter_sniper2_buy": "Wetter-Sniper 2", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
+                  "mm_rewards_mm": "Market Making (Rewards)", "mm_neu_mm": "Market Making (neue Märkte)", "mm_breit_mm": "Market Making (breit)", "mm_neu2_mm": "Market Making (neue Märkte 2)", "mm_abbau_mm": "Market Making (Bestandsabbau)", "mm_sofort_mm": "Market Making (sofort verkaufen)", "mm_ueberbucht_mm": "Market Making (überbucht)", "mm_nah_mm": "Market Making (nah an der Mitte)", "mm_treppe_mm": "Market Making (Abbau-Treppe)", "mm_ruhig_mm": "Market Making (Pause bei Sprüngen)", "mm_schutz_mm": "Market Making (Schutz + lernend)", "mm_schutz_neu_mm": "Market Making (Schutz + neue Märkte)", "mm_schutz_neu2_mm": "Market Making (Schutz + neue Märkte 2)", "mm_farmer_mm": "Market Making (Reward-Farmer)", "mm_favorit_mm": "Market Making (nur Favorit)", "mm_favorit2_mm": "Market Making (nur Favorit, weit)", "mm_dellen_mm": "Market Making (Dellen, breit)", "mm_dellen_fav_mm": "Market Making (Dellen, nur Favorit)", "mm_favorit_stark_mm": "Market Making (nur starker Favorit)", "mm_stop_mm": "Market Making (Stop-Loss)", "mm_pilot_mm": "Market Making (Pilot)", "mm_probe_mm": "Market Making (Generalprobe)", "mm_robust_mm": "Market Making (robust)", "mm_konservativ_mm": "Market Making (konservativ)", "mm_neu_vorsichtig_mm": "Market Making (neu, vorsichtig)", "mm_neu_vorsichtig2_mm": "Market Making (neu, vorsichtig 2)", "wetter_sniper": "Wetter-Sniper", "wetter_sniper2": "Wetter-Sniper 2", "wetter_sniper2_buy": "Wetter-Sniper 2", "sharp_fussball_buy": "Fußball vs. Pinnacle", "sharp_fussball2_buy": "Fußball vs. Pinnacle 2"}
 STATUS_NAMES = {"filled": "voll", "partial": "teilweise", "missed": "verpasst"}
 CSV_COLUMNS = [
     ("Zeit", "ts"), ("Typ", "typ"), ("Strategie", "strategy_name"), ("Strategie-Code", "strategy"),
@@ -339,6 +339,31 @@ def markout_rows(db_path: str) -> list:
         return out
     except sqlite3.Error:
         return []
+
+
+MARKET_HEADER = ["Markt", "Kategorie", "Rewards geschätzt $", "Rewards × 0,6 $", "Stunden bespielt", "Fills",
+                 "gefüllt $", "Kursbewegung 60 Min. $", "Kursbewegung bis Auflösung $", "netto (Rewards×0,6 + 60 Min.) $"]
+
+
+def market_rows(db_path: str) -> list:
+    """Per market (03.11.): estimated rewards (mm_market_rew, from 03.11.) against the fills' markout."""
+    try:
+        db = sqlite3.connect(db_path)
+        rew = {r[0]: r[1:] for r in db.execute("SELECT cid, title, cat, rew, quoted_s FROM mm_market_rew")}
+        fills = {r[0]: r[1:] for r in db.execute(
+            "SELECT cid, MAX(title), MAX(cat), COUNT(*), SUM(COALESCE(usd, price * qty)), SUM(m60), SUM(m_res) "
+            "FROM mm_markout GROUP BY cid")}
+        db.close()
+    except sqlite3.Error:
+        return []
+    out = []
+    for cid in set(rew) | set(fills):
+        t1, c1, rw, qs = rew.get(cid, ("", "", 0.0, 0.0))
+        t2, c2, n, usd, m60, mres = fills.get(cid, ("", "", 0, 0.0, 0.0, None))
+        rw, m60 = float(rw or 0), float(m60 or 0)
+        out.append([t1 or t2 or cid, c1 or c2 or "", round(rw, 4), round(0.6 * rw, 4), round((qs or 0) / 3600, 1), n,
+                    round(usd or 0, 2), round(m60, 4), None if mres is None else round(mres, 4), round(0.6 * rw + m60, 4)])
+    return sorted(out, key=lambda r: r[-1])
 
 
 def _per_dollar(total, usd):
@@ -593,6 +618,9 @@ def build(db_path: str, out: str, start_capital: float, source: str = "auto", ti
     mo = markout_rows(db_path) if kind == "mm" else []
     if mo:
         _write(Path(out).with_name("fills.csv"), _csv(MARKOUT_HEADER, mo), "utf-8-sig")
+    mrows = market_rows(db_path) if kind == "mm" else []
+    if mrows:
+        _write(Path(out).with_name("maerkte.csv"), _csv(MARKET_HEADER, mrows), "utf-8-sig")
     ages = markout_age(db_path) if kind == "mm" else []
     if ages:
         _write(Path(out).with_name("gebotsalter.csv"), _csv(AGE_HEADER, ages), "utf-8-sig")
@@ -858,6 +886,9 @@ def _export(root, exp, pages, nav_for, stage, kalshi_db, wx_db, study_db, stress
         if (folder / "fills.csv").exists():
             files.append((p["label"], "Jeder Fill: Markt, Kategorie, Abstand, Gebotsalter, Kursbewegung 1/5/60 Min.",
                           rel + "fills.csv", folder / "fills.csv", f"{slug}/fills.csv"))
+        if (folder / "maerkte.csv").exists():
+            files.append((p["label"], "Je Markt: Rewards (ab 03.11.) gegen Fills und Kursbewegung – welche Märkte lohnen?",
+                          rel + "maerkte.csv", folder / "maerkte.csv", f"{slug}/maerkte.csv"))
         if (folder / "gebotsalter.csv").exists():
             files.append((p["label"], "Gebotsalter und Favorit/Außenseiter gegen die Kursbewegung je 1 $ gefüllt",
                           rel + "gebotsalter.csv", folder / "gebotsalter.csv", f"{slug}/gebotsalter.csv"))

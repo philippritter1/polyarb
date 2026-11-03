@@ -127,3 +127,18 @@ def test_fill_compare_matches_replay_fills_with_the_scenarios_own(tmp_path):
     assert row["replay_fills"] >= 1 and row["matched"] == 1          # the crash fill on YES: both got it
     assert row["own_fills"] == 2 and row["own_only"] == 1 and row["own_only_m60"] == -1
     assert any(d["matched"] and d["their_price"] == 0.46 for d in res["fill_compare_detail"])
+
+
+def test_trade_only_counts_just_the_fills_with_a_trade_below_the_bid(tmp_path):
+    bl, sc = str(tmp_path / "2025-10-09.sqlite"), str(tmp_path / "scenario-mm_x.sqlite")
+    _booklog(bl)                      # the crash moves the ask to 0.47, no trade prints
+    _scen(sc)
+    r = replaylab.Rule(0.25, False, 0.05, 0.95, 0.0)
+    row = replaylab.run([bl], [sc], rules=[r], block_h=1)["rules"][0]
+    assert row["fills"] >= 1 and row["tfills"] == 0 and row["net_trade"] == row["rewards60"]
+    bl2 = str(tmp_path / "2025-10-10.sqlite")
+    _booklog(bl2, trades={100: 0.46})  # now a trade prints below our 0.49 bid at the crash
+    row = replaylab.run([bl2], [sc], rules=[r], block_h=1)["rules"][0]
+    assert row["tfills"] >= 1
+    strong = replaylab.Rule(0.5, True, 0.1, 0.9, 14.0, fav=True, fav_min=0.65)
+    assert strong in replaylab.default_rules() and strong.name.endswith("nur Favorit ≥ 0.65")

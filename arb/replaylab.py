@@ -56,20 +56,25 @@ class Rule:
     min_dte: float        # days to the market's end at least this
     fav: bool = False     # bid only on the favourite's token (mid ≥ 0.5): the cheaper token lost ~7 % per $ filled
                           # 60 min after the fill in the scenarios (19.–27.10.), the favourite's ~1 %
+    fav_min: float = 0.0  # only while the favourite's mid is at least this (03.11.: favourite ≥ 0.65 lost ~0.5 %)
 
     @property
     def name(self) -> str:
         return (f"Abstand {self.frac:g}" + (" · Pause" if self.pause else "")
                 + (f" · Mitte {self.lo:g}–{self.hi:g}" if (self.lo, self.hi) != (0.05, 0.95) else "")
-                + (f" · ≥{self.min_dte:g} Tage" if self.min_dte else "") + (" · nur Favorit" if self.fav else ""))
+                + (f" · ≥{self.min_dte:g} Tage" if self.min_dte else "") + (" · nur Favorit" if self.fav else "")
+                + (f" ≥ {self.fav_min:g}" if self.fav_min else ""))
 
 
 def default_rules() -> List[Rule]:
     grid = [Rule(f, p, lo, hi, d) for f in (0.25, 0.5, 0.7, 0.9) for p in (False, True)
             for lo, hi in ((0.05, 0.95), (0.2, 0.8)) for d in (0.0, 14.0)]
     # 27.10.: one-sided on the favourite – fewer rewards (q_min counts one side a third), fewer bad fills?
-    return grid + [Rule(f, True, lo, hi, d, fav=True) for f in (0.5, 0.7, 0.8, 0.9)  # 0.8: 28.10. Nutzer
-                   for lo, hi in ((0.05, 0.95), (0.2, 0.8)) for d in (0.0, 14.0)]
+    fav = [Rule(f, True, lo, hi, d, fav=True) for f in (0.5, 0.7, 0.8, 0.9)  # 0.8: 28.10. Nutzer
+           for lo, hi in ((0.05, 0.95), (0.2, 0.8)) for d in (0.0, 14.0)]
+    # 03.11.: only a strong favourite (mid ≥ 0.65): those fills lost least in every scenario
+    strong = [Rule(f, True, 0.1, 0.9, 14.0, fav=True, fav_min=0.65) for f in (0.5, 0.7, 0.9)]
+    return grid + fav + strong
 
 
 BASELINE = Rule(0.7, True, 0.05, 0.95, 0.0)  # closest to mm_schutz_neu
@@ -113,7 +118,8 @@ def scenario_markets(db_paths: Iterable[str]) -> Dict[str, set]:
 SCENARIO_RULES = {"mm_favorit2": Rule(0.9, True, 0.2, 0.8, 14.0, fav=True),
                   "mm_favorit": Rule(0.7, True, 0.2, 0.8, 14.0, fav=True),
                   "mm_farmer": Rule(0.9, True, 0.2, 0.8, 14.0), "mm_dellen": Rule(0.9, True, 0.2, 0.8, 14.0),
-                  "mm_schutz": Rule(0.7, True, 0.2, 0.8, 14.0)}
+                  "mm_schutz": Rule(0.7, True, 0.2, 0.8, 14.0),
+                  "mm_favorit_stark": Rule(0.7, True, 0.1, 0.9, 14.0, fav=True, fav_min=0.65)}
 MATCH_S = 900       # a scenario fill within 15 min on the same market and side is "the same fill"
 SELECTED_S = 3600   # a market counts as quoted for an hour after each selection row
 
@@ -250,7 +256,7 @@ def _floor(p: float) -> float:
 
 def _new_acc() -> dict:
     return dict(quote_min=0.0, rewards=0.0, fills=0, filled=0.0, m5=0.0, m60=0.0, m60bid=0.0,
-                hold=0.0, sfills=0, sfilled=0.0, shold=0.0)
+                hold=0.0, sfills=0, sfilled=0.0, shold=0.0, tfills=0, tfilled=0.0, thold=0.0)
 
 
 HOLD_DECAY_H = 6
@@ -365,6 +371,8 @@ def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params:
             if r.fav:  # the cheaper token's bid goes: YES below 0.5, NO above
                 py = py if mid >= 0.5 - 1e-9 else None
                 pn = pn if mid <= 0.5 + 1e-9 else None
+                if r.fav_min and max(mid, 1 - mid) < r.fav_min - 1e-9:
+                    py = pn = None
             if py and t < cool[ri][0]:
                 py = None
             if pn and t < cool[ri][1]:
@@ -405,6 +413,12 @@ def replay_market(mk: dict, yes: Dict[int, tuple], no: Dict[int, tuple], params:
                     acc["sfills"] += 1
                     acc["sfilled"] += px * sz
                     acc["shold"] += hold
+                # "nur Handel" (03.11.): only a new trade printed below our bid – like the scenarios, which fill on
+                # trades only. The fill comparison showed the fills a touch adds are the ones nobody would have given us
+                if nxt[3] is not None and nxt[3] < px - 1e-9 and (cur is None or nxt[3] != cur[3]):
+                    acc["tfills"] += 1
+                    acc["tfilled"] += px * sz
+                    acc["thold"] += hold
                 cool[ri][0 if side == "yes" else 1] = t2 + cooldown_s
     return out
 
@@ -422,6 +436,11 @@ def net_hold(acc: dict) -> float:
 def net_strict(acc: dict) -> float:
     """As net_hold, but only the fills that traded through our bid."""
     return REAL_REWARD_FACTOR * acc["rewards"] + acc["shold"]
+
+
+def net_trade(acc: dict) -> float:
+    """As net_hold, but only the fills where a trade printed below our bid (closest to the scenarios)."""
+    return REAL_REWARD_FACTOR * acc["rewards"] + acc["thold"]
 
 
 def _sum(accs: Iterable[dict]) -> dict:
@@ -486,10 +505,13 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
                               blocks_pos=sum(1 for a in accs if net(a) > 0),
                               net_hold=net_hold(tot), hold=tot["hold"], hold_pos=sum(1 for a in accs if net_hold(a) > 0),
                               net_strict=net_strict(tot), sfills=tot["sfills"], sfilled=tot["sfilled"],
-                              strict_pos=sum(1 for a in accs if net_strict(a) > 0)))
+                              strict_pos=sum(1 for a in accs if net_strict(a) > 0),
+                              net_trade=net_trade(tot), tfills=tot["tfills"], tfilled=tot["tfilled"],
+                              trade_pos=sum(1 for a in accs if net_trade(a) > 0)))
     wf = walk_forward(total, len(rules), base)
     wf_hold = walk_forward(total, len(rules), base, net_hold)
     wf_strict = walk_forward(total, len(rules), base, net_strict)
+    wf_trade = walk_forward(total, len(rules), base, net_trade)
     best = max(rule_rows, key=lambda d: d["net"]) if rule_rows else None
     best_hold = max(rule_rows, key=lambda d: d["net_hold"]) if rule_rows else None
     focus = []
@@ -512,6 +534,7 @@ def run(booklog_paths: Sequence[str], scenario_dbs: Sequence[str], rules: Option
                 wf_base=sum(w["base_net"] for w in wf), baseline=rules[base].name, categories=cats,
                 split=split, fill_compare=fc_sum, fill_compare_detail=fc_detail, walk_forward_hold=wf_hold, wf_hold=sum(w["test_net"] for w in wf_hold),
                 walk_forward_strict=wf_strict, wf_strict=sum(w["test_net"] for w in wf_strict),
+                walk_forward_trade=wf_trade, wf_trade=sum(w["test_net"] for w in wf_trade),
                 rule_names=[r.name for r in rules])
 
 
@@ -530,13 +553,15 @@ def write_csvs(res: dict, out_dir: str) -> List[str]:
                     "Bid 60 Min. $", "Kurs 5 Min. $", "Fills", "gefüllt $", "netto je 1 $ gefüllt", "Gebots-Stunden",
                     "Blöcke", "Blöcke positiv", "netto Halten $ (Verkaufsgebot wie Szenario)", "Halten Handel $",
                     "Blöcke positiv Halten", "netto streng + Halten $", "Fills streng", "gefüllt streng $",
-                    "Blöcke positiv streng"])
+                    "Blöcke positiv streng", "netto nur Handel + Halten $", "Fills nur Handel", "gefüllt nur Handel $",
+                    "Blöcke positiv nur Handel"])
         for r in sorted(res["rules"], key=lambda d: -d["net"]):
             w.writerow([r["rule"], _de(r["net"]), _de(r["rewards60"]), _de(r["m60"]), _de(r["m60bid"]), _de(r["m5"]),
                         r["fills"], _de(r["filled"]), _de(r["net"] / r["filled"], 4) if r["filled"] else "",
                         _de(r["quote_h"], 1), r["blocks"], r["blocks_pos"], _de(r.get("net_hold")), _de(r.get("hold")),
                         r.get("hold_pos", ""), _de(r.get("net_strict")), r.get("sfills", ""), _de(r.get("sfilled")),
-                        r.get("strict_pos", "")])
+                        r.get("strict_pos", ""), _de(r.get("net_trade")), r.get("tfills", ""), _de(r.get("tfilled")),
+                        r.get("trade_pos", "")])
     paths.append(p)
     p = os.path.join(out_dir, "replay-walkforward.csv")
     with open(p, "w", newline="", encoding="utf-8-sig") as f:
@@ -553,7 +578,8 @@ def write_csvs(res: dict, out_dir: str) -> List[str]:
         w = csv.writer(f, delimiter=";")
         w.writerow(["Zählweise", "Block (UTC)", "gewählte Regel (beste bis dahin)", "netto davor je Block $",
                     "netto im Block $", f"Vergleich {res['baseline']} $"])
-        for label, key in (("Halten", "walk_forward_hold"), ("streng + Halten", "walk_forward_strict")):
+        for label, key in (("Halten", "walk_forward_hold"), ("streng + Halten", "walk_forward_strict"),
+                           ("nur Handel + Halten", "walk_forward_trade")):
             for r in res.get(key) or []:
                 w.writerow([label, time.strftime("%Y-%m-%d %H:%M", time.gmtime(r["block"])),
                             res["rule_names"][r["rule"]], _de(r["train_net"]), _de(r["test_net"]), _de(r["base_net"])])
@@ -621,7 +647,8 @@ def main(argv: Optional[Sequence[str]] = None) -> dict:
     os.replace(tmp, os.path.join(data_dir, "replaylab.json"))
     print(f"{res['markets']} Märkte, {res['blocks']} Blöcke à {args.block_h:g} h; walk-forward netto "
           f"{res['wf_test']:+.2f} $ (davor je Block {res['wf_train_best']:+.2f} $, Vergleich {res['wf_base']:+.2f} $); "
-          f"Halten {res['wf_hold']:+.2f} $, streng + Halten {res['wf_strict']:+.2f} $")
+          f"Halten {res['wf_hold']:+.2f} $, streng + Halten {res['wf_strict']:+.2f} $, "
+          f"nur Handel + Halten {res['wf_trade']:+.2f} $")
     return res
 
 

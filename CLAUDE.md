@@ -285,6 +285,16 @@ Aktive Kandidaten im Live-Test:
   Mitte 0,1–0,9: nur Märkte mit klarem Favoriten, Scan „kein starker Favorit“); Messung `mm_market_rew` (Rewards + Zeit je
   Markt, alle MM, ab 03.11.) → Export `maerkte.csv` je Szenario; Replay: Zählweise **„nur Handel“** (Fill nur, wenn ein neuer
   Handel unter dem Gebot druckt – wie die Szenarien) mit eigenem Walk-forward, 3 Regeln „nur Favorit ≥ 0.65“.
+- **06./07.11. Gesamtprüfung aller Strategien** (Equity 60 % seit Start, „kalibriert“ = Rewards×0,6 − 24 % je 1 $ gefüllt aus der
+  Generalprobe): kein Szenario mit belastbarem Edge, kalibriert alle negativ. mm_schutz +3 $ (Hälften +103/−100, Handel −624 $,
+  Rewards 14 % je 1 $ gefüllt, kalibriert −1.359), mm_breit +4 $ (+248/−244, sitzt auf 1.508 $ Bestand, 2. Hälfte Rewards 5 %
+  je 1 $), mm_schutz_neu2 +104 $ (+8/+96, Rewards 35 %, Handel −17 % je 1 $, kalibriert −113), mm_schutz_neu −13 $ (fast gleiche
+  Regeln → Rauschen ~±120 $), farmer −31, dellen_fav −41, dellen −64, favorit2 −77, favorit −88, favorit_stark −160 (3,7 T).
+  „Nur Favorit“ halbiert den Handelsverlust, aber Rewards fallen auf 4–8 % je 1 $ → netto schlechter. Kaufstrategien: Wetter-NO
+  Treffer ≈ Preis (−4 % ROI), Sniper 98 % Treffer zu 99 ct (−1 %), fussball_dog −14,5 %, sharp/mlb je 5 Wetten (+94/+93, nicht
+  beurteilbar). Replay „nur Handel + Halten“ walk-forward +2.335 $, aber Kurs 60 Min. im Replay +6 % je $ vs. Szenarien −4 % →
+  Artefakt. Empfehlung 07.11.: kein Mini-Echt-Test mit mm_schutz/mm_breit; einzige offene Frage = echte Rewards je 1 $ in neuen
+  Märkten (schutz_neu2-Logik, Schwelle ≥ 24 % echt) – Nutzer entscheidet.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

@@ -338,6 +338,8 @@ scenarios:
       max_total_usd: 300
   mm_breit:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
+    unwind: active               # kein exit: – Bestand (~1.500 $) wird in den Bid verkauft, sonst wartet er Monate auf Auflösung
     title: Market Making (breit)
     strategy: mm                 # 10.10.: wie mm_rewards, aber breit und kontrolliert – Frage: bringen viele Märkte
     # mit kleinen Geboten mehr als wenige große? (Anlass: der Fehler bis 10.10. ließ mm_neu ungewollt ~100 Märkte
@@ -540,6 +542,7 @@ scenarios:
     step_s: 2
   mm_schutz:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Schutz + lernend)
     strategy: mm                 # 16.10. Nutzer (nach Recherche): wie mm_ruhig (Treppe + Pause), dazu alles gegen schlechte
     # Fills: Finanz/Sport-Saison/Kursmärkte raus, weiter weg von der Mitte (0,7 statt 0,5 des Reward-Abstands),
@@ -594,6 +597,7 @@ scenarios:
     step_s: 2
   mm_favorit:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (nur Favorit)
     strategy: mm                 # 27.10. Nutzer (Fill-Auswertung 19.–27.10., 558 Fills, 10 Szenarien): Kauf des billigeren Tokens
     # (Mitte < 0,5) verlor 60 Min. nach dem Fill −6,6 % (JA) / −7,7 % (NEIN) je 1 $, der Favorit −2,1 % / −0,6 %; in beiden
@@ -648,6 +652,7 @@ scenarios:
     step_s: 2
   mm_favorit_stark:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (nur starker Favorit)
     strategy: mm                 # 03.11. Nutzer (Rückrechnung aller Varianten, 1.278 Fills 19.10.–03.11.): Kursbewegung 60 Min.
     # je 1 $ gefüllt nach Token-Preis: < 0,5 −6 bis −10 %, 0,5–0,65 −4,3 %, 0,65–0,8 −0,7 %, ≥ 0,8 −0,2 %. Wie mm_favorit,
@@ -702,6 +707,7 @@ scenarios:
     step_s: 2
   mm_favorit2:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (nur Favorit, weit)
     strategy: mm                 # 28.10. Nutzer: Replay-Siegerregel (27.10., 16 Blöcke): Abstand 0,9 · Pause · Mitte 20–80 % ·
     # ≥ 14 Tage · nur Favorit +363 $ auf 16.925 $ gefüllt, 13/16 Blöcke positiv, walk-forward +198 $. Wie mm_favorit,
@@ -755,6 +761,7 @@ scenarios:
     step_s: 2
   mm_dellen:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Dellen, breit)
     strategy: mm                 # 30.10. Nutzer: Replay (Halten wie Szenario, nur durchgehandelte Fills) +1.800 $ auf ~45.000 $
     # gefüllt bei Abstand 0,9 · Pause · ≥ 14 T über ~1.700 Reward-Märkte, walk-forward +1.750 $ – Gewinn aus Dellen, die sich
@@ -803,6 +810,7 @@ scenarios:
     step_s: 2
   mm_dellen_fav:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Dellen, nur Favorit)
     strategy: mm                 # 31.10. Nutzer: wie mm_dellen, aber nur Gebote auf den Favoriten (fav_only) – die billige Seite
     # verlor in allen Szenario-Fills −6,6 bis −7,7 % je 1 $ (Favorit −0,6 bis −2,1 %). Direkter Vergleich mit mm_dellen.
@@ -849,6 +857,7 @@ scenarios:
     step_s: 2
   mm_farmer:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Reward-Farmer)
     strategy: mm                 # 21.10. Nutzer: nachgebaut nach der Wallet-Studie – die erfolgreichsten Reward-Farmer
     # (pootytherewardfarmer, pppnn, Dr.PNL: Rewards 7–20 % ihres Handels, wir echt 4,5 %) bieten in 40–120 Märkten
@@ -915,6 +924,7 @@ scenarios:
     step_s: 2
   mm_schutz_neu:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Schutz + neue Märkte)
     strategy: mm                 # 16.10. Nutzer (Datenauswertung): wie mm_schutz, aber Auswahl wie mm_sofort – nur Märkte
     # < 3 Tage alt (Sim: ~10x Rewards je $ gegenüber breiter Auswahl) – plus Nachkauf-Sperre: nach einem Fill 60 Min.
@@ -974,6 +984,7 @@ scenarios:
     step_s: 2
   mm_schutz_neu2:
     enabled: true
+    wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Schutz + neue Märkte 2)
     strategy: mm                 # 20.10. Nutzer: wie mm_schutz_neu, nur zählt ein Kurssprung fürs Selbstlernen erst,
     # wenn die Mitte 5 Min. später noch ≥ 3 Ticks verschoben ist (learn.jump_confirm_s). mm_schutz_neu sperrte >100

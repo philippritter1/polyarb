@@ -83,8 +83,13 @@ def test_aggressive_mm_scenarios_wind_down_and_the_others_do_not():
         s = sc[name]
         assert s["wind_down"] is True and s["unwind"] == "active" and s["enabled"] is False and s["archive"]  # 31.10.
         assert bit in s["title"] and "live" not in s
-    for name in ("mm_konservativ", "mm_neu_vorsichtig", "mm_probe", "mm_breit", "mm_schutz", "mm_schutz_neu"):
+    for name in ("mm_konservativ", "mm_neu_vorsichtig", "mm_probe"):
         assert not sc[name].get("wind_down") and sc[name].get("unwind") != "active"
+    # 14.11. owner: every MM book winds down; the exit ladder (dump after 96 h) empties them, mm_breit has no exit
+    for name in ("mm_schutz", "mm_schutz_neu", "mm_schutz_neu2", "mm_farmer", "mm_favorit", "mm_favorit2",
+                 "mm_favorit_stark", "mm_dellen", "mm_dellen_fav"):
+        assert sc[name]["wind_down"] is True and sc[name].get("unwind") != "active" and sc[name]["exit"]["dump_after_h"]
+    assert sc["mm_breit"]["wind_down"] is True and sc["mm_breit"]["unwind"] == "active" and not sc["mm_breit"].get("exit")
     for name in ("mm_rewards", "mm_robust", "mm_neu_vorsichtig2", "mm_stop"):  # 30.10. owner: wind down quietly
         assert sc[name]["wind_down"] is True and sc[name].get("unwind") != "active"
 

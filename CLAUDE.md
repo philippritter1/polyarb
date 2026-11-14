@@ -295,6 +295,21 @@ Aktive Kandidaten im Live-Test:
   beurteilbar). Replay „nur Handel + Halten“ walk-forward +2.335 $, aber Kurs 60 Min. im Replay +6 % je $ vs. Szenarien −4 % →
   Artefakt. Empfehlung 07.11.: kein Mini-Echt-Test mit mm_schutz/mm_breit; einzige offene Frage = echte Rewards je 1 $ in neuen
   Märkten (schutz_neu2-Logik, Schwelle ≥ 24 % echt) – Nutzer entscheidet.
+- **14.11. Nutzer: alle 10 MM-Szenarien `wind_down: true`** (mm_breit zusätzlich `unwind: active`, weil ohne `exit:`), danach
+  archivieren (Erinnerung 19.11.). Letzte Woche alle negativ (schutz_neu2 −39 $, schutz −218 $), Stand 14.11.: schutz_neu2 +68,
+  Rest −72 bis −256 $; kalibriert schutz_neu2 −294, schutz_neu −313. **Ursachen-Analyse (1.795 eindeutige Fills seit 19.10.):**
+  der Verlust kommt sofort – Kurs je 1 $ gefüllt 1 s −2,0 %, 10 s −3,4 %, 1 Min −4,2 %, 60 Min −4,6 %; **Durchräumer** (Mitte fällt
+  binnen 1 s ≥ 5 % je $) = 28 % der Fills, aber 86 % des Verlusts (−1.369 von −1.593 $), übrige Fills −0,9 %. In jeder Marktart
+  14–33 % Durchräumer (Wahl, KI-Release, Geopolitik, Finanz, Sport) – Marktauswahl hilft kaum; Okt −3,6 % → Nov −5,9 % je $.
+  Je Markt: schlechteste 10 % = 81 % des Verlusts; Beständigkeit vor/nach 01.11. schwach (Korr. +0,32, „gute“ Märkte danach
+  −1,4 %). 77–81 % der Rewards kommen aus Märkten, in denen wir auch gefüllt werden. → MM verliert an schnellere/informierte
+  Händler (Gebot = Gratis-Option); ohne Signal vor dem Sprung nicht zu lösen.
+  **Buchmacher-Studie neu geprüft (17.228 Märkte bis Nov):** Abweichung ≥ 3 Pkt PM 1 h vs. Buchmacher-Schlusskurs +3,5 ct/Anteil
+  (n=2.730, SE 0,9), ≥ 5 Pkt +4,5 (1 h) / +5,6 (6 h), nach 2 ct Kosten +1,5 bis +3,6; 8/9 Monate positiv. PM schließt 6 h→1 h nur
+  18 % der Lücke (Median 2 %). Vorbehalt: Schlusskurs = Blick in die Zukunft. Live (sharp_fussball2) nie richtig getestet: Gratis-
+  Plan der Odds API (500 Credits/Monat, 15/Tag) → „Credit-Budget erreicht“, 26 Spiele mit Quote, 0 Signale. Odds API: 20K Credits
+  30 $/Monat, 100K 59 $; historische Quoten 10 Credits je Abruf → sauberer Test ohne Blick in die Zukunft möglich (Quote zur
+  gleichen Zeit wie der PM-Preis). Empfehlung 14.11.: nächster Schritt dort, nicht weiter MM.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

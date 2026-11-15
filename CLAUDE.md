@@ -92,6 +92,11 @@ Fallen in den Studiendaten (Walk-forward-Analyse 03.10.) – bei jedem Backtest 
 - Preise ohne Handel: Startwert 0,50 und veraltete 7-Tage-Preise (Fußball O/U: JA und NEIN beide „profitabel“).
   Spalten `a_*` = Stunden seit der letzten Preisänderung.
 - Kalshi letzter Preis + 2 ct ist im Schnitt ~8 Punkte zu optimistisch gegenüber dem echten Ask.
+- **Studienpreise sind stündlich** (`prices-history` fidelity 60, Rückfall 720; `price_age_at` nimmt den letzten Punkt bis
+  max(dt/2, 12 h) alt; Zeilen-Version 1 zählt vom tatsächlichen Schluss). Wer sie mit schnellen Fremddaten vergleicht (Kurs,
+  Quoten), bekommt einen Schein-Edge: Krypto-Studie 15.11. +16 ct je Anteil mit Studienpreisen, +2 ct mit minutengenauen.
+  Minutengenaue Verläufe gibt es auch für aufgelöste Märkte: CLOB `/prices-history?market=<token>&fidelity=1` (mit Browser-
+  User-Agent, sonst 403), Token über gamma `/markets?closed=true&condition_ids=…`.
 
 Saubere Stichprobe (Auswertung 06.10., PM Aug–Okt n≈82k, Kalshi 14.9.–6.10. n≈71k):
 - Polymarket: fast alles negativ nach Kosten (alle Käufe −5,5 %). fussball_dog −5 % (reiner Fußball −10 %),
@@ -309,7 +314,23 @@ Aktive Kandidaten im Live-Test:
   18 % der Lücke (Median 2 %). Vorbehalt: Schlusskurs = Blick in die Zukunft. Live (sharp_fussball2) nie richtig getestet: Gratis-
   Plan der Odds API (500 Credits/Monat, 15/Tag) → „Credit-Budget erreicht“, 26 Spiele mit Quote, 0 Signale. Odds API: 20K Credits
   30 $/Monat, 100K 59 $; historische Quoten 10 Credits je Abruf → sauberer Test ohne Blick in die Zukunft möglich (Quote zur
-  gleichen Zeit wie der PM-Preis). Empfehlung 14.11.: nächster Schritt dort, nicht weiter MM.
+  gleichen Zeit wie der PM-Preis). Empfehlung 14.11.: nächster Schritt dort, nicht weiter MM. (Am 15.11. widerlegt, s. u.)
+- **15.11. Krypto-Optionsstudie (Rückblick, nur lokal gerechnet, kein Code im Repo):** 2.727 Polymarket-Krypto-Preismärkte
+  Jun–Okt (BTC/ETH/SOL/XRP: „über X am Tag“, „zwischen X und Y“, „erreicht/fällt auf X“) gegen fairen Wert aus Deribit
+  (5-Min-Kurse der Perpetuals, DVOL als Volatilität für BTC/ETH, sonst 7-Tage-Schwankung; Lognormal, Berührung per
+  Spiegelungsprinzip). Mit Studienpreisen +12 bis +28 ct je Anteil – Artefakt (Preise bis Stunden alt, Effekt verschwindet,
+  wenn das Modell den Kurs 2–4 h älter bekommt). Sauber mit minutengenauen PM-Preisen (Kurs zur selben Minute, eher älter):
+  Brier PM 0,141 vs. Modell 0,144 (Polymarket genauer); Handel bei Abweichung ≥ 3–5 Pkt +2 ct (≈ 1 SE, Rauschen), ≥ 10 Pkt
+  +6 ct (≈ 2 SE, August negativ, verteilt über alle Zellen), mit 1 h älterem Kurs noch +2,5 bis +4 ct. Ohne Modell sind die
+  Märkte gut kalibriert (5→6, 14→18, 25→24, 45→49, 75→69, 94→96 %). Urteil: kein verwertbarer Edge; höchstens schwacher
+  Hinweis bei großen Abweichungen, der nur mit echten Asks vorwärts (Monate) zu klären wäre.
+- **15.11. Buchmacher-Studie minutengenau nachgerechnet** (17.103 Märkte, PM-Verläufe fidelity 1; „Ende geplant“ = Anpfiff,
+  gamma `gameStartTime`): Fußball-Studienpreise waren NICHT veraltet (1 h: Median-Diff 0, 3 % > 3 ct). Sauberer Vergleich
+  zur selben Zeit (PM 2 Min. vor Anpfiff vs. Buchmacher-Schlusskurs = Kurs beim Anpfiff): **Brier PM 0,1997 vs. Buchmacher
+  0,2032 – Polymarket ist genauer**; Handel nach 2 ct Kosten ≥ 3 Pkt −1,0 ct, ≥ 5 +1,3 (SE 2,1), ≥ 8 +2,8 (SE 2,2) = nichts.
+  Von 1 h bis Anpfiff schließt PM 52 % der Lücke zum Schlusskurs (Median 57 %) → die +1,7 bis +4,7 ct bei 1–6 h kommen aus
+  Information, die erst später da ist (Aufstellungen usw., im Schlusskurs enthalten) – live nicht nutzbar. Quelle ist der
+  Durchschnitts-Schlusskurs („Schnitt Schluss“), Pinnacle wäre schärfer – ungeprüft. Empfehlung: Odds-API-Kauf nicht nötig.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

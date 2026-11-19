@@ -86,10 +86,14 @@ def test_aggressive_mm_scenarios_wind_down_and_the_others_do_not():
     for name in ("mm_konservativ", "mm_neu_vorsichtig", "mm_probe"):
         assert not sc[name].get("wind_down") and sc[name].get("unwind") != "active"
     # 14.11. owner: every MM book winds down; the exit ladder (dump after 96 h) empties them, mm_breit has no exit
-    for name in ("mm_schutz", "mm_schutz_neu", "mm_schutz_neu2", "mm_farmer", "mm_favorit", "mm_favorit2",
-                 "mm_favorit_stark", "mm_dellen", "mm_dellen_fav"):
+    last = ("mm_schutz", "mm_schutz_neu", "mm_schutz_neu2", "mm_farmer", "mm_favorit", "mm_favorit2",
+            "mm_favorit_stark", "mm_dellen", "mm_dellen_fav")
+    for name in last:
         assert sc[name]["wind_down"] is True and sc[name].get("unwind") != "active" and sc[name]["exit"]["dump_after_h"]
     assert sc["mm_breit"]["wind_down"] is True and sc["mm_breit"]["unwind"] == "active" and not sc["mm_breit"].get("exit")
+    for name in last + ("mm_breit",):  # 19.11.: archived
+        assert sc[name]["enabled"] is False and sc[name]["archive"] is True
+    assert [k for k, v in sc.items() if v.get("enabled")] == []
     for name in ("mm_rewards", "mm_robust", "mm_neu_vorsichtig2", "mm_stop"):  # 30.10. owner: wind down quietly
         assert sc[name]["wind_down"] is True and sc[name].get("unwind") != "active"
 
@@ -1278,7 +1282,7 @@ def test_config_mm_dellen_and_the_four_winding_down():
     from arb.config import load_config
     sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
     d = sc["mm_dellen"]
-    assert d["enabled"] and d["rank"] == "volume" and d["quote_frac"] == 0.9 and d["max_markets"] == 100
+    assert d["archive"] and d["rank"] == "volume" and d["quote_frac"] == 0.9 and d["max_markets"] == 100
     assert "learn" not in d and "fair" not in d and "live" not in d and d["fill_cooldown_s"] == 3600
     for n in ("mm_rewards", "mm_robust", "mm_neu_vorsichtig2", "mm_stop"):
         assert sc[n]["wind_down"] is True
@@ -1288,7 +1292,7 @@ def test_config_mm_dellen_fav_is_mm_dellen_with_fav_only():
     from arb.config import load_config
     sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
     d, f = sc["mm_dellen"], sc["mm_dellen_fav"]
-    assert f["enabled"] and f["fav_only"] is True and "live" not in f
+    assert f["archive"] and f["fav_only"] is True and "live" not in f
     assert {k for k in set(d) | set(f) if d.get(k) != f.get(k)} == {"title", "fav_only"}
     assert sc["wetter_sniper"]["enabled"] is False and sc["wetter_sniper"]["archive"] is True
 
@@ -1314,5 +1318,5 @@ def test_config_mm_favorit_stark_is_mm_favorit_with_a_strong_favourite():
     from arb.config import load_config
     sc = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))["scenarios"]
     f, g = sc["mm_favorit"], sc["mm_favorit_stark"]
-    assert g["enabled"] and g["fav_only"] is True and g["fav_min"] == 0.65 and "live" not in g
+    assert g["archive"] and g["fav_only"] is True and g["fav_min"] == 0.65 and "live" not in g
     assert {k for k in set(f) | set(g) if f.get(k) != g.get(k)} == {"title", "fav_min", "min_mid", "max_mid"}

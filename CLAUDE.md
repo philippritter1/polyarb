@@ -116,7 +116,7 @@ Beendet (14.10., Nutzer-Entscheidung): `weather_no`, `mlb_spread` (sofort archiv
 `ladder`, `wetter_no_maker`, `sharp_fussball` mit `wind_down: true` (laufen aus, danach `enabled: false` + `archive: true`).
 Außerdem `services:` in config.yaml: `arbitrage_bot: false` (polyarb.service gestoppt, Startseite = „Übersicht“,
 Bot im Archiv) und `wxobs_study: false` (Wetter-Messwert-Studie gestoppt, Reiter ausgeblendet, Export bleibt).
-Aktiv (31.10.): mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_farmer, mm_favorit, mm_favorit2, mm_favorit_stark, mm_dellen, mm_dellen_fav; plus Studie/Kalshi-Studie/Replay/Wallet-Studie. Archiviert 31.10. (Nutzer, RAM + bringt kaum etwas): mm_rewards, mm_robust, mm_neu_vorsichtig2, mm_stop, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball, sharp_fussball2, wetter_sniper, wetter_sniper2 (Restbestand eingefroren). `notify: scenario` jetzt mm_schutz.
+**Seit 19.11. läuft kein Szenario mehr** (alle 10 MM archiviert, `notify: scenario: ""` – Watchdog prüft dann nur echte Orders, 4-h-Bericht schweigt); weiter laufen nur Studie/Kalshi/Replay/Wallet-Studie. Vorher aktiv (31.10.): mm_breit, mm_schutz, mm_schutz_neu, mm_schutz_neu2, mm_farmer, mm_favorit, mm_favorit2, mm_favorit_stark, mm_dellen, mm_dellen_fav; plus Studie/Kalshi-Studie/Replay/Wallet-Studie. Archiviert 31.10. (Nutzer, RAM + bringt kaum etwas): mm_rewards, mm_robust, mm_neu_vorsichtig2, mm_stop, mm_sofort, mm_treppe, mm_ruhig, mm_nah, mm_ueberbucht, sharp_fussball, sharp_fussball2, wetter_sniper, wetter_sniper2 (Restbestand eingefroren). `notify: scenario` jetzt mm_schutz.
 
 Beendet (17.10., Nutzer-Entscheidung): `mm_neu`, `mm_abbau`, `mm_neu2`, `mm_pilot` sofort archiviert (Fragen beantwortet:
 halten bis Auflösung teuer, sofort verkaufen besser, breite Auswahl in Pilotgröße verliert; RAM-Engpass 1,9 GB). `mm_rewards`
@@ -315,6 +315,10 @@ Aktive Kandidaten im Live-Test:
   Plan der Odds API (500 Credits/Monat, 15/Tag) → „Credit-Budget erreicht“, 26 Spiele mit Quote, 0 Signale. Odds API: 20K Credits
   30 $/Monat, 100K 59 $; historische Quoten 10 Credits je Abruf → sauberer Test ohne Blick in die Zukunft möglich (Quote zur
   gleichen Zeit wie der PM-Preis). Empfehlung 14.11.: nächster Schritt dort, nicht weiter MM. (Am 15.11. widerlegt, s. u.)
+- **19.11.: alle 10 MM-Szenarien archiviert** (`enabled: false` + `archive: true`, Restbestand eingefroren). Dashboard war am
+  19.11. 10:00 UTC nicht erreichbar (502 „upstream request failed“), Endstände deshalb noch aus dem Export vom 14.11.:
+  schutz_neu2 +68 $, breit −72, farmer −76, favorit2 −84, schutz_neu −86, dellen_fav −97, dellen −138, favorit −167,
+  schutz −211, favorit_stark −256 (Equity 60 %). Kein Szenario mit Edge; Projekt im Beobachtungsmodus.
 - **15.11. Krypto-Optionsstudie (Rückblick, nur lokal gerechnet, kein Code im Repo):** 2.727 Polymarket-Krypto-Preismärkte
   Jun–Okt (BTC/ETH/SOL/XRP: „über X am Tag“, „zwischen X und Y“, „erreicht/fällt auf X“) gegen fairen Wert aus Deribit
   (5-Min-Kurse der Perpetuals, DVOL als Volatilität für BTC/ETH, sonst 7-Tage-Schwankung; Lognormal, Berührung per

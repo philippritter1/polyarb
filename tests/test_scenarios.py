@@ -398,7 +398,9 @@ def test_notifications_follow_the_configured_scenario(tmp_path):
     root = Path(__file__).resolve().parents[1]
     import yaml
     conf = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
-    label = conf["scenarios"][conf["notify"]["scenario"]]["title"]  # the book the alerts follow
+    target = conf["notify"]["scenario"]  # the book the alerts follow ("" since 19.11.: everything archived)
+    label = conf["scenarios"][target]["title"] if target else ""
+    name = f"Polyarb {label}" if label else "Polyarb"
     # since 01.10. single trade/payout pushes are off by default: only problems and the 4-hour report
     out = subprocess.run([sys.executable, "deploy/notify.py", "watch"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
@@ -406,8 +408,8 @@ def test_notifications_follow_the_configured_scenario(tmp_path):
     state.write_text(json.dumps({"last_exec_ts": 0, "last_settle_ts": 0, "boot": 0}))
     out = subprocess.run([sys.executable, "deploy/notify.py", "watch"], cwd=root,
                          env=dict(env, NOTIFY_TRADES="1", NOTIFY_PAYOUTS="1"), capture_output=True, text=True).stdout
-    assert f"Polyarb {label}: Trade" in out and "Stk. für $10" in out
-    assert f"Polyarb {label}: Auszahlung" in out and "1 gewonnen, 0 verloren" in out
+    assert f"{name}: Trade" in out and ("Stk. für $10" in out if label else "1 Trade(s): 1 gefüllt" in out)
+    assert f"{name}: Auszahlung" in out and "1 gewonnen, 0 verloren" in out
     pnl = eng.pf.realized_pnl
     rep = subprocess.run([sys.executable, "deploy/notify.py", "report", "4"], cwd=root, env=env,
                          capture_output=True, text=True).stdout
@@ -772,6 +774,7 @@ def test_watchdog_alarms_only_when_a_process_is_down_twice_in_a_row(tmp_path, mo
     import notify
     importlib.reload(notify)
     sent = []
+    monkeypatch.setattr(notify, "T", dict(notify.T, service="polyarb-scenario@x"))  # a book that runs
     monkeypatch.setattr(notify, "push", lambda title, msg, *a, **k: sent.append(title))
     monkeypatch.setattr(notify, "q", lambda *a, **k: [(time.time(), 2500.0, None)])  # fresh data
     states = iter([False, True, False, False, True])  # restart blip, ok, then really down twice, ok
@@ -802,3 +805,17 @@ def test_live_alarms_fire_once(tmp_path, monkeypatch):
     again = [a[0] for a in notify.live_alerts(st, now + 700, tmp_path)]
     assert any("abgelehnt" in t for t in again) and any("meldet sich nicht" in t for t in again)
     assert all(a[0].isascii() for a in notify.live_alerts({}, now, tmp_path) if "NOT-AUS" not in a[0])
+
+
+def test_dashboard_with_every_scenario_archived(tmp_path):
+    """19.11.: no scenario runs and the bot is off – landing page, cockpit and archive still build."""
+    from dashboard import build_all
+    cfg = _cfg(tmp_path, "endgame", max_position_usd=40)
+    cfg["services"] = {"arbitrage_bot": False, "wxobs_study": False}
+    cfg["scenarios"]["endgame"].update(enabled=False, archive=True)
+    build_all(cfg, str(tmp_path / "www" / "index.html"))
+    root = (tmp_path / "www" / "index.html").read_text(encoding="utf-8")
+    nav = json.loads(root.split("const D=", 1)[1].split(";\n", 1)[0])["nav"]
+    assert nav[0]["label"] == "Übersicht" and nav[-1]["label"] == "Archiv (2)"
+    assert (tmp_path / "www" / "cockpit" / "index.html").exists()
+    assert "../endgame/" in (tmp_path / "www" / "archiv" / "index.html").read_text(encoding="utf-8")

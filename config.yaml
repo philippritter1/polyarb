@@ -86,7 +86,7 @@ services:                      # 14.10.: abgeschaltet (Nutzer-Entscheidung) – 
   wxobs_study: false           # polyarb-wxobs.timer: Wetter-Messwert-Studie (Wetter-Strategien beendet)
 
 notify:
-  scenario: mm_schutz          # 31.10.: mm_rewards archiviert – Alarme (Stillstand, Kill-Switch) für dieses Szenario; der 4-h-Bericht umfasst alle
+  scenario: ""                 # 19.11.: alle Szenarien archiviert – nichts zu überwachen (Watchdog prüft dann nur echte Orders, 4-h-Bericht schweigt)
 
 api:
   gamma_url: https://gamma-api.polymarket.com
@@ -337,7 +337,8 @@ scenarios:
       max_market_usd: 60
       max_total_usd: 300
   mm_breit:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     unwind: active               # kein exit: – Bestand (~1.500 $) wird in den Bid verkauft, sonst wartet er Monate auf Auflösung
     title: Market Making (breit)
@@ -541,7 +542,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_schutz:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Schutz + lernend)
     strategy: mm                 # 16.10. Nutzer (nach Recherche): wie mm_ruhig (Treppe + Pause), dazu alles gegen schlechte
@@ -596,7 +598,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_favorit:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (nur Favorit)
     strategy: mm                 # 27.10. Nutzer (Fill-Auswertung 19.–27.10., 558 Fills, 10 Szenarien): Kauf des billigeren Tokens
@@ -651,7 +654,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_favorit_stark:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (nur starker Favorit)
     strategy: mm                 # 03.11. Nutzer (Rückrechnung aller Varianten, 1.278 Fills 19.10.–03.11.): Kursbewegung 60 Min.
@@ -706,7 +710,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_favorit2:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (nur Favorit, weit)
     strategy: mm                 # 28.10. Nutzer: Replay-Siegerregel (27.10., 16 Blöcke): Abstand 0,9 · Pause · Mitte 20–80 % ·
@@ -760,7 +765,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_dellen:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Dellen, breit)
     strategy: mm                 # 30.10. Nutzer: Replay (Halten wie Szenario, nur durchgehandelte Fills) +1.800 $ auf ~45.000 $
@@ -809,7 +815,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_dellen_fav:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Dellen, nur Favorit)
     strategy: mm                 # 31.10. Nutzer: wie mm_dellen, aber nur Gebote auf den Favoriten (fav_only) – die billige Seite
@@ -856,7 +863,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_farmer:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Reward-Farmer)
     strategy: mm                 # 21.10. Nutzer: nachgebaut nach der Wallet-Studie – die erfolgreichsten Reward-Farmer
@@ -923,7 +931,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_schutz_neu:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Schutz + neue Märkte)
     strategy: mm                 # 16.10. Nutzer (Datenauswertung): wie mm_schutz, aber Auswahl wie mm_sofort – nur Märkte
@@ -983,7 +992,8 @@ scenarios:
     latency_s: 1
     step_s: 2
   mm_schutz_neu2:
-    enabled: true
+    enabled: false               # 19.11.: archiviert (Nutzer 14.11.: alle MM auslaufen lassen und archivieren)
+    archive: true
     wind_down: true              # 14.11. Nutzer: alle MM auslaufen lassen und archivieren – nach 4 Wochen kein Kandidat mehr (Gesamtprüfung 14.11.)
     title: Market Making (Schutz + neue Märkte 2)
     strategy: mm                 # 20.10. Nutzer: wie mm_schutz_neu, nur zählt ein Kurssprung fürs Selbstlernen erst,

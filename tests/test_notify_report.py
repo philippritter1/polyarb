@@ -37,3 +37,33 @@ def test_short_report_lists_running_books_and_sums_the_winding_down(tmp_path, mo
     assert lines[2] == "▼ Wetter-Sniper: -$30.00 | -$10.00 | -$10.00"
     assert lines[3].startswith("Auslaufend (1): -$200.00 gesamt, -$100.00 in 24h")
     assert "Rebates" not in msg and "Gesamt realisiert" not in msg and len(lines) == 4
+
+
+def test_nothing_running_means_no_report_and_no_watchdog_alarm(tmp_path, monkeypatch):
+    """19.11.: every scenario archived and the arbitrage bot off – the 4-h report and the watchdog stay quiet."""
+    import importlib
+    import notify
+    sent = []
+    monkeypatch.setattr(notify, "push", lambda title, msg, *a, **k: sent.append(title))
+    monkeypatch.setattr(notify, "books", lambda: [])
+    notify.overview(4, "Polyarb 4h-Bericht")
+    assert sent == []
+    monkeypatch.setenv("NOTIFY_STATE", str(tmp_path / "st.json"))
+    monkeypatch.setenv("POLYARB_DB", str(tmp_path / "none.sqlite"))
+    monkeypatch.setattr(notify, "T", dict(notify.T, service=None, db=str(tmp_path / "none.sqlite")))
+    monkeypatch.setattr(notify, "q", lambda *a, **k: [])  # no data at all
+    monkeypatch.setattr(notify, "service_active", lambda: False)
+    st = {"boot": time.time() - 7200}
+    monkeypatch.setattr(notify, "load_state", lambda: st)
+    monkeypatch.setattr(notify, "save_state", lambda s: None)
+    for _ in range(3):
+        notify.cmd_watch()
+    assert not any("Problem" in t for t in sent)
+
+
+def test_target_without_running_book_has_no_service(tmp_path, monkeypatch):
+    import notify
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8"))
+    assert not cfg["notify"]["scenario"] and not cfg["services"]["arbitrage_bot"]
+    assert notify._target()["service"] is None

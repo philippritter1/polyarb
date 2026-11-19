@@ -67,6 +67,8 @@ def _target() -> dict:
              state=str(data.parent / "notify_state.json"))
     name = (cfg.get("notify") or {}).get("scenario") or ""
     sc = (cfg.get("scenarios") or {}).get(name)
+    if not (sc and sc.get("enabled")) and not (cfg.get("services") or {}).get("arbitrage_bot", True):
+        t.update(service=None)  # 19.11.: everything archived – no process to watch, only the live-order alarms
     if sc and sc.get("enabled"):
         t.update(db=str(data.parent / f"scenario-{name}.sqlite"), start=float(sc.get("capital_usd", 2500)),
                  service=f"polyarb-scenario@{name}", label=sc.get("title", name),
@@ -114,7 +116,7 @@ def service_active() -> bool:
     bot = (_cfg().get("services") or {}).get("arbitrage_bot", True)
     try:
         return all(subprocess.run(["systemctl", "is-active", "--quiet", s]).returncode == 0
-                   for s in dict.fromkeys([T["service"]] + (["polyarb"] if bot else [])))
+                   for s in dict.fromkeys(([T["service"]] if T["service"] else []) + (["polyarb"] if bot else [])))
     except FileNotFoundError:
         return True
 
@@ -208,6 +210,9 @@ def cmd_watch():
     down = st["down_n"] >= 2
 
     problem = None
+    if not T["service"]:  # nothing runs (all books archived): no stale or down alarm
+        down = stale = False
+        st["down_n"] = 0
     if down:
         problem = "Ein Bot-Prozess läuft nicht (systemd startet ihn automatisch neu)."
     elif stale and (now - st.get("boot", now)) > (T["stale_min"] + 5) * 60:
@@ -391,7 +396,11 @@ def overview(hours: float, title: str):
     start, over `hours` and over 24 h. Winding-down books are one summary line."""
     now = time.time()
     rows, winding = [], []
-    for b in books():
+    running = books()
+    if not running:  # 19.11.: every scenario archived – nothing to report
+        print("report: no running book")
+        return
+    for b in running:
         cur = value_at(b["db"])
         if cur is None:
             continue

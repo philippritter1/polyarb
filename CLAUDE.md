@@ -338,6 +338,14 @@ Aktive Kandidaten im Live-Test:
   Von 1 h bis Anpfiff schließt PM 52 % der Lücke zum Schlusskurs (Median 57 %) → die +1,7 bis +4,7 ct bei 1–6 h kommen aus
   Information, die erst später da ist (Aufstellungen usw., im Schlusskurs enthalten) – live nicht nutzbar. Quelle ist der
   Durchschnitts-Schlusskurs („Schnitt Schluss“), Pinnacle wäre schärfer – ungeprüft. Empfehlung: Odds-API-Kauf nicht nötig.
+- **20.11. S&P 500 „Up or Down“ (Polymarket, täglich, Schluss vs. Vortagesschluss) gegen fairen Wert** (`research/`):
+  242 Märkte Dez 2025–19.11.2026, minutengenaue PM-Preise vs. Modell aus ES-Future (stündlich) + VIX1D. Vor der US-Eröffnung
+  ist das einfache Modell genauer (Brier 03 Uhr ET 0,2305 vs. PM 0,2385; 08 Uhr 0,2011 vs. 0,2054), PM im Schnitt 3–5 Pkt zu
+  optimistisch für „Up“ (PM 60–70 % → tatsächlich 48 %, n=89); ab Mittag ist PM genauer. Ein Kauf je Tag um 03 Uhr ET (09 Uhr DE),
+  2 ct Kosten: Abweichung ≥ 3 Pkt +7,9 ct/Anteil (181 Tage, SE 3,5), ≥ 5 Pkt +10,3 (130 Tage, SE 4,2), fast nur „Down kaufen“,
+  8/12 Monate positiv, beide Hälften positiv. Vorbehalte: nur ~2–2,5 SE, beste von 7 Uhrzeiten, PM-Preis = Verlaufspreis (nicht
+  echter Ask), Gebühren dieser Märkte ungeprüft, ~44k $ Volumen/Tag. Erster Hinweis nach vielen Nullen – nur mit Vorwärtstest
+  (echtes Orderbuch) prüfen, kein Echtgeld vorher.
 - `mm_pilot` (ab 14.10.): Pilot für echtes Geld (Phase 0 fertig, `allow_real: false`): mm_breit-Logik in Pilotgröße
   (300 $, 10 Märkte, 15 $ je Gebot, Bestandsabbau), Simulation = echte Ordergröße. Freigabe erst nach Pilot-Entscheidung.
 - `mm_probe` (ab 14.10.): **Generalprobe mit echtem Geld** (Nutzer-Entscheidung), einziges Szenario mit

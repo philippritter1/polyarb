@@ -319,6 +319,9 @@ Aktive Kandidaten im Live-Test:
   19.11. 10:00 UTC nicht erreichbar (502 „upstream request failed“), Endstände deshalb noch aus dem Export vom 14.11.:
   schutz_neu2 +68 $, breit −72, farmer −76, favorit2 −84, schutz_neu −86, dellen_fav −97, dellen −138, favorit −167,
   schutz −211, favorit_stark −256 (Equity 60 %). Kein Szenario mit Edge; Projekt im Beobachtungsmodus.
+- **20.11.: Server abgeschaltet (Nutzer).** Dashboard/Export seit 19.11. ~10 UTC nicht erreichbar; die Archivierung (22b3eac) hat
+  er nicht mehr gezogen. Daten (SQLite unter data/) liegen nur auf dem Server – vor dem Löschen einmal starten und
+  `export/polyarb-export.zip` sichern oder einen Hetzner-Snapshot anlegen. Endstände der MM-Szenarien bleiben die vom 14.11.
 - **15.11. Krypto-Optionsstudie (Rückblick, nur lokal gerechnet, kein Code im Repo):** 2.727 Polymarket-Krypto-Preismärkte
   Jun–Okt (BTC/ETH/SOL/XRP: „über X am Tag“, „zwischen X und Y“, „erreicht/fällt auf X“) gegen fairen Wert aus Deribit
   (5-Min-Kurse der Perpetuals, DVOL als Volatilität für BTC/ETH, sonst 7-Tage-Schwankung; Lognormal, Berührung per
